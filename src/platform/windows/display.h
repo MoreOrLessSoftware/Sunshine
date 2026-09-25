@@ -315,7 +315,7 @@ namespace platf::dxgi {
     output_t output;  ///< DXGI output duplicated for capture.
     device_t device;  ///< D3D11 device used for desktop duplication capture.
     device_ctx_t device_ctx;  ///< D3D11 device context used for copy and render operations.
-    DXGI_RATIONAL display_refresh_rate;  ///< Display refresh rate.
+    DXGI_RATIONAL display_refresh_rate {};  ///< Display refresh rate.
     int display_refresh_rate_rounded;  ///< Display refresh rate rounded.
 
     DXGI_MODE_ROTATION display_rotation = DXGI_MODE_ROTATION_UNSPECIFIED;  ///< Display rotation.

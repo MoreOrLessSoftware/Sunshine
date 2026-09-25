@@ -41,6 +41,7 @@ typedef enum _D3DKMT_GPU_PREFERENCE_QUERY_STATE : DWORD {
 #include "misc.h"
 #include "src/config.h"
 #include "src/display_device.h"
+#include "src/frame_rate_limiter.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/video.h"
@@ -235,8 +236,20 @@ namespace platf::dxgi {
     };
 
     DXGI_RATIONAL client_frame_rate_adjusted = adjust_client_frame_rate();
-    std::optional<std::chrono::steady_clock::time_point> frame_pacing_group_start;
-    uint32_t frame_pacing_group_frames = 0;
+
+    // Frames are captured the moment the desktop presents them, and held back only while
+    // they come faster than the client's frame rate. Capturing on a fixed schedule instead
+    // kept each frame waiting for the next tick, up to a whole frame interval, and the
+    // client saw that wait as jitter in the frame timestamps.
+    const auto frame_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::nanoseconds(1s) * client_frame_rate_adjusted.Denominator / client_frame_rate_adjusted.Numerator
+    );
+    // A display refreshing no more than 5% faster than the client's frame rate is let run up
+    // to 1% fast, so its clock running a little fast never holds frames. A faster one is
+    // thinned out to exactly the frame rate. See frame_rate_limiter_t.
+    const double display_rate = (double) display_refresh_rate.Numerator / std::max<UINT>(display_refresh_rate.Denominator, 1);
+    const double capture_rate = (double) client_frame_rate_adjusted.Numerator / client_frame_rate_adjusted.Denominator;
+    frame_rate_limiter_t frame_limiter {frame_interval, display_rate <= capture_rate * 1.05};
 
     // Keep the display awake during capture. If the display goes to sleep during
     // capture, best case is that capture stops until it powers back on. However,
@@ -260,69 +273,40 @@ namespace platf::dxgi {
       platf::capture_e status = capture_e::ok;
       std::shared_ptr<img_t> img_out;
 
-      // Try to continue frame pacing group, snapshot() is called with zero timeout after waiting for client frame interval
-      if (frame_pacing_group_start) {
-        const uint32_t seconds = (uint64_t) frame_pacing_group_frames * client_frame_rate_adjusted.Denominator / client_frame_rate_adjusted.Numerator;
-        const uint32_t remainder = (uint64_t) frame_pacing_group_frames * client_frame_rate_adjusted.Denominator % client_frame_rate_adjusted.Numerator;
-        const auto sleep_target = *frame_pacing_group_start +
-                                  std::chrono::nanoseconds(1s) * seconds +
-                                  std::chrono::nanoseconds(1s) * remainder / client_frame_rate_adjusted.Numerator;
-        const auto sleep_period = sleep_target - std::chrono::steady_clock::now();
-
-        if (sleep_period <= 0ns) {
-          // We missed next frame time, invalidating current frame pacing group
-          frame_pacing_group_start = std::nullopt;
-          frame_pacing_group_frames = 0;
-          status = capture_e::timeout;
-        } else {
-          timer->sleep_for(sleep_period);
-          sleep_overshoot_logger.first_point(sleep_target);
-          sleep_overshoot_logger.second_point_now_and_log();
-
-          status = snapshot(pull_free_image_cb, img_out, 0ms, *cursor);
-
-          if (status == capture_e::ok && img_out) {
-            frame_pacing_group_frames += 1;
-          } else {
-            frame_pacing_group_start = std::nullopt;
-            frame_pacing_group_frames = 0;
-          }
-        }
+      // Wait out the rest of the frame interval if the last frame came early. A frame the
+      // desktop presents meanwhile is picked up as soon as the wait ends.
+      const auto capture_due = frame_limiter.next_due();
+      const auto sleep_period = capture_due - std::chrono::steady_clock::now();
+      if (sleep_period > 0ns) {
+        timer->sleep_for(sleep_period);
+        sleep_overshoot_logger.first_point(capture_due);
+        sleep_overshoot_logger.second_point_now_and_log();
       }
 
-      // Start new frame pacing group if necessary, snapshot() is called with non-zero timeout
-      if (status == capture_e::timeout || (status == capture_e::ok && !frame_pacing_group_start)) {
-        status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
+      // Then take the next frame as soon as there is one
+      status = snapshot(pull_free_image_cb, img_out, 200ms, *cursor);
 
-        if (status == capture_e::ok && img_out) {
-          frame_pacing_group_start = img_out->frame_timestamp;
-
-          if (!frame_pacing_group_start) {
-            BOOST_LOG(warning) << "snapshot() provided image without timestamp";
-            frame_pacing_group_start = std::chrono::steady_clock::now();
-          }
-
-          frame_pacing_group_frames = 1;
-        } else if (status == platf::capture_e::timeout) {
-          // The D3D11 device is protected by an unfair lock that is held the entire time that
-          // IDXGIOutputDuplication::AcquireNextFrame() is running. This is normally harmless,
-          // however sometimes the encoding thread needs to interact with our ID3D11Device to
-          // create dummy images or initialize the shared state that is used to pass textures
-          // between the capture and encoding ID3D11Devices.
-          //
-          // When we're in a state where we're not actively receiving frames regularly, we will
-          // spend almost 100% of our time in AcquireNextFrame() holding that critical lock.
-          // Worse still, since it's unfair, we can monopolize it while the encoding thread
-          // is starved. The encoding thread may acquire it for a few moments across a few
-          // ID3D11Device calls before losing it again to us for another long time waiting in
-          // AcquireNextFrame(). The starvation caused by this lock contention causes encoder
-          // reinitialization to take several seconds instead of a fraction of a second.
-          //
-          // To avoid starving the encoding thread, sleep without the lock held for a little
-          // while each time we reach our max frame timeout. This will only happen when nothing
-          // is updating the display, so no visible stutter should be introduced by the sleep.
-          std::this_thread::sleep_for(10ms);
-        }
+      if (status == capture_e::ok && img_out) {
+        frame_limiter.frame_taken(std::chrono::steady_clock::now());
+      } else if (status == platf::capture_e::timeout) {
+        // The D3D11 device is protected by an unfair lock that is held the entire time that
+        // IDXGIOutputDuplication::AcquireNextFrame() is running. This is normally harmless,
+        // however sometimes the encoding thread needs to interact with our ID3D11Device to
+        // create dummy images or initialize the shared state that is used to pass textures
+        // between the capture and encoding ID3D11Devices.
+        //
+        // When we're in a state where we're not actively receiving frames regularly, we will
+        // spend almost 100% of our time in AcquireNextFrame() holding that critical lock.
+        // Worse still, since it's unfair, we can monopolize it while the encoding thread
+        // is starved. The encoding thread may acquire it for a few moments across a few
+        // ID3D11Device calls before losing it again to us for another long time waiting in
+        // AcquireNextFrame(). The starvation caused by this lock contention causes encoder
+        // reinitialization to take several seconds instead of a fraction of a second.
+        //
+        // To avoid starving the encoding thread, sleep without the lock held for a little
+        // while each time we reach our max frame timeout. This will only happen when nothing
+        // is updating the display, so no visible stutter should be introduced by the sleep.
+        std::this_thread::sleep_for(10ms);
       }
 
       switch (status) {
