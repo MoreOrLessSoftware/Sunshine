@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <optional>
 #include <string_view>
 
 // local includes
@@ -713,6 +714,16 @@ namespace video {
    * @return True when encoder validation matches `expect_failure`.
    */
   bool validate_encoder(encoder_t &encoder, bool expect_failure);
+
+  /**
+   * @brief Work out how long the encoder waits for a captured frame before repeating the last one.
+   *
+   * @param minimum_fps_target The minimum_fps_target setting: 0 for half the stream's frame rate,
+   *                           a negative value to never repeat frames.
+   * @param framerate The stream's frame rate.
+   * @return How long to wait, or nothing if frames are never repeated.
+   */
+  std::optional<std::chrono::duration<double, std::milli>> max_frame_wait(double minimum_fps_target, int framerate);
 
   /**
    * @brief Probe encoders and select the preferred encoder.

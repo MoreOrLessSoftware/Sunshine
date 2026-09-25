@@ -1492,6 +1492,10 @@ supported on the current platform.
         <td>1-1000</td>
         <td>Specify your own value. The real minimum may differ from this value.</td>
     </tr>
+    <tr>
+        <td>-1</td>
+        <td>Never repeat frames. Only new frames are sent, plus frames to recover from lost ones, so frames keep to the game's own cadence. A static screen stays at the quality its last frame was encoded at.</td>
+    </tr>
 </table>
 
 ## Network

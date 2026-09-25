@@ -409,3 +409,19 @@ TEST(SoftwareEncoderConversion, Bgr0AndNv12) {
   fallback_nv12_img.row_pitch = w;
   EXPECT_EQ(device.convert(fallback_nv12_img), 0);
 }
+
+TEST(MaxFrameWaitTest, UsesHalfTheFrameRateByDefault) {
+  const auto wait = video::max_frame_wait(0.0, 120);
+  ASSERT_TRUE(wait.has_value());
+  EXPECT_DOUBLE_EQ(wait->count(), 1000.0 / 60.0);
+}
+
+TEST(MaxFrameWaitTest, UsesTheMinimumFpsTarget) {
+  const auto wait = video::max_frame_wait(20.0, 120);
+  ASSERT_TRUE(wait.has_value());
+  EXPECT_DOUBLE_EQ(wait->count(), 50.0);
+}
+
+TEST(MaxFrameWaitTest, NeverRepeatsFramesWhenNegative) {
+  EXPECT_FALSE(video::max_frame_wait(-1.0, 120).has_value());
+}

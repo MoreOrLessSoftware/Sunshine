@@ -161,6 +161,23 @@ namespace video {
   }
 
   /**
+   * @brief Work out how long the encoder waits for a captured frame before repeating the last one.
+   *
+   * @param minimum_fps_target The minimum_fps_target setting: 0 for half the stream's frame rate,
+   *                           a negative value to never repeat frames.
+   * @param framerate The stream's frame rate.
+   * @return How long to wait, or nothing if frames are never repeated.
+   */
+  std::optional<std::chrono::duration<double, std::milli>> max_frame_wait(double minimum_fps_target, int framerate) {
+    if (minimum_fps_target < 0.0) {
+      return std::nullopt;
+    }
+
+    const double fps = minimum_fps_target > 0.0 ? minimum_fps_target : framerate / 2.0;
+    return std::chrono::duration<double, std::milli> {1000.0 / fps};
+  }
+
+  /**
    * @brief Resolve a client-requested dynamic range against probed encoder capabilities.
    *
    * @param encoder Selected encoder and its probed codec capabilities.
@@ -2431,9 +2448,20 @@ namespace video {
     });
 
     // set max frame time based on client-requested target framerate.
-    double minimum_fps_target = (config::video.minimum_fps_target > 0.0) ? config::video.minimum_fps_target : (config.framerate / 2);
-    std::chrono::duration<double, std::milli> max_frametime {1000.0 / minimum_fps_target};
-    BOOST_LOG(info) << "Minimum FPS target set to ~"sv << minimum_fps_target << "fps ("sv << max_frametime.count() << "ms)"sv;
+    //
+    // With repeated frames turned off, only new frames are encoded, apart from a frame to
+    // recover from lost ones. A repeated frame comes at no particular point in the host's
+    // cadence, carries no capture timestamp, and can keep the encoder busy when a new frame
+    // arrives. The wait below is then only how often the encoder checks for requests to
+    // recover from lost frames, a reinit or a shutdown.
+    const auto repeat_wait = max_frame_wait(config::video.minimum_fps_target, config.framerate);
+    const bool repeat_frames = repeat_wait.has_value();
+    const auto max_frametime = repeat_wait.value_or(std::chrono::duration<double, std::milli> {100.0});
+    if (repeat_frames) {
+      BOOST_LOG(info) << "Minimum FPS target set to ~"sv << 1000.0 / max_frametime.count() << "fps ("sv << max_frametime.count() << "ms)"sv;
+    } else {
+      BOOST_LOG(info) << "Minimum FPS target disabled, frames are not repeated"sv;
+    }
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
@@ -2454,9 +2482,11 @@ namespace video {
     while (true) {
       bool requested_idr_frame = false;
 
+      bool refs_invalidated = false;
       while (invalidate_ref_frames_events->peek()) {
         if (auto frames = invalidate_ref_frames_events->pop(0ms)) {
           session->invalidate_ref_frames(frames->first, frames->second);
+          refs_invalidated = true;
         }
       }
 
@@ -2473,7 +2503,18 @@ namespace video {
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
-        if (auto img = images->pop(max_frametime)) {
+        auto img = images->pop(max_frametime);
+
+        // Without repeated frames, keep waiting for a new frame unless a frame is needed to
+        // recover from lost ones or the encoder has to stop
+        const auto keep_waiting = [&]() {
+          return !repeat_frames && !refs_invalidated && images->running() && !shutdown_event->peek() && !reinit_event.peek();
+        };
+        while (!img && keep_waiting() && !idr_events->peek() && !invalidate_ref_frames_events->peek()) {
+          img = images->pop(max_frametime);
+        }
+
+        if (img) {
           frame_timestamp = img->frame_timestamp;
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
@@ -2481,6 +2522,9 @@ namespace video {
           }
         } else if (!images->running()) {
           break;
+        } else if (keep_waiting()) {
+          // A request to recover from lost frames came in; handle it above first
+          continue;
         }
       }
 
