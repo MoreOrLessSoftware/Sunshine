@@ -2045,6 +2045,37 @@ supported on the current platform.
     </tr>
 </table>
 
+### video_send_rate
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The rate, in Mbps, at which each video frame's packets are sent. Sunshine sends a frame's packets at
+            this rate rather than all at once, so they do not overflow buffers along the way. A frame is only shown
+            once all of it has arrived, so at high bitrates a faster rate gets each frame to the client sooner.
+            @warning{Keep this below the speed of the slowest link between the host and the client, such as about
+            800 for gigabit Ethernet or 2000 for 2.5 gigabit. Too high a rate can cause packet loss.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            800
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">100-100000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            video_send_rate = 2000
+            @endcode</td>
+    </tr>
+</table>
+
 ### qp
 
 <table>
@@ -2520,12 +2551,14 @@ supported on the current platform.
         <td>Description</td>
         <td colspan="2">
             Send each part of a frame as soon as NVENC finishes encoding it, instead of waiting for the whole
-            frame, so sending overlaps encoding. Frames are encoded in at least 4 slices, and each quarter of them
-            is sent as one of the frame's FEC blocks while the rest is still encoding. This cuts latency most at
-            high bitrates, where sending a frame takes several milliseconds. Clients need no changes.
+            frame, so sending overlaps encoding. Frames are encoded in at least 8 slices, sent as the frame's four
+            FEC blocks while the rest is still encoding: after the first, fourth and seventh of 8 slices, and the
+            last when the frame finishes. This cuts latency most at high bitrates, where sending a frame takes
+            several milliseconds. Clients need no changes.
             @note{This option only applies when using NVENC [encoder](#encoder) with H.264 or HEVC, on GPUs that
             support sub-frame readback. It turns off asynchronous encoding and
-            [split frame encoding](#nvenc_split_encode). IDR frames are always sent whole.}
+            [split frame encoding](#nvenc_split_encode). Encoding in more slices costs a little compression
+            efficiency.}
         </td>
     </tr>
     <tr>

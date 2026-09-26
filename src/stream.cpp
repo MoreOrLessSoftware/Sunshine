@@ -1618,8 +1618,9 @@ namespace stream {
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto lowseq = session->video.lowseq;
 
-      // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
-      size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+      // Send at the configured rate, 800 Mbps (80% of gigabit) by default
+      //                                Mbps -> bytes per ms                    packet
+      size_t ratecontrol_packets_in_1ms = std::max<size_t>(1, (size_t) config::stream.video_send_rate * 1'000'000 / 8 / 1000 / blocksize);
 
       // Send less than 64K in a single batch.
       // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
@@ -1838,11 +1839,16 @@ namespace stream {
 
           auto block_payload = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, data, std::string_view {});
 
-          // FEC is left out of a block too large for it, as it is for a frame too large for it
+          // FEC is left out of a block too large for it, as it is for a frame too large for it.
+          // Large IDR frames at high bitrates do this routinely, so it is not a warning.
           auto block_fec_percentage = fecPercentage;
-          if ((data.size() + payload_blocksize - 1) / payload_blocksize > max_data_shards_per_fec_block) {
-            BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded block of frame "sv << packet.frame_index();
+          auto block_packets = (data.size() + payload_blocksize - 1) / payload_blocksize;
+          if (block_packets > max_data_shards_per_fec_block) {
+            BOOST_LOG(debug) << "Skipping FEC for a "sv << block_packets << " packet block of frame "sv << packet.frame_index();
             block_fec_percentage = 0;
+          }
+          if (block_packets > video::subframe::max_block_packets) {
+            BOOST_LOG(error) << "Encoder produced a frame too large to send! Is the encoder broken? (needed "sv << block_packets << " packets in one block)"sv;
           }
 
           send_fec_block(session, packet, std::string_view {(char *) block_payload.data(), block_payload.size()}, state.blocks_sent, fec_blocks_needed, block_fec_percentage, state.timestamp, state.dupe, burst);

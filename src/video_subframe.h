@@ -6,6 +6,7 @@
 
 // standard includes
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -14,10 +15,10 @@
  * @brief Sending a frame in parts as the encoder finishes its slices.
  *
  * @details A frame is normally sent once it is fully encoded. With sub-frame readback, the
- *          encoder hands over each slice as it completes, and each quarter of the slices goes
- *          out as one of the frame's FEC blocks while the rest is still being encoded, so
- *          sending overlaps encoding. The client needs no changes: it already receives frames
- *          in up to four FEC blocks and joins their packets in order.
+ *          encoder hands over each slice as it completes, and groups of slices go out as the
+ *          frame's FEC blocks while the rest is still being encoded, so sending overlaps
+ *          encoding. The client needs no changes: it already receives frames in up to four FEC
+ *          blocks and joins their packets in order. See parts_ready() for where the frame is split.
  *
  *          Every packet names the frame's last FEC block, so a frame sent in parts always has
  *          exactly `blocks` of them. Early blocks carry whole packets only and leave any
@@ -27,7 +28,27 @@
  */
 namespace video::subframe {
   constexpr std::uint32_t blocks = 4;  ///< FEC blocks a frame sent in parts is split into, the protocol's maximum.
-  constexpr std::uint32_t min_slices = blocks;  ///< Fewest slices a frame needs to be sent in parts.
+  constexpr std::uint32_t min_slices = 8;  ///< Slices a frame sent in parts is encoded in at least.
+  constexpr std::size_t max_block_packets = 1023;  ///< Most packets a FEC block can have, set by the 10-bit packet index.
+
+  /**
+   * @brief Work out after how many slices each early part of a frame is sent.
+   *
+   * @details The last part can only go out once the frame finishes, so whatever it carries is
+   *          sent after all of the encoding. The third part therefore goes once all but the last
+   *          slice are done, leaving one slice for the end; the first goes as soon as an eighth
+   *          of the frame is done, so sending starts early, and the second halfway. With 8
+   *          slices that is after slices 1, 4 and 7, with 4 slices after 1, 2 and 3.
+   *
+   * @param slices_total Slices in the frame.
+   * @return Slices done before each early part is sent.
+   */
+  inline std::array<std::uint32_t, blocks - 1> part_slices(std::uint32_t slices_total) {
+    const auto first = std::max<std::uint32_t>(1, slices_total / 8);
+    const auto second = std::max(first + 1, slices_total / 2);
+    const auto third = std::max(second + 1, slices_total - 1);
+    return {first, second, third};
+  }
 
   /**
    * @brief Work out how many parts of a frame can be sent before it finishes encoding.
@@ -42,24 +63,36 @@ namespace video::subframe {
       return 0;
     }
 
-    return std::min<std::uint64_t>((std::uint64_t) slices_done * blocks / slices_total, blocks - 1);
+    std::uint32_t parts = 0;
+    for (auto slices : part_slices(slices_total)) {
+      if (slices_done >= slices) {
+        ++parts;
+      }
+    }
+    return parts;
   }
 
   /**
    * @brief Work out how much of the data waiting to be sent goes out in an early FEC block.
    *
+   * @details A block keeps its FEC while it fits, carrying the rest to the next block. A part
+   *          more than twice what fits would pile up in the frame's last block, which cannot grow
+   *          past `max_block_packets`, so it goes out whole without FEC instead, as a whole frame
+   *          too large for FEC does. That happens for large IDR frames.
+   *
    * @param pending Bytes waiting to be sent.
    * @param packet_payload Bytes of data each packet carries.
-   * @param max_packets Most packets a block can have with FEC.
-   * @return Bytes to send: whole packets only, at most `max_packets`, or 0 if there is not
-   *         a whole packet yet.
+   * @param max_fec_packets Most packets a block can have with FEC.
+   * @return Bytes to send: whole packets only, or 0 if there is not a whole packet yet.
    */
-  inline std::size_t early_block_bytes(std::size_t pending, std::size_t packet_payload, std::size_t max_packets) {
+  inline std::size_t early_block_bytes(std::size_t pending, std::size_t packet_payload, std::size_t max_fec_packets) {
     if (packet_payload == 0) {
       return 0;
     }
 
-    return std::min(pending / packet_payload, max_packets) * packet_payload;
+    const auto packets = pending / packet_payload;
+    const auto limit = packets <= 2 * max_fec_packets ? max_fec_packets : max_block_packets;
+    return std::min(packets, limit) * packet_payload;
   }
 
   /**

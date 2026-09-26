@@ -351,9 +351,10 @@ namespace NVENC_NAMESPACE {
      * @param frame_index Frame index of the frame being encoded.
      * @param encoded_frame Receives the bitstream and picture type.
      * @param on_subframe Called each time more slices are done, unless empty.
+     * @param idr Whether the frame is known to be an IDR frame.
      * @return `true` once the frame is complete, `false` on error or timeout.
      */
-    bool read_bitstream_in_slices(uint64_t frame_index, ::nvenc::nvenc_encoded_frame &encoded_frame, const ::nvenc::nvenc_subframe_callback &on_subframe);
+    bool read_bitstream_in_slices(uint64_t frame_index, ::nvenc::nvenc_encoded_frame &encoded_frame, const ::nvenc::nvenc_subframe_callback &on_subframe, bool idr);
 
     NV_ENC_OUTPUT_PTR output_bitstream = nullptr;
     std::vector<uint32_t> slice_offsets;  ///< Receives slice offsets during sub-frame readback, one entry per macroblock as the API requires.

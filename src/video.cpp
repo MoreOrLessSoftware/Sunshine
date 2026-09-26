@@ -1927,16 +1927,16 @@ namespace video {
    * @return 0 when packets are queued; nonzero when NVENC encoding fails.
    */
   int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
-    // With sub-frame readback, each quarter of the slices is sent as it finishes, while the rest
-    // is still encoding. See video_subframe.h.
+    // With sub-frame readback, groups of slices are sent as they finish, while the rest is
+    // still encoding. See video_subframe.h.
     size_t bytes_sent = 0;
     int parts_sent = 0;
     uint32_t groups_sent = 0;
-    auto send_part = [&](const std::vector<uint8_t> &data, bool final, bool after_ref_frame_invalidation) {
+    auto send_part = [&](const std::vector<uint8_t> &data, bool final, bool idr, bool after_ref_frame_invalidation) {
       std::vector<uint8_t> part(std::begin(data) + bytes_sent, std::end(data));
       bytes_sent = data.size();
 
-      auto packet = std::make_unique<packet_raw_generic>(std::move(part), frame_nr, false);
+      auto packet = std::make_unique<packet_raw_generic>(std::move(part), frame_nr, idr);
       packet->channel_data = channel_data;
       packet->after_ref_frame_invalidation = after_ref_frame_invalidation;
       packet->frame_timestamp = frame_timestamp;
@@ -1945,12 +1945,14 @@ namespace video {
       packets->raise(std::move(packet));
     };
 
-    auto on_subframe = [&](const std::vector<uint8_t> &data, uint32_t slices_done, uint32_t slices_total, bool after_ref_frame_invalidation) {
+    bool subframe_idr = false;
+    auto on_subframe = [&](const std::vector<uint8_t> &data, uint32_t slices_done, uint32_t slices_total, bool idr, bool after_ref_frame_invalidation) {
+      subframe_idr = idr;
       // Groups that finished between polls go out together
       const auto groups_done = subframe::parts_ready(slices_done, slices_total);
       if (groups_done > groups_sent) {
         groups_sent = groups_done;
-        send_part(data, false, after_ref_frame_invalidation);
+        send_part(data, false, idr, after_ref_frame_invalidation);
       }
     };
 
@@ -1965,7 +1967,8 @@ namespace video {
     }
 
     if (parts_sent > 0) {
-      send_part(encoded_frame.data, true, encoded_frame.after_ref_frame_invalidation);
+      // The type the first part went out with
+      send_part(encoded_frame.data, true, subframe_idr, encoded_frame.after_ref_frame_invalidation);
       return 0;
     }
 

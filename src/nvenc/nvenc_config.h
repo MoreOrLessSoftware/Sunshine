@@ -65,7 +65,7 @@ namespace nvenc {
     nvenc_split_frame_encoding split_frame_encoding = nvenc_split_frame_encoding::driver_decides;  ///< Split frame encoding.
 
     // Hand over each slice as it finishes encoding so the frame can be sent while the rest is still encoding,
-    // H.264 and HEVC only, turns off asynchronous encoding and split-frame encoding
+    // H.264 and HEVC only, encodes at least 8 slices, turns off asynchronous encoding and split-frame encoding
     bool subframe_readback = false;  ///< Send frames in parts while they are encoded.
   };
 

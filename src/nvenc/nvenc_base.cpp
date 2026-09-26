@@ -768,10 +768,10 @@ namespace NVENC_NAMESPACE {
     encoded_frame.after_ref_frame_invalidation = encoder_state.rfi_needs_confirmation;
 
     if (encoder_params.subframe) {
-      // An IDR frame is not handed over early: its type goes out with its first part, and the
-      // first frame is always one
+      // A frame's type goes out with its first part, so it must be known before encoding. With
+      // no automatic IDR frames, a frame is IDR when one is forced and for the first frame.
       const bool idr = force_idr || !encoder_state.first_frame_encoded;
-      if (!read_bitstream_in_slices(frame_index, encoded_frame, idr ? ::nvenc::nvenc_subframe_callback {} : on_subframe)) {
+      if (!read_bitstream_in_slices(frame_index, encoded_frame, on_subframe, idr)) {
         return {};
       }
     } else {
@@ -852,12 +852,13 @@ namespace NVENC_NAMESPACE {
     slice_offsets.assign(((encoder_params.width + 15) / 16) * ((encoder_params.height + 15) / 16), 0);
   }
 
-  bool nvenc_base::read_bitstream_in_slices(uint64_t frame_index, ::nvenc::nvenc_encoded_frame &encoded_frame, const ::nvenc::nvenc_subframe_callback &on_subframe) {
+  bool nvenc_base::read_bitstream_in_slices(uint64_t frame_index, ::nvenc::nvenc_encoded_frame &encoded_frame, const ::nvenc::nvenc_subframe_callback &on_subframe, bool idr) {
     using namespace std::chrono_literals;
 
     // Give up after as long as the asynchronous path waits for a frame
     const auto deadline = std::chrono::steady_clock::now() + 100ms;
     uint32_t slices_reported = 0;
+    bool streamable = true;
 
     // Between polls. Slices of a frame encoded in a few milliseconds finish a fraction of a
     // millisecond apart.
@@ -912,9 +913,16 @@ namespace NVENC_NAMESPACE {
         return true;
       }
 
-      if (on_subframe && !encoded_frame.idr && slices_done > slices_reported) {
+      // An IDR frame nobody asked for could not be labelled in its first part, so it is sent
+      // whole. The picture type may not be reported until the frame is done, so it only counts
+      // when it does say IDR.
+      if (encoded_frame.idr && !idr) {
+        streamable = false;
+      }
+
+      if (on_subframe && streamable && slices_done > slices_reported) {
         slices_reported = slices_done;
-        on_subframe(encoded_frame.data, slices_done, encoder_params.slices, encoded_frame.after_ref_frame_invalidation);
+        on_subframe(encoded_frame.data, slices_done, encoder_params.slices, idr, encoded_frame.after_ref_frame_invalidation);
       }
 
       if (std::chrono::steady_clock::now() > deadline) {

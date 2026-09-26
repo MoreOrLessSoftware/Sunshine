@@ -7,6 +7,8 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <array>
+#include <cstdint>
 #include <numeric>
 #include <vector>
 
@@ -15,12 +17,12 @@
 
 namespace {
   constexpr std::size_t packet_payload = 1000;  ///< Bytes of data per packet in these tests.
-  constexpr std::size_t max_packets = 200;  ///< Most packets a block may have with FEC in these tests.
+  constexpr std::size_t max_fec_packets = 200;  ///< Most packets a block may have with FEC in these tests.
 
   /**
    * @brief Send a frame whose slices finish one group at a time, the way the video broadcast thread does.
    *
-   * @param group_sizes Bytes each quarter of the frame's slices adds, the first including the frame header.
+   * @param group_sizes Bytes each group of slices between parts adds, the first including the frame header.
    * @return Bytes of each FEC block sent, in order.
    */
   std::vector<std::size_t> send_frame(const std::vector<std::size_t> &group_sizes) {
@@ -35,7 +37,7 @@ namespace {
           continue;
         }
 
-        auto bytes = video::subframe::early_block_bytes(pending, packet_payload, max_packets);
+        auto bytes = video::subframe::early_block_bytes(pending, packet_payload, max_fec_packets);
         if (bytes > 0) {
           blocks.push_back(bytes);
           pending -= bytes;
@@ -51,13 +53,19 @@ namespace {
   }
 }  // namespace
 
-TEST(VideoSubframeTest, ReportsPartsAsQuartersOfTheSlicesFinish) {
-  EXPECT_EQ(video::subframe::parts_ready(0, 4), 0u);
-  EXPECT_EQ(video::subframe::parts_ready(1, 4), 1u);
-  EXPECT_EQ(video::subframe::parts_ready(2, 4), 2u);
-  EXPECT_EQ(video::subframe::parts_ready(3, 4), 3u);
+TEST(VideoSubframeTest, SendsTheThirdPartOneSliceBeforeTheEnd) {
+  EXPECT_EQ(video::subframe::part_slices(8), (std::array<std::uint32_t, 3> {1, 4, 7}));
+  EXPECT_EQ(video::subframe::part_slices(16), (std::array<std::uint32_t, 3> {2, 8, 15}));
+  EXPECT_EQ(video::subframe::part_slices(4), (std::array<std::uint32_t, 3> {1, 2, 3}));
+}
+
+TEST(VideoSubframeTest, ReportsPartsAsTheirSlicesFinish) {
+  EXPECT_EQ(video::subframe::parts_ready(0, 8), 0u);
+  EXPECT_EQ(video::subframe::parts_ready(1, 8), 1u);
   EXPECT_EQ(video::subframe::parts_ready(3, 8), 1u);
-  EXPECT_EQ(video::subframe::parts_ready(6, 8), 3u);
+  EXPECT_EQ(video::subframe::parts_ready(4, 8), 2u);
+  EXPECT_EQ(video::subframe::parts_ready(6, 8), 2u);
+  EXPECT_EQ(video::subframe::parts_ready(7, 8), 3u);
 }
 
 TEST(VideoSubframeTest, KeepsTheLastPartForWhenTheFrameFinishes) {
@@ -70,13 +78,18 @@ TEST(VideoSubframeTest, ReportsNoPartsWithoutSlices) {
 }
 
 TEST(VideoSubframeTest, SendsOnlyWholePacketsEarly) {
-  EXPECT_EQ(video::subframe::early_block_bytes(999, packet_payload, max_packets), 0u);
-  EXPECT_EQ(video::subframe::early_block_bytes(1000, packet_payload, max_packets), 1000u);
-  EXPECT_EQ(video::subframe::early_block_bytes(2500, packet_payload, max_packets), 2000u);
+  EXPECT_EQ(video::subframe::early_block_bytes(999, packet_payload, max_fec_packets), 0u);
+  EXPECT_EQ(video::subframe::early_block_bytes(1000, packet_payload, max_fec_packets), 1000u);
+  EXPECT_EQ(video::subframe::early_block_bytes(2500, packet_payload, max_fec_packets), 2000u);
 }
 
-TEST(VideoSubframeTest, KeepsEarlyBlocksSmallEnoughForFec) {
-  EXPECT_EQ(video::subframe::early_block_bytes(500'000, packet_payload, max_packets), max_packets * packet_payload);
+TEST(VideoSubframeTest, KeepsEarlyBlocksSmallEnoughForFecWhenTheRestCanWait) {
+  EXPECT_EQ(video::subframe::early_block_bytes(350'000, packet_payload, max_fec_packets), max_fec_packets * packet_payload);
+}
+
+TEST(VideoSubframeTest, SendsLargePartsWholeWithoutFec) {
+  EXPECT_EQ(video::subframe::early_block_bytes(500'000, packet_payload, max_fec_packets), 500'000u);
+  EXPECT_EQ(video::subframe::early_block_bytes(2'000'000, packet_payload, max_fec_packets), video::subframe::max_block_packets * packet_payload);
 }
 
 TEST(VideoSubframeTest, SplitsTheRestOfAFrameEvenlyByPacket) {
@@ -133,4 +146,15 @@ TEST(VideoSubframeTest, PadsOnlyAfterTheEndOfTheFrame) {
       EXPECT_GT(blocks[i], 0u) << "block " << i;
     }
   }
+}
+
+TEST(VideoSubframeTest, FitsALargeIdrFrameInBlocksTheProtocolAllows) {
+  // A 3000 packet IDR frame in 8 equal slices, split after slices 1, 4 and 7
+  const auto blocks = send_frame({375'000, 1'125'000, 1'125'000, 375'000});
+
+  ASSERT_EQ(blocks.size(), video::subframe::blocks);
+  for (auto bytes : blocks) {
+    EXPECT_LE((bytes + packet_payload - 1) / packet_payload, video::subframe::max_block_packets);
+  }
+  EXPECT_EQ(std::accumulate(blocks.begin(), blocks.end(), std::size_t {0}), 3'000'000u);
 }
