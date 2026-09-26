@@ -58,9 +58,10 @@ namespace nvenc {
      *
      * @param frame_index Frame index that uniquely identifies the frame.
      * @param force_idr Whether to encode the frame as a forced IDR.
+     * @param on_subframe Optional. Called as slices finish when the encoder hands them over early.
      * @return Encoded frame.
      */
-    virtual nvenc_encoded_frame encode_frame(std::uint64_t frame_index, bool force_idr) = 0;
+    virtual nvenc_encoded_frame encode_frame(std::uint64_t frame_index, bool force_idr, const nvenc_subframe_callback &on_subframe = {}) = 0;
 
     /**
      * @brief Invalidate reference frames in the requested range.

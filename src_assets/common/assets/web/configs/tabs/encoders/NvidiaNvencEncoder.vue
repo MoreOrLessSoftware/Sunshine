@@ -38,6 +38,14 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.nvenc_split_encode_desc') }}</div>
     </div>
 
+    <!-- Sub-frame readback -->
+    <Checkbox class="mb-3"
+              id="nvenc_subframe"
+              locale-prefix="config"
+              v-model="config.nvenc_subframe"
+              default="false"
+    ></Checkbox>
+
     <!-- Two-pass mode -->
     <div class="mb-3">
       <label for="nvenc_twopass" class="form-label">{{ $t('config.nvenc_twopass') }}</label>

@@ -2513,6 +2513,35 @@ supported on the current platform.
     </tr>
 </table>
 
+### nvenc_subframe
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Send each part of a frame as soon as NVENC finishes encoding it, instead of waiting for the whole
+            frame, so sending overlaps encoding. Frames are encoded in at least 4 slices, and each quarter of them
+            is sent as one of the frame's FEC blocks while the rest is still encoding. This cuts latency most at
+            high bitrates, where sending a frame takes several milliseconds. Clients need no changes.
+            @note{This option only applies when using NVENC [encoder](#encoder) with H.264 or HEVC, on GPUs that
+            support sub-frame readback. It turns off asynchronous encoding and
+            [split frame encoding](#nvenc_split_encode). IDR frames are always sent whole.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_subframe = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### nvenc_latency_over_power
 
 <table>

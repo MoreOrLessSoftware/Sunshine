@@ -35,6 +35,7 @@ extern "C" {
 #include "platform/common.h"
 #include "sync.h"
 #include "video.h"
+#include "video_subframe.h"
 
 #ifdef _WIN32
 extern "C" {
@@ -618,14 +619,15 @@ namespace video {
      * @brief Submit the next frame to NVENC and return the encoded payload.
      *
      * @param frame_index Monotonic frame index assigned by the video pipeline.
+     * @param on_subframe Optional. Called as slices finish when the encoder hands them over early.
      * @return Encoded NVENC frame payload and frame metadata.
      */
-    nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index) {
+    nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index, const nvenc::nvenc_subframe_callback &on_subframe = {}) {
       if (!device || !device->nvenc) {
         return {};
       }
 
-      auto result = device->nvenc->encode_frame(frame_index, force_idr);
+      auto result = device->nvenc->encode_frame(frame_index, force_idr, on_subframe);
       force_idr = false;
       return result;
     }
@@ -1925,7 +1927,34 @@ namespace video {
    * @return 0 when packets are queued; nonzero when NVENC encoding fails.
    */
   int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
-    auto encoded_frame = session.encode_frame(frame_nr);
+    // With sub-frame readback, each quarter of the slices is sent as it finishes, while the rest
+    // is still encoding. See video_subframe.h.
+    size_t bytes_sent = 0;
+    int parts_sent = 0;
+    uint32_t groups_sent = 0;
+    auto send_part = [&](const std::vector<uint8_t> &data, bool final, bool after_ref_frame_invalidation) {
+      std::vector<uint8_t> part(std::begin(data) + bytes_sent, std::end(data));
+      bytes_sent = data.size();
+
+      auto packet = std::make_unique<packet_raw_generic>(std::move(part), frame_nr, false);
+      packet->channel_data = channel_data;
+      packet->after_ref_frame_invalidation = after_ref_frame_invalidation;
+      packet->frame_timestamp = frame_timestamp;
+      packet->subframe_part = parts_sent++;
+      packet->subframe_final = final;
+      packets->raise(std::move(packet));
+    };
+
+    auto on_subframe = [&](const std::vector<uint8_t> &data, uint32_t slices_done, uint32_t slices_total, bool after_ref_frame_invalidation) {
+      // Groups that finished between polls go out together
+      const auto groups_done = subframe::parts_ready(slices_done, slices_total);
+      if (groups_done > groups_sent) {
+        groups_sent = groups_done;
+        send_part(data, false, after_ref_frame_invalidation);
+      }
+    };
+
+    auto encoded_frame = session.encode_frame(frame_nr, on_subframe);
     if (encoded_frame.data.empty()) {
       BOOST_LOG(error) << "NvENC returned empty packet";
       return -1;
@@ -1933,6 +1962,11 @@ namespace video {
 
     if (frame_nr != encoded_frame.frame_index) {
       BOOST_LOG(error) << "NvENC frame index mismatch " << frame_nr << " " << encoded_frame.frame_index;
+    }
+
+    if (parts_sent > 0) {
+      send_part(encoded_frame.data, true, encoded_frame.after_ref_frame_invalidation);
+      return 0;
     }
 
     auto packet = std::make_unique<packet_raw_generic>(std::move(encoded_frame.data), encoded_frame.frame_index, encoded_frame.idr);

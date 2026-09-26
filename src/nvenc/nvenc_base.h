@@ -62,9 +62,10 @@ namespace NVENC_NAMESPACE {
      *        Afterwards serves as parameter for `invalidate_ref_frames()`.
      *        No restrictions on the first frame index, but later frame indexes must be subsequent.
      * @param force_idr Whether to encode frame as forced IDR.
+     * @param on_subframe Optional. Called as slices finish when sub-frame readback is enabled.
      * @return Encoded frame.
      */
-    ::nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index, bool force_idr) override;
+    ::nvenc::nvenc_encoded_frame encode_frame(uint64_t frame_index, bool force_idr, const ::nvenc::nvenc_subframe_callback &on_subframe = {}) override;
 
     /**
      * @brief Perform reference frame invalidation (RFI) procedure.
@@ -128,6 +129,9 @@ namespace NVENC_NAMESPACE {
       NV_ENC_BUFFER_FORMAT buffer_format = NV_ENC_BUFFER_FORMAT_UNDEFINED;
       uint32_t ref_frames_in_dpb = 0;
       bool rfi = false;
+      bool async = false;  ///< Whether encoding completes asynchronously through `async_event_handle`.
+      bool subframe = false;  ///< Whether slices are read back as they finish. See `read_bitstream_in_slices()`.
+      uint32_t slices = 1;  ///< Slices in each frame.
     } encoder_params;  ///< Current encoder dimensions, pixel format, and reference-frame settings.
 
     std::string last_nvenc_error_string;  ///< Last NVENC error string.
@@ -328,11 +332,37 @@ namespace NVENC_NAMESPACE {
       NV_ENC_BUFFER_FORMAT buffer_format
     ) const;
 
+    /**
+     * @brief Configure sub-frame readback when the configuration asks for it and the gpu can do it.
+     *
+     * @param init_params Encoder initialization parameters to update.
+     * @param config NVENC encoder configuration.
+     * @param client_config Stream configuration requested by the client.
+     */
+    void configure_subframe_readback(
+      NV_ENC_INITIALIZE_PARAMS &init_params,
+      const ::nvenc::nvenc_config &config,
+      const video::config_t &client_config
+    );
+
+    /**
+     * @brief Read a frame's bitstream as its slices finish encoding, after `NvEncEncodePicture()`.
+     *
+     * @param frame_index Frame index of the frame being encoded.
+     * @param encoded_frame Receives the bitstream and picture type.
+     * @param on_subframe Called each time more slices are done, unless empty.
+     * @return `true` once the frame is complete, `false` on error or timeout.
+     */
+    bool read_bitstream_in_slices(uint64_t frame_index, ::nvenc::nvenc_encoded_frame &encoded_frame, const ::nvenc::nvenc_subframe_callback &on_subframe);
+
     NV_ENC_OUTPUT_PTR output_bitstream = nullptr;
+    std::vector<uint32_t> slice_offsets;  ///< Receives slice offsets during sub-frame readback, one entry per macroblock as the API requires.
+    std::unique_ptr<platf::high_precision_timer> poll_timer;  ///< Paces polling during sub-frame readback.
 
     struct {
       uint64_t last_encoded_frame_index = 0;
       bool rfi_needs_confirmation = false;
+      bool first_frame_encoded = false;  ///< Whether a frame has been encoded since the encoder was created. The first is always IDR.
       std::pair<uint64_t, uint64_t> last_rfi_range;
       logging::min_max_avg_periodic_logger<double> frame_size_logger = {debug, "NvEnc: encoded frame sizes in kB", ""};
     } encoder_state;

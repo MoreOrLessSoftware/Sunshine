@@ -51,7 +51,7 @@ namespace {
     void destroy_encoder() override {
     }
 
-    nvenc::nvenc_encoded_frame encode_frame(std::uint64_t frame_index, bool force_idr) override {
+    nvenc::nvenc_encoded_frame encode_frame(std::uint64_t frame_index, bool force_idr, const nvenc::nvenc_subframe_callback &) override {
       return {{}, frame_index, force_idr, false};
     }
 

@@ -36,6 +36,7 @@ extern "C" {
 #include "system_tray.h"
 #include "thread_safe.h"
 #include "utility.h"
+#include "video_subframe.h"
 
 constexpr int IDX_START_A = 0;  ///< Control-stream message index for the first stream-start packet.
 constexpr int IDX_START_B = 1;  ///< Control-stream message index for the second stream-start packet.
@@ -515,6 +516,18 @@ namespace stream {
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;  ///< Event carrying the reference-frame range to invalidate.
 
       std::unique_ptr<platf::deinit_t> qos;  ///< Lifetime guard for video-socket QoS configuration.
+
+      /**
+       * @brief A frame being sent in parts while it is encoded. See video_subframe.h.
+       */
+      struct {
+        int64_t frame_index = -1;  ///< Frame being sent, or -1 for none.
+        std::vector<uint8_t> pending;  ///< Bytes not sent yet, starting with the frame header until the first block goes out.
+        int blocks_sent = 0;  ///< FEC blocks of the frame sent so far.
+        uint32_t timestamp = 0;  ///< RTP timestamp of the frame.
+        bool dupe = false;  ///< Whether the frame repeats an earlier one.
+        bool announced = false;  ///< Whether the first frame sent in parts has been logged.
+      } subframe;  ///< Frame being sent in parts.
     } video;  ///< Video worker thread state for the active stream.
 
     struct {
@@ -1545,15 +1558,336 @@ namespace stream {
 
     auto ratecontrol_next_frame_start = std::chrono::steady_clock::now();
 
+    // There are 2 bits for FEC block count for a maximum of 4 FEC blocks
+    constexpr auto MAX_FEC_BLOCKS = 4;
+    static_assert(video::subframe::blocks <= MAX_FEC_BLOCKS);
+
+    // Pacing state for one burst of packets: a whole frame, or one part of a frame sent while it is encoded
+    struct send_burst_t {
+      std::chrono::steady_clock::time_point start;
+      size_t frame_packets_sent = 0;
+      size_t group_packets_sent = 0;
+    };
+
+    // Builds the header that starts a frame's payload
+    auto make_frame_header = [&](session_t *session, video::packet_raw_t &packet, std::optional<size_t> payload_size) {
+      video_short_frame_header_t frame_header = {};
+      frame_header.headerType = 0x01;  // Short header type
+      frame_header.frameType = packet.is_idr()                     ? 2 :
+                               packet.after_ref_frame_invalidation ? 5 :
+                                                                     1;
+
+      // A frame sent in parts does not know its size yet. Only codecs that cannot handle zero
+      // padding read this, and those are never sent in parts.
+      const auto packet_payload = session->config.packetsize - sizeof(NV_VIDEO_PACKET);
+      frame_header.lastPayloadLen = payload_size ? (*payload_size + sizeof(frame_header)) % packet_payload : 0;
+      if (frame_header.lastPayloadLen == 0) {
+        frame_header.lastPayloadLen = packet_payload;
+      }
+
+      if (packet.frame_timestamp) {
+        auto duration_to_latency = [](const std::chrono::steady_clock::duration &duration) {
+          const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
+          return (uint16_t) std::clamp<decltype(duration_us)>((duration_us + 50) / 100, 0, std::numeric_limits<uint16_t>::max());
+        };
+
+        uint16_t latency = duration_to_latency(std::chrono::steady_clock::now() - *packet.frame_timestamp);
+        frame_header.frame_processing_latency = latency;
+        frame_processing_latency_logger.collect_and_log(latency / 10.);
+      } else {
+        frame_header.frame_processing_latency = 0;
+      }
+
+      return frame_header;
+    };
+
+    // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
+    // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
+    auto rtp_timestamp = [&](video::packet_raw_t &packet, bool &frame_is_dupe) {
+      frame_is_dupe = false;
+      if (!packet.frame_timestamp) {
+        packet.frame_timestamp = ratecontrol_next_frame_start;
+        frame_is_dupe = true;
+      }
+      using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
+      return std::chrono::round<rtp_tick>(*packet.frame_timestamp - video_epoch).count();
+    };
+
+    // Sends one FEC block of a frame, laid out as concat_and_insert() produces it, with room for each packet's header
+    auto send_fec_block = [&](session_t *session, video::packet_raw_t &packet, std::string_view current_payload, int blockIndex, int fec_blocks_needed, size_t fecPercentage, uint32_t timestamp, bool frame_is_dupe, send_burst_t &burst) {
+      auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
+      auto lowseq = session->video.lowseq;
+
+      // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
+      size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
+
+      // Send less than 64K in a single batch.
+      // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
+      // appear in "Other I/O" and begin waiting for interrupts.
+      // This gives inconsistent performance so we'd rather avoid it.
+      size_t send_batch_size = 64 * 1024 / blocksize;
+      // Also don't exceed 64 packets, which can happen when Moonlight requests
+      // unusually small packet size.
+      // Generic Segmentation Offload on Linux can't do more than 64.
+      send_batch_size = std::min<size_t>(64, send_batch_size);
+
+      auto packets = (current_payload.size() + (blocksize - 1)) / blocksize;
+
+      for (int x = 0; x < packets; ++x) {
+        auto *inspect = (video_packet_raw_t *) &current_payload[x * blocksize];
+
+        inspect->packet.frameIndex = (uint32_t) packet.frame_index();
+        inspect->packet.streamPacketIndex = ((uint32_t) lowseq + x) << 8;
+
+        // Match multiFecFlags with Moonlight
+        inspect->packet.multiFecFlags = 0x10;
+        inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
+
+        inspect->packet.flags = FLAG_CONTAINS_PIC_DATA;
+        if (x == 0) {
+          inspect->packet.flags |= FLAG_SOF;
+        }
+        if (x == packets - 1) {
+          inspect->packet.flags |= FLAG_EOF;
+        }
+      }
+
+      frame_fec_latency_logger.first_point_now();
+      // If video encryption is enabled, we allocate space for the encryption header before each shard
+      auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+      frame_fec_latency_logger.second_point_now_and_log();
+
+      auto peer_address = session->video.peer.address();
+      auto batch_info = platf::batched_send_info_t {
+        shards.headers.begin(),
+        shards.prefixsize,
+        shards.payload_buffers,
+        shards.blocksize,
+        0,
+        0,
+        (uintptr_t) sock.native_handle(),
+        peer_address,
+        session->video.peer.port(),
+        session->localAddress,
+      };
+
+      size_t next_shard_to_send = 0;
+
+      // set FEC info now that we know for sure what our percentage will be for this frame
+      for (auto x = 0; x < shards.size(); ++x) {
+        auto *inspect = (video_packet_raw_t *) shards.data(x);
+
+        inspect->packet.fecInfo =
+          (uint32_t) (x << 12 |
+                      shards.data_shards << 22 |
+                      shards.percentage << 4);
+
+        inspect->rtp.header = 0x80 | FLAG_EXTENSION;
+        inspect->rtp.sequenceNumber = util::endian::big<uint16_t>(lowseq + x);
+        inspect->rtp.timestamp = util::endian::big<uint32_t>(timestamp);
+
+        inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
+        inspect->packet.frameIndex = (uint32_t) packet.frame_index();
+
+        // Encrypt this shard if video encryption is enabled
+        if (session->video.cipher) {
+          // We use the deterministic IV construction algorithm specified in NIST SP 800-38D
+          // Section 8.2.1. The sequence number is our "invocation" field and the 'V' in the
+          // high bytes is the "fixed" field. Because each client provides their own unique
+          // key, our values in the fixed field need only uniquely identify each independent
+          // use of the client's key with AES-GCM in our code.
+          //
+          // The IV counter is 64 bits long which allows for 2^64 encrypted video packets
+          // to be sent to each client before the IV repeats.
+          std::copy_n((uint8_t *) &session->video.gcm_iv_counter, sizeof(session->video.gcm_iv_counter), std::begin(iv));
+          iv[11] = 'V';  // Video stream
+          session->video.gcm_iv_counter++;
+
+          // Encrypt the target buffer in place
+          auto *prefix = (video_packet_enc_prefix_t *) shards.prefix(x);
+          prefix->frameNumber = (std::uint32_t) packet.frame_index();
+          std::copy(std::begin(iv), std::end(iv), prefix->iv);
+          session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
+        }
+
+        if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
+          // Do pacing within the frame.
+          // Also trigger pacing before the first send_batch() of the frame
+          // to account for the last send_batch() of the previous frame.
+          if (burst.group_packets_sent >= ratecontrol_packets_in_1ms || burst.frame_packets_sent == 0) {
+            auto due = burst.start +
+                       std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
+                         burst.frame_packets_sent / ratecontrol_packets_in_1ms;
+
+            auto now = std::chrono::steady_clock::now();
+            if (now < due) {
+              timer->sleep_for(due - now);
+            }
+
+            burst.group_packets_sent = 0;
+          }
+
+          size_t current_batch_size = x - next_shard_to_send + 1;
+          batch_info.block_offset = next_shard_to_send;
+          batch_info.block_count = current_batch_size;
+
+          frame_send_batch_latency_logger.first_point_now();
+          // Use a batched send if it's supported on this platform
+          if (!platf::send_batch(batch_info)) {
+            // Batched send is not available, so send each packet individually
+            BOOST_LOG(verbose) << "Falling back to unbatched send"sv;
+            for (auto y = 0; y < current_batch_size; y++) {
+              auto send_info = platf::send_info_t {
+                shards.prefix(next_shard_to_send + y),
+                shards.prefixsize,
+                shards.data(next_shard_to_send + y),
+                shards.blocksize,
+                (uintptr_t) sock.native_handle(),
+                peer_address,
+                session->video.peer.port(),
+                session->localAddress,
+              };
+
+              platf::send(send_info);
+            }
+          }
+          frame_send_batch_latency_logger.second_point_now_and_log();
+
+          burst.group_packets_sent += current_batch_size;
+          burst.frame_packets_sent += current_batch_size;
+          next_shard_to_send = x + 1;
+        }
+      }
+
+      // remember this in case the next frame comes immediately
+      ratecontrol_next_frame_start = burst.start +
+                                     std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
+                                       burst.frame_packets_sent / ratecontrol_packets_in_1ms;
+
+      BOOST_LOG(verbose) << "Sent Frame seq ["sv << packet.frame_index() << "] pts ["sv << timestamp
+                         << "] shards ["sv << shards.size() << "/"sv << shards.percentage << "%]"sv
+                         << (frame_is_dupe ? " Dupe" : "")
+                         << (packet.is_idr() ? " Key" : "")
+                         << (packet.after_ref_frame_invalidation ? " RFI" : "");
+
+      session->video.lowseq = lowseq + shards.size();
+    };
+
+    // Sends what it can of a frame being sent in parts while it is encoded. See video_subframe.h.
+    auto send_subframe_part = [&](session_t *session, video::packet_raw_t &packet) {
+      auto &state = session->video.subframe;
+
+      if (packet.subframe_part == 0) {
+        auto frame_header = make_frame_header(session, packet, std::nullopt);
+
+        state.frame_index = packet.frame_index();
+        state.blocks_sent = 0;
+        state.pending.assign((uint8_t *) &frame_header, (uint8_t *) &frame_header + sizeof(frame_header));
+        state.timestamp = rtp_timestamp(packet, state.dupe);
+      } else if (state.frame_index != packet.frame_index()) {
+        // The start of this frame never came through
+        return;
+      }
+
+      state.pending.insert(std::end(state.pending), packet.data(), packet.data() + packet.data_size());
+
+      auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
+      auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);
+      auto fecPercentage = config::stream.fec_percentage;
+      auto max_data_shards_per_fec_block = (DATA_SHARDS_MAX * 100) / (100 + fecPercentage);
+
+      int fec_blocks_needed;
+      std::vector<size_t> block_sizes;
+
+      if (!packet.subframe_final) {
+        // The last block is kept for when the frame finishes
+        if (state.blocks_sent >= (int) video::subframe::blocks - 1) {
+          return;
+        }
+
+        auto bytes = video::subframe::early_block_bytes(state.pending.size(), payload_blocksize, max_data_shards_per_fec_block);
+        if (bytes == 0) {
+          return;
+        }
+
+        fec_blocks_needed = video::subframe::blocks;
+        block_sizes = {bytes};
+
+        if (!state.announced) {
+          state.announced = true;
+          BOOST_LOG(info) << "Sending video frames in parts while they encode"sv;
+        }
+      } else if (state.blocks_sent == 0) {
+        // Nothing went out early, so the frame takes as many blocks as it needs like any other
+        auto max_data_per_fec_block = max_data_shards_per_fec_block * payload_blocksize;
+        fec_blocks_needed = std::clamp<int>((state.pending.size() + max_data_per_fec_block - 1) / max_data_per_fec_block, 1, MAX_FEC_BLOCKS);
+        block_sizes = video::subframe::final_block_bytes(state.pending.size(), payload_blocksize, fec_blocks_needed);
+      } else {
+        fec_blocks_needed = video::subframe::blocks;
+        block_sizes = video::subframe::final_block_bytes(state.pending.size(), payload_blocksize, fec_blocks_needed - state.blocks_sent);
+      }
+
+      try {
+        send_burst_t burst {std::max(ratecontrol_next_frame_start, std::chrono::steady_clock::now())};
+        size_t offset = 0;
+
+        for (auto bytes : block_sizes) {
+          // A block with nothing left to carry is one packet of zeros after the end of the frame
+          static const char padding = 0;
+          std::string_view data = bytes ? std::string_view {(char *) state.pending.data() + offset, bytes} : std::string_view {&padding, 1};
+
+          auto block_payload = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, data, std::string_view {});
+
+          // FEC is left out of a block too large for it, as it is for a frame too large for it
+          auto block_fec_percentage = fecPercentage;
+          if ((data.size() + payload_blocksize - 1) / payload_blocksize > max_data_shards_per_fec_block) {
+            BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded block of frame "sv << packet.frame_index();
+            block_fec_percentage = 0;
+          }
+
+          send_fec_block(session, packet, std::string_view {(char *) block_payload.data(), block_payload.size()}, state.blocks_sent, fec_blocks_needed, block_fec_percentage, state.timestamp, state.dupe, burst);
+
+          ++state.blocks_sent;
+          offset += bytes;
+        }
+
+        state.pending.erase(std::begin(state.pending), std::begin(state.pending) + offset);
+      } catch (const std::exception &e) {
+        BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
+        state.frame_index = -1;
+        std::this_thread::sleep_for(100ms);
+      }
+
+      if (packet.subframe_final) {
+        state.frame_index = -1;
+        state.pending.clear();
+      }
+    };
+
     while (auto packet = packets->pop()) {
       if (shutdown_event->peek()) {
         break;
       }
 
-      frame_network_latency_logger.first_point_now();
-
       auto session = (session_t *) packet->channel_data;
-      auto lowseq = session->video.lowseq;
+
+      if (packet->subframe_part >= 0) {
+        if (packet->subframe_part == 0) {
+          frame_network_latency_logger.first_point_now();
+        }
+
+        send_subframe_part(session, *packet);
+
+        if (packet->subframe_final) {
+          frame_network_latency_logger.second_point_now_and_log();
+        }
+        continue;
+      }
+
+      // A frame that was being sent in parts will not be finished now
+      session->video.subframe.frame_index = -1;
+
+      frame_network_latency_logger.first_point_now();
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
       std::vector<uint8_t> payload_with_replacements;
@@ -1572,28 +1906,7 @@ namespace stream {
         }
       }
 
-      video_short_frame_header_t frame_header = {};
-      frame_header.headerType = 0x01;  // Short header type
-      frame_header.frameType = packet->is_idr()                     ? 2 :
-                               packet->after_ref_frame_invalidation ? 5 :
-                                                                      1;
-      frame_header.lastPayloadLen = (payload.size() + sizeof(frame_header)) % (session->config.packetsize - sizeof(NV_VIDEO_PACKET));
-      if (frame_header.lastPayloadLen == 0) {
-        frame_header.lastPayloadLen = session->config.packetsize - sizeof(NV_VIDEO_PACKET);
-      }
-
-      if (packet->frame_timestamp) {
-        auto duration_to_latency = [](const std::chrono::steady_clock::duration &duration) {
-          const auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-          return (uint16_t) std::clamp<decltype(duration_us)>((duration_us + 50) / 100, 0, std::numeric_limits<uint16_t>::max());
-        };
-
-        uint16_t latency = duration_to_latency(std::chrono::steady_clock::now() - *packet->frame_timestamp);
-        frame_header.frame_processing_latency = latency;
-        frame_processing_latency_logger.collect_and_log(latency / 10.);
-      } else {
-        frame_header.frame_processing_latency = 0;
-      }
+      video_short_frame_header_t frame_header = make_frame_header(session, *packet, payload.size());
 
       auto fecPercentage = config::stream.fec_percentage;
 
@@ -1603,9 +1916,6 @@ namespace stream {
       auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, sizeof(frame_header)}, payload);
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
-
-      // There are 2 bits for FEC block count for a maximum of 4 FEC blocks
-      constexpr auto MAX_FEC_BLOCKS = 4;
 
       // The max number of data shards per block is found by solving this system of equations for D:
       // D = 255 - P
@@ -1656,183 +1966,19 @@ namespace stream {
       }
 
       try {
-        // Use around 80% of 1Gbps          1Gbps            percent    ms     packet      byte
-        size_t ratecontrol_packets_in_1ms = std::giga::num * 80 / 100 / 1000 / blocksize / 8;
-
-        // Send less than 64K in a single batch.
-        // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,
-        // appear in "Other I/O" and begin waiting for interrupts.
-        // This gives inconsistent performance so we'd rather avoid it.
-        size_t send_batch_size = 64 * 1024 / blocksize;
-        // Also don't exceed 64 packets, which can happen when Moonlight requests
-        // unusually small packet size.
-        // Generic Segmentation Offload on Linux can't do more than 64.
-        send_batch_size = std::min<size_t>(64, send_batch_size);
-
         // Don't ignore the last ratecontrol group of the previous frame
-        auto ratecontrol_frame_start = std::max(ratecontrol_next_frame_start, std::chrono::steady_clock::now());
+        send_burst_t burst {std::max(ratecontrol_next_frame_start, std::chrono::steady_clock::now())};
 
-        size_t ratecontrol_frame_packets_sent = 0;
-        size_t ratecontrol_group_packets_sent = 0;
+        bool frame_is_dupe;
+        auto timestamp = rtp_timestamp(*packet, frame_is_dupe);
 
         auto blockIndex = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
-          auto packets = (current_payload.size() + (blocksize - 1)) / blocksize;
-
-          for (int x = 0; x < packets; ++x) {
-            auto *inspect = (video_packet_raw_t *) &current_payload[x * blocksize];
-
-            inspect->packet.frameIndex = (uint32_t) packet->frame_index();
-            inspect->packet.streamPacketIndex = ((uint32_t) lowseq + x) << 8;
-
-            // Match multiFecFlags with Moonlight
-            inspect->packet.multiFecFlags = 0x10;
-            inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
-
-            inspect->packet.flags = FLAG_CONTAINS_PIC_DATA;
-            if (x == 0) {
-              inspect->packet.flags |= FLAG_SOF;
-            }
-            if (x == packets - 1) {
-              inspect->packet.flags |= FLAG_EOF;
-            }
-          }
-
-          frame_fec_latency_logger.first_point_now();
-          // If video encryption is enabled, we allocate space for the encryption header before each shard
-          auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
-          frame_fec_latency_logger.second_point_now_and_log();
-
-          auto peer_address = session->video.peer.address();
-          auto batch_info = platf::batched_send_info_t {
-            shards.headers.begin(),
-            shards.prefixsize,
-            shards.payload_buffers,
-            shards.blocksize,
-            0,
-            0,
-            (uintptr_t) sock.native_handle(),
-            peer_address,
-            session->video.peer.port(),
-            session->localAddress,
-          };
-
-          size_t next_shard_to_send = 0;
-
-          // RTP video timestamps use a 90 KHz clock and the frame_timestamp from when the frame was captured
-          // When a timestamp isn't available (duplicate frames), the timestamp from rate control is used instead.
-          bool frame_is_dupe = false;
-          if (!packet->frame_timestamp) {
-            packet->frame_timestamp = ratecontrol_next_frame_start;
-            frame_is_dupe = true;
-          }
-          using rtp_tick = std::chrono::duration<uint32_t, std::ratio<1, 90000>>;
-          uint32_t timestamp = std::chrono::round<rtp_tick>(*packet->frame_timestamp - video_epoch).count();
-
-          // set FEC info now that we know for sure what our percentage will be for this frame
-          for (auto x = 0; x < shards.size(); ++x) {
-            auto *inspect = (video_packet_raw_t *) shards.data(x);
-
-            inspect->packet.fecInfo =
-              (uint32_t) (x << 12 |
-                          shards.data_shards << 22 |
-                          shards.percentage << 4);
-
-            inspect->rtp.header = 0x80 | FLAG_EXTENSION;
-            inspect->rtp.sequenceNumber = util::endian::big<uint16_t>(lowseq + x);
-            inspect->rtp.timestamp = util::endian::big<uint32_t>(timestamp);
-
-            inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
-            inspect->packet.frameIndex = (uint32_t) packet->frame_index();
-
-            // Encrypt this shard if video encryption is enabled
-            if (session->video.cipher) {
-              // We use the deterministic IV construction algorithm specified in NIST SP 800-38D
-              // Section 8.2.1. The sequence number is our "invocation" field and the 'V' in the
-              // high bytes is the "fixed" field. Because each client provides their own unique
-              // key, our values in the fixed field need only uniquely identify each independent
-              // use of the client's key with AES-GCM in our code.
-              //
-              // The IV counter is 64 bits long which allows for 2^64 encrypted video packets
-              // to be sent to each client before the IV repeats.
-              std::copy_n((uint8_t *) &session->video.gcm_iv_counter, sizeof(session->video.gcm_iv_counter), std::begin(iv));
-              iv[11] = 'V';  // Video stream
-              session->video.gcm_iv_counter++;
-
-              // Encrypt the target buffer in place
-              auto *prefix = (video_packet_enc_prefix_t *) shards.prefix(x);
-              prefix->frameNumber = (std::uint32_t) packet->frame_index();
-              std::copy(std::begin(iv), std::end(iv), prefix->iv);
-              session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
-            }
-
-            if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
-              // Do pacing within the frame.
-              // Also trigger pacing before the first send_batch() of the frame
-              // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms || ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
-
-                auto now = std::chrono::steady_clock::now();
-                if (now < due) {
-                  timer->sleep_for(due - now);
-                }
-
-                ratecontrol_group_packets_sent = 0;
-              }
-
-              size_t current_batch_size = x - next_shard_to_send + 1;
-              batch_info.block_offset = next_shard_to_send;
-              batch_info.block_count = current_batch_size;
-
-              frame_send_batch_latency_logger.first_point_now();
-              // Use a batched send if it's supported on this platform
-              if (!platf::send_batch(batch_info)) {
-                // Batched send is not available, so send each packet individually
-                BOOST_LOG(verbose) << "Falling back to unbatched send"sv;
-                for (auto y = 0; y < current_batch_size; y++) {
-                  auto send_info = platf::send_info_t {
-                    shards.prefix(next_shard_to_send + y),
-                    shards.prefixsize,
-                    shards.data(next_shard_to_send + y),
-                    shards.blocksize,
-                    (uintptr_t) sock.native_handle(),
-                    peer_address,
-                    session->video.peer.port(),
-                    session->localAddress,
-                  };
-
-                  platf::send(send_info);
-                }
-              }
-              frame_send_batch_latency_logger.second_point_now_and_log();
-
-              ratecontrol_group_packets_sent += current_batch_size;
-              ratecontrol_frame_packets_sent += current_batch_size;
-              next_shard_to_send = x + 1;
-            }
-          }
-
-          // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
-
-          frame_network_latency_logger.second_point_now_and_log();
-
-          BOOST_LOG(verbose) << "Sent Frame seq ["sv << packet->frame_index() << "] pts ["sv << timestamp
-                             << "] shards ["sv << shards.size() << "/"sv << shards.percentage << "%]"sv
-                             << (frame_is_dupe ? " Dupe" : "")
-                             << (packet->is_idr() ? " Key" : "")
-                             << (packet->after_ref_frame_invalidation ? " RFI" : "");
-
+          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fecPercentage, timestamp, frame_is_dupe, burst);
           ++blockIndex;
-          lowseq += shards.size();
         });
 
-        session->video.lowseq = lowseq;
+        frame_network_latency_logger.second_point_now_and_log();
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);

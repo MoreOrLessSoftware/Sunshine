@@ -532,6 +532,8 @@ namespace video {
     void *channel_data = nullptr;  ///< Platform or protocol state carried with this packet.
     bool after_ref_frame_invalidation = false;  ///< Whether the frame follows reference-frame invalidation.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
+    int subframe_part = -1;  ///< Which part of a frame sent while it is encoded this is, from 0, or -1 for a whole frame. See video_subframe.h.
+    bool subframe_final = false;  ///< Whether this is the last part of a frame sent in parts.
   };
 
   /**
