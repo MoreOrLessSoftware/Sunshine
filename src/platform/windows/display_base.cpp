@@ -5,6 +5,7 @@
 // standard includes
 #include <cmath>
 #include <thread>
+#include <utility>
 
 // platform includes
 #include <initguid.h>
@@ -288,6 +289,8 @@ namespace platf::dxgi {
 
       if (status == capture_e::ok && img_out) {
         frame_limiter.frame_taken(std::chrono::steady_clock::now());
+      } else if (status == platf::capture_e::timeout && std::exchange(held_back_cursor_update, false)) {
+        // A cursor update held back for the next frame, not a lull, so carry straight on
       } else if (status == platf::capture_e::timeout) {
         // The D3D11 device is protected by an unfair lock that is held the entire time that
         // IDXGIOutputDuplication::AcquireNextFrame() is running. This is normally harmless,

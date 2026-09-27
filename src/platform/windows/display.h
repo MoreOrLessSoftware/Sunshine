@@ -4,6 +4,10 @@
  */
 #pragma once
 
+// standard includes
+#include <chrono>
+#include <optional>
+
 // platform includes
 #include <d3d11.h>
 #include <d3d11_4.h>
@@ -329,6 +333,7 @@ namespace platf::dxgi {
     D3D_FEATURE_LEVEL feature_level;  ///< Feature level.
 
     std::unique_ptr<high_precision_timer> timer = create_high_precision_timer();  ///< Timer.
+    bool held_back_cursor_update = false;  ///< Set by snapshot() when its timeout was a cursor update it held back, so capture() carries straight on.
 
     /**
      * @brief Enumerates supported d3 DKMT SCHEDULINGPRIORITYCLASS options.
@@ -698,6 +703,9 @@ namespace platf::dxgi {
 
     gpu_cursor_t cursor_alpha;  ///< Cursor alpha.
     gpu_cursor_t cursor_xor;  ///< Cursor xor.
+
+    std::optional<std::chrono::steady_clock::time_point> last_frame_presented;  ///< When the desktop last presented a new frame. See snapshot().
+    std::optional<int64_t> held_back_cursor_qpc;  ///< When a cursor update waiting for the next frame happened, if one is waiting.
 
     texture2d_t old_surface_delayed_destruction;  ///< Old surface delayed destruction.
     std::chrono::steady_clock::time_point old_surface_timestamp;  ///< Old surface timestamp.

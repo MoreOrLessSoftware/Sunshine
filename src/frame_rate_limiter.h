@@ -7,6 +7,7 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
+#include <optional>
 
 namespace platf {
   /**
@@ -64,4 +65,40 @@ namespace platf {
     clock::duration allowance;  ///< How far ahead of that average a frame may still be taken.
     clock::time_point theoretical_arrival {};  ///< When the next frame would be due at exactly the frame rate.
   };
+
+  /**
+   * @brief Work out until when a cursor update that came without a new frame waits for one.
+   *
+   * @details On its own, a cursor update becomes a frame, so the cursor moves over a still
+   *          desktop. While frames keep coming it is left for the next one to draw instead: as
+   *          frames of their own, cursor moves slipped extra frames in between a game's, and a VRR
+   *          client showed a stutter each time. It waits until two frame intervals after the last
+   *          frame, so a game running below the stream's frame rate still has its cursor moves
+   *          held back, and goes out on its own if no frame has come by then, so the cursor never
+   *          stays behind on a screen that stopped changing.
+   *
+   * @param last_frame_presented When the last new frame was presented, if there has been one.
+   * @param frame_rate The stream's frame rate.
+   * @return When the cursor update stops waiting, or nothing if it should not wait at all.
+   */
+  inline std::optional<std::chrono::steady_clock::time_point> cursor_hold_deadline(std::optional<std::chrono::steady_clock::time_point> last_frame_presented, int frame_rate) {
+    if (!last_frame_presented || frame_rate <= 0) {
+      return std::nullopt;
+    }
+
+    return *last_frame_presented + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::nanoseconds(std::chrono::seconds(2)) / frame_rate);
+  }
+
+  /**
+   * @brief Decide whether a cursor update that came without a new frame waits for the next frame.
+   *
+   * @param last_frame_presented When the last new frame was presented, if there has been one.
+   * @param now The current time.
+   * @param frame_rate The stream's frame rate.
+   * @return Whether to hold the cursor update back. See cursor_hold_deadline().
+   */
+  inline bool hold_back_cursor_update(std::optional<std::chrono::steady_clock::time_point> last_frame_presented, std::chrono::steady_clock::time_point now, int frame_rate) {
+    const auto deadline = cursor_hold_deadline(last_frame_presented, frame_rate);
+    return deadline && now < *deadline;
+  }
 }  // namespace platf

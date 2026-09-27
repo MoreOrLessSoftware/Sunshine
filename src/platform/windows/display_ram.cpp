@@ -225,8 +225,9 @@ namespace platf::dxgi {
       return capture_e::timeout;
     }
 
+    // A new frame is stamped with when it was presented, not with a later cursor move
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
-    if (auto qpc_displayed = std::max(frame_info.LastPresentTime.QuadPart, frame_info.LastMouseUpdateTime.QuadPart)) {
+    if (auto qpc_displayed = frame_info.LastPresentTime.QuadPart ? frame_info.LastPresentTime.QuadPart : frame_info.LastMouseUpdateTime.QuadPart) {
       // Translate QueryPerformanceCounter() value to steady_clock time point
       frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), qpc_displayed);
     }

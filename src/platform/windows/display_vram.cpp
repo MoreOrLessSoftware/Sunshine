@@ -22,6 +22,7 @@ extern "C" {
 #include "display.h"
 #include "misc.h"
 #include "src/config.h"
+#include "src/frame_rate_limiter.h"
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_dynamic_factory.h"
@@ -1353,15 +1354,26 @@ namespace platf::dxgi {
     HRESULT status;
     DXGI_OUTDUPL_FRAME_INFO frame_info;
 
+    // A cursor update held back for the next frame goes out on its own if no frame comes by the
+    // time it waits until. See cursor_hold_deadline().
+    const auto cursor_deadline = held_back_cursor_qpc ? cursor_hold_deadline(last_frame_presented, client_frame_rate) : std::nullopt;
+    if (cursor_deadline) {
+      timeout = std::clamp(std::chrono::ceil<std::chrono::milliseconds>(*cursor_deadline - std::chrono::steady_clock::now()), 0ms, timeout);
+    }
+
     resource_t::pointer res_p {};
     auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
     resource_t res {res_p};
 
-    if (capture_status != capture_e::ok) {
+    bool send_held_back_cursor = false;
+    if (capture_status == capture_e::timeout && held_back_cursor_qpc) {
+      send_held_back_cursor = true;
+      frame_info = {};
+    } else if (capture_status != capture_e::ok) {
       return capture_status;
     }
 
-    const bool mouse_update_flag = frame_info.LastMouseUpdateTime.QuadPart != 0 || frame_info.PointerShapeBufferSize > 0;
+    const bool mouse_update_flag = frame_info.LastMouseUpdateTime.QuadPart != 0 || frame_info.PointerShapeBufferSize > 0 || send_held_back_cursor;
     const bool frame_update_flag = frame_info.LastPresentTime.QuadPart != 0;
     const bool update_flag = mouse_update_flag || frame_update_flag;
 
@@ -1369,8 +1381,15 @@ namespace platf::dxgi {
       return capture_e::timeout;
     }
 
+    // A new frame is stamped with when it was presented. Stamped with the cursor's last move
+    // when that came later, frames moved around in time while the mouse moved, and the client
+    // saw an uneven cadence.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
-    if (auto qpc_displayed = std::max(frame_info.LastPresentTime.QuadPart, frame_info.LastMouseUpdateTime.QuadPart)) {
+    auto qpc_displayed = frame_update_flag ? frame_info.LastPresentTime.QuadPart : frame_info.LastMouseUpdateTime.QuadPart;
+    if (send_held_back_cursor) {
+      qpc_displayed = *held_back_cursor_qpc;
+    }
+    if (qpc_displayed) {
       // Translate QueryPerformanceCounter() value to steady_clock time point
       frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), qpc_displayed);
     }
@@ -1400,6 +1419,19 @@ namespace platf::dxgi {
       cursor_alpha.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
 
       cursor_xor.set_pos(frame_info.PointerPosition.Position.x, frame_info.PointerPosition.Position.y, width, height, display_rotation, frame_info.PointerPosition.Visible);
+    }
+
+    // The cursor's new position and shape are kept above either way, for the next frame to draw.
+    // See hold_back_cursor_update().
+    if (frame_update_flag) {
+      last_frame_presented = frame_timestamp.value_or(std::chrono::steady_clock::now());
+      held_back_cursor_qpc.reset();
+    } else if (!send_held_back_cursor && hold_back_cursor_update(last_frame_presented, std::chrono::steady_clock::now(), client_frame_rate)) {
+      held_back_cursor_qpc = frame_info.LastMouseUpdateTime.QuadPart ? frame_info.LastMouseUpdateTime.QuadPart : qpc_counter();
+      held_back_cursor_update = true;
+      return capture_e::timeout;
+    } else {
+      held_back_cursor_qpc.reset();
     }
 
     const bool blend_mouse_cursor_flag = (cursor_alpha.visible || cursor_xor.visible) && cursor_visible;

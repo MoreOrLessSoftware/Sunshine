@@ -157,3 +157,36 @@ TEST(FrameRateLimiterTest, HoldsTheSecondFrameAfterIdling) {
   limiter.frame_taken(resumed);
   EXPECT_EQ(limiter.next_due(), resumed + frame_interval / 2);
 }
+
+TEST(CursorUpdateTest, HoldsBackCursorMovesWhileFramesAreComing) {
+  const auto now = clock::now();
+
+  // 100 FPS stream: frames within 20 ms count as coming
+  EXPECT_TRUE(platf::hold_back_cursor_update(now - 5ms, now, 100));
+  EXPECT_TRUE(platf::hold_back_cursor_update(now - 14ms, now, 100));
+}
+
+TEST(CursorUpdateTest, SendsCursorMovesOverAStillScreen) {
+  const auto now = clock::now();
+
+  EXPECT_FALSE(platf::hold_back_cursor_update(now - 25ms, now, 100));
+  EXPECT_FALSE(platf::hold_back_cursor_update(std::nullopt, now, 100));
+}
+
+TEST(CursorUpdateTest, SendsCursorMovesWithoutAFrameRate) {
+  const auto now = clock::now();
+
+  EXPECT_FALSE(platf::hold_back_cursor_update(now - 1ms, now, 0));
+}
+
+TEST(CursorUpdateTest, WaitsUntilTwoFrameIntervalsAfterTheLastFrame) {
+  const auto presented = clock::now();
+
+  EXPECT_EQ(platf::cursor_hold_deadline(presented, 100), presented + 20ms);
+  EXPECT_EQ(platf::cursor_hold_deadline(presented, 60), presented + std::chrono::duration_cast<clock::duration>(std::chrono::nanoseconds(2s) / 60));
+}
+
+TEST(CursorUpdateTest, DoesNotWaitWithoutAFrameOrFrameRate) {
+  EXPECT_FALSE(platf::cursor_hold_deadline(std::nullopt, 100).has_value());
+  EXPECT_FALSE(platf::cursor_hold_deadline(clock::now(), 0).has_value());
+}
