@@ -8,6 +8,7 @@
 
   // standard includes
   #include <algorithm>
+  #include <array>
   #include <cstring>
   #include <mutex>
 
@@ -120,9 +121,9 @@ namespace pyrowave {
   struct d3d11_encoder::handles_t {
     pyrowave_device device = nullptr;  ///< Vulkan device on the same GPU as the D3D11 device.
     pyrowave_sync_object sync = nullptr;  ///< The shared D3D11 fence, imported as a timeline semaphore.
-    pyrowave_image image = nullptr;  ///< The input texture, imported through its shared handle.
+    std::array<pyrowave_image, 2> images {};  ///< The Y and UV input textures, imported through their shared handles.
     pyrowave_encoder encoder = nullptr;  ///< The encoder.
-    pyrowave_gpu_buffers buffers {};  ///< Y, Cb and Cr views of the input texture.
+    pyrowave_gpu_buffers buffers {};  ///< Y, Cb and Cr views of the input textures.
   };
 
   d3d11_encoder::d3d11_encoder():
@@ -143,9 +144,11 @@ namespace pyrowave {
       api->encoder_destroy(handles->encoder);
       handles->encoder = nullptr;
     }
-    if (handles->image) {
-      api->image_destroy(handles->image);
-      handles->image = nullptr;
+    for (auto &image : handles->images) {
+      if (image) {
+        api->image_destroy(image);
+        image = nullptr;
+      }
     }
     if (handles->sync) {
       api->sync_object_destroy(handles->sync);
@@ -239,29 +242,7 @@ namespace pyrowave {
     return true;
   }
 
-  bool d3d11_encoder::create_encoder(int width, int height, DXGI_FORMAT format) {
-    if (!handles->device) {
-      return false;
-    }
-
-    if ((width & 1) || (height & 1)) {
-      BOOST_LOG(error) << "PyroWave: 4:2:0 needs an even width and height, not "sv << width << 'x' << height;
-      return false;
-    }
-
-    VkFormat vk_format;
-    switch (format) {
-      case DXGI_FORMAT_NV12:
-        vk_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
-        break;
-      case DXGI_FORMAT_P010:
-        vk_format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
-        break;
-      default:
-        BOOST_LOG(error) << "PyroWave: unsupported input format "sv << format;
-        return false;
-    }
-
+  bool d3d11_encoder::import_texture(int width, int height, DXGI_FORMAT format, VkFormat vk_format, ID3D11Texture2DPtr &texture, pyrowave_image &image) {
     D3D11_TEXTURE2D_DESC desc {};
     desc.Width = width;
     desc.Height = height;
@@ -275,7 +256,7 @@ namespace pyrowave {
 
     HRESULT status = device->CreateTexture2D(&desc, nullptr, &texture);
     if (FAILED(status)) {
-      BOOST_LOG(error) << "PyroWave: couldn't create the shared input texture [0x"sv << util::hex(status).to_string_view() << ']';
+      BOOST_LOG(error) << "PyroWave: couldn't create a shared input texture [0x"sv << util::hex(status).to_string_view() << ']';
       return false;
     }
 
@@ -288,15 +269,13 @@ namespace pyrowave {
         resource->Release();
       }
       if (FAILED(status)) {
-        BOOST_LOG(error) << "PyroWave: couldn't share the input texture [0x"sv << util::hex(status).to_string_view() << ']';
+        BOOST_LOG(error) << "PyroWave: couldn't share an input texture [0x"sv << util::hex(status).to_string_view() << ']';
         return false;
       }
     }
 
-    // Must match the D3D11 texture closely enough for the driver to import it. MUTABLE_FORMAT
-    // lets PyroWave view each plane separately.
+    // Must match the D3D11 texture closely enough for the driver to import it
     VkImageCreateInfo image_create_info {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    image_create_info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     image_create_info.imageType = VK_IMAGE_TYPE_2D;
     image_create_info.format = vk_format;
     image_create_info.extent = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1};
@@ -313,20 +292,54 @@ namespace pyrowave {
     image_info.external_handle = reinterpret_cast<pyrowave_os_handle>(texture_handle);
     image_info.handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
     image_info.image_create_info = &image_create_info;
-    auto result = api->image_create(&image_info, &handles->image);
+    auto result = api->image_create(&image_info, &image);
     if (result != PYROWAVE_SUCCESS) {
       // Whether PyroWave closed the handle on failure isn't specified, so it is left open
-      BOOST_LOG(error) << "PyroWave: couldn't import the shared input texture ("sv << result << ')';
+      BOOST_LOG(error) << "PyroWave: couldn't import a shared input texture ("sv << result << ')';
       return false;
     }
 
-    const VkImageAspectFlagBits planes[] {VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_ASPECT_PLANE_2_BIT};
-    for (int i = 0; i < 3; i++) {
-      result = api->image_get_image_view(handles->image, planes[i], VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[i]);
-      if (result != PYROWAVE_SUCCESS) {
-        BOOST_LOG(error) << "PyroWave: couldn't view plane "sv << i << " of the input texture ("sv << result << ')';
-        return false;
-      }
+    return true;
+  }
+
+  bool d3d11_encoder::create_encoder(int width, int height, DXGI_FORMAT format) {
+    if (!handles->device) {
+      return false;
+    }
+
+    if ((width & 1) || (height & 1)) {
+      BOOST_LOG(error) << "PyroWave: 4:2:0 needs an even width and height, not "sv << width << 'x' << height;
+      return false;
+    }
+
+    if (format != DXGI_FORMAT_NV12 && format != DXGI_FORMAT_P010) {
+      BOOST_LOG(error) << "PyroWave: unsupported input format "sv << format;
+      return false;
+    }
+    const bool ten_bit = format == DXGI_FORMAT_P010;
+
+    // Y and UV go in separate textures rather than one NV12/P010 texture. Importing
+    // planar D3D11 textures into Vulkan is where drivers disagree about the plane layout.
+    const auto y_format = ten_bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+    const auto uv_format = ten_bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+    const auto vk_y_format = ten_bit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM;
+    const auto vk_uv_format = ten_bit ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM;
+    if (!import_texture(width, height, y_format, vk_y_format, y_tex, handles->images[0]) ||
+        !import_texture(width / 2, height / 2, uv_format, vk_uv_format, uv_tex, handles->images[1])) {
+      return false;
+    }
+
+    // Cb and Cr are the R and G channels of the UV texture
+    auto result = api->image_get_image_view(handles->images[0], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[0]);
+    if (result == PYROWAVE_SUCCESS) {
+      result = api->image_get_image_view(handles->images[1], VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[1]);
+    }
+    if (result == PYROWAVE_SUCCESS) {
+      result = api->image_get_image_view(handles->images[1], VK_IMAGE_ASPECT_PLANE_2_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[2]);
+    }
+    if (result != PYROWAVE_SUCCESS) {
+      BOOST_LOG(error) << "PyroWave: couldn't view the input textures ("sv << result << ')';
+      return false;
     }
 
     pyrowave_encoder_create_info encoder_info {};
@@ -340,12 +353,16 @@ namespace pyrowave {
       return false;
     }
 
-    BOOST_LOG(info) << "PyroWave: encoding "sv << width << 'x' << height << (format == DXGI_FORMAT_P010 ? " 10-bit"sv : " 8-bit"sv) << " 4:2:0"sv;
+    BOOST_LOG(info) << "PyroWave: encoding "sv << width << 'x' << height << (ten_bit ? " 10-bit"sv : " 8-bit"sv) << " 4:2:0"sv;
     return true;
   }
 
-  ID3D11Texture2D *d3d11_encoder::input_texture() const {
-    return texture;
+  ID3D11Texture2D *d3d11_encoder::y_texture() const {
+    return y_tex;
+  }
+
+  ID3D11Texture2D *d3d11_encoder::uv_texture() const {
+    return uv_tex;
   }
 
   std::vector<std::uint8_t> d3d11_encoder::encode_frame(std::size_t max_frame_size) {
@@ -361,22 +378,25 @@ namespace pyrowave {
     device_ctx->Flush();
 
     auto semaphore = api->sync_object_get_semaphore(handles->sync);
-    pyrowave_gpu_external_reference ref {handles->image, VK_QUEUE_FAMILY_EXTERNAL};
+    std::array<pyrowave_gpu_external_reference, 2> refs {{
+      {handles->images[0], VK_QUEUE_FAMILY_EXTERNAL},
+      {handles->images[1], VK_QUEUE_FAMILY_EXTERNAL},
+    }};
 
     pyrowave_gpu_sync_operation acquire {};
-    acquire.images = &ref;
-    acquire.num_images = 1;
+    acquire.images = refs.data();
+    acquire.num_images = refs.size();
     acquire.sync = {semaphore, drawn_value};
 
     pyrowave_gpu_sync_operation release {};
-    release.images = &ref;
-    release.num_images = 1;
+    release.images = refs.data();
+    release.num_images = refs.size();
     release.sync = {semaphore, read_value};
 
     pyrowave_rate_control rate_control {max_frame_size};
     auto result = api->encoder_encode_gpu_synchronous(handles->encoder, &acquire, &release, &handles->buffers, &rate_control);
 
-    // Drawing the next frame into the texture waits until PyroWave has read this one
+    // Drawing the next frame into the textures waits until PyroWave has read this one
     device_ctx->Wait(fence, read_value);
 
     if (result != PYROWAVE_SUCCESS) {

@@ -13,6 +13,10 @@
   // platform includes
   #include <comdef.h>
   #include <d3d11_4.h>
+  #include <vulkan/vulkan_core.h>
+
+// Handle type of an image in the PyroWave C API (pyrowave_image)
+struct pyrowave_image_opaque;
 
 namespace pyrowave {
 
@@ -53,11 +57,12 @@ namespace pyrowave {
   bool library_available();
 
   /**
-   * @brief PyroWave encoder that reads frames from a D3D11 texture.
+   * @brief PyroWave encoder that reads frames from D3D11 textures.
    *
-   * The caller draws each frame into input_texture() with its own D3D11 device, then calls
-   * encode_frame(). PyroWave runs in Vulkan on the same GPU and reads the texture through a
-   * shared handle; a shared D3D11 fence orders the two.
+   * The caller draws each frame's Y plane into y_texture() and its interleaved UV plane into
+   * uv_texture() with its own D3D11 device, then calls encode_frame(). PyroWave runs in Vulkan
+   * on the same GPU and reads the textures through shared handles; a shared D3D11 fence
+   * orders the two.
    */
   class d3d11_encoder {
   public:
@@ -77,27 +82,35 @@ namespace pyrowave {
     bool init_device(ID3D11Device *device, ID3D11DeviceContext *device_ctx);
 
     /**
-     * @brief Create the input texture and the PyroWave encoder.
+     * @brief Create the input textures and the PyroWave encoder.
      *
      * @param width Encoded frame width, must be even.
      * @param height Encoded frame height, must be even.
-     * @param format DXGI_FORMAT_NV12 for 8-bit or DXGI_FORMAT_P010 for 10-bit input.
+     * @param format DXGI_FORMAT_NV12 for 8-bit or DXGI_FORMAT_P010 for 10-bit input, given as
+     *               those formats' two planes in separate textures.
      * @return True on success.
      */
     bool create_encoder(int width, int height, DXGI_FORMAT format);
 
     /**
-     * @brief Texture the caller draws each frame into before encode_frame().
+     * @brief Texture the caller draws each frame's Y plane into (R8 or R16, full size).
      *
-     * @return Input texture owned by the encoder.
+     * @return Y texture owned by the encoder.
      */
-    ID3D11Texture2D *input_texture() const;
+    ID3D11Texture2D *y_texture() const;
 
     /**
-     * @brief Encode the frame currently in the input texture.
+     * @brief Texture the caller draws each frame's UV plane into (R8G8 or R16G16, half size).
+     *
+     * @return UV texture owned by the encoder.
+     */
+    ID3D11Texture2D *uv_texture() const;
+
+    /**
+     * @brief Encode the frame currently in the input textures.
      *
      * Waits for the D3D11 work that drew the frame, encodes it, and makes further D3D11
-     * work on the input texture wait until PyroWave has read it.
+     * work on the input textures wait until PyroWave has read them.
      *
      * @param max_frame_size Largest encoded frame in bytes.
      * @return Encoded frame, or an empty vector on failure.
@@ -110,12 +123,26 @@ namespace pyrowave {
      */
     void destroy();
 
+    /**
+     * @brief Create a shared texture and import it into PyroWave.
+     *
+     * @param width Texture width.
+     * @param height Texture height.
+     * @param format D3D11 format.
+     * @param vk_format The same format in Vulkan.
+     * @param texture Receives the D3D11 texture.
+     * @param image Receives the imported PyroWave image.
+     * @return True on success.
+     */
+    bool import_texture(int width, int height, DXGI_FORMAT format, VkFormat vk_format, ID3D11Texture2DPtr &texture, ::pyrowave_image_opaque *&image);
+
     const api_t *api = nullptr;  ///< PyroWave entry points, null until init_device().
     ID3D11Device5Ptr device;  ///< D3D11 device that draws the input texture.
     ID3D11DeviceContext4Ptr device_ctx;  ///< Immediate context of that device.
-    ID3D11FencePtr fence;  ///< Fence shared with PyroWave to order access to the input texture.
+    ID3D11FencePtr fence;  ///< Fence shared with PyroWave to order access to the input textures.
     std::uint64_t fence_value = 0;  ///< Last value signaled or waited for on the fence.
-    ID3D11Texture2DPtr texture;  ///< Shared input texture.
+    ID3D11Texture2DPtr y_tex;  ///< Shared Y input texture.
+    ID3D11Texture2DPtr uv_tex;  ///< Shared UV input texture.
 
     struct handles_t;
     std::unique_ptr<handles_t> handles;  ///< PyroWave objects.

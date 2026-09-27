@@ -583,12 +583,18 @@ namespace platf::dxgi {
      * @param frame_texture Frame texture.
      * @param width Frame or display width in pixels.
      * @param height Frame or display height in pixels.
+     * @param uv_texture Optional. For NV12/P010, a separate R8G8/R16G16 texture that receives
+     *                   the UV plane, with frame_texture then an R8/R16 texture for the Y plane.
      * @return 0 when output resources are initialized; nonzero on D3D failure.
      */
-    int init_output(ID3D11Texture2D *frame_texture, int width, int height) {
+    int init_output(ID3D11Texture2D *frame_texture, int width, int height, ID3D11Texture2D *uv_texture = nullptr) {
       // The underlying frame pool owns the texture, so we must reference it for ourselves
       frame_texture->AddRef();
       output_texture.reset(frame_texture);
+      if (uv_texture) {
+        uv_texture->AddRef();
+        output_uv_texture.reset(uv_texture);
+      }
 
       HRESULT status = S_OK;
 
@@ -775,12 +781,12 @@ namespace platf::dxgi {
           return -1;
       }
 
-      auto create_rtv = [&](auto &rt, DXGI_FORMAT rt_format) -> bool {
+      auto create_rtv = [&](auto &rt, DXGI_FORMAT rt_format, ID3D11Texture2D *texture) -> bool {
         D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
         rtv_desc.Format = rt_format;
         rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
 
-        auto status = device->CreateRenderTargetView(output_texture.get(), &rtv_desc, &rt);
+        auto status = device->CreateRenderTargetView(texture, &rtv_desc, &rt);
         if (FAILED(status)) {
           BOOST_LOG(error) << "Failed to create render target view: " << util::log_hex(status);
           return false;
@@ -790,12 +796,12 @@ namespace platf::dxgi {
       };
 
       // Create Y/YUV render target view
-      if (!create_rtv(out_Y_or_YUV_rtv, rtv_Y_or_YUV_format)) {
+      if (!create_rtv(out_Y_or_YUV_rtv, rtv_Y_or_YUV_format, output_texture.get())) {
         return -1;
       }
 
       // Create UV render target view if needed
-      if (rtv_UV_format != DXGI_FORMAT_UNKNOWN && !create_rtv(out_UV_rtv, rtv_UV_format)) {
+      if (rtv_UV_format != DXGI_FORMAT_UNKNOWN && !create_rtv(out_UV_rtv, rtv_UV_format, output_uv_texture ? output_uv_texture.get() : output_texture.get())) {
         return -1;
       }
 
@@ -1094,6 +1100,7 @@ namespace platf::dxgi {
     device_ctx_t device_ctx;  ///< D3D11 device context used to issue conversion commands.
 
     texture2d_t output_texture;  ///< Output texture.
+    texture2d_t output_uv_texture;  ///< Separate UV plane texture, when the output is split in two.
   };
 
   /**
@@ -1301,8 +1308,8 @@ namespace platf::dxgi {
   /**
    * @brief D3D11 encode device that converts captured textures for PyroWave.
    *
-   * The usual D3D11 conversion (scaling, cursor, colorspace) draws each frame into an
-   * NV12 or P010 texture that PyroWave reads through a shared handle.
+   * The usual D3D11 conversion (scaling, cursor, colorspace) draws each frame into Y and
+   * UV textures that PyroWave reads through shared handles.
    */
   class d3d_pyrowave_encode_device_t: public pyrowave_encode_device_t {
   public:
@@ -1347,7 +1354,7 @@ namespace platf::dxgi {
       }
 
       base.apply_colorspace(colorspace);
-      return base.init_output(pyrowave.input_texture(), client_config.width, client_config.height) == 0;
+      return base.init_output(pyrowave.y_texture(), client_config.width, client_config.height, pyrowave.uv_texture()) == 0;
     }
 
     /**
