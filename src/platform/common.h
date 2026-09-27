@@ -664,6 +664,28 @@ namespace platf {
   };
 
   /**
+   * @brief PyroWave-backed encode device state.
+   */
+  struct pyrowave_encode_device_t: encode_device_t {
+    /**
+     * @brief Initialize the platform encoder for the client stream configuration.
+     *
+     * @param client_config Client stream configuration negotiated for this session.
+     * @param colorspace Colorimetry information used for conversion or encoding.
+     * @return True when the backend successfully completes the requested action.
+     */
+    virtual bool init_encoder(const video::config_t &client_config, const video::sunshine_colorspace_t &colorspace) = 0;
+
+    /**
+     * @brief Encode the frame converted by the last convert() call.
+     *
+     * @param max_frame_size Largest encoded frame in bytes.
+     * @return Encoded frame, or an empty vector on failure.
+     */
+    virtual std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size) = 0;
+  };
+
+  /**
    * @brief Enumerates supported capture options.
    */
   enum class capture_e : int {
@@ -745,6 +767,16 @@ namespace platf {
      * @return Constructed NVENC encode device object.
      */
     virtual std::unique_ptr<nvenc_encode_device_t> make_nvenc_encode_device(pix_fmt_e pix_fmt) {
+      return nullptr;
+    }
+
+    /**
+     * @brief Create PyroWave encode device.
+     *
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return Constructed PyroWave encode device object.
+     */
+    virtual std::unique_ptr<pyrowave_encode_device_t> make_pyrowave_encode_device(pix_fmt_e pix_fmt) {
       return nullptr;
     }
 

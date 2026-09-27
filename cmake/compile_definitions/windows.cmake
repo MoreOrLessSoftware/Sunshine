@@ -47,6 +47,13 @@ file(GLOB NVPREFS_FILES CONFIGURE_DEPENDS
 # vigem
 include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include")
 
+# pyrowave (the library is loaded at runtime, only its header and Vulkan's are needed to build)
+include_directories(SYSTEM
+        "${CMAKE_SOURCE_DIR}/third-party/pyrowave/include"
+        "${CMAKE_SOURCE_DIR}/third-party/build-deps/third-party/FFmpeg/Vulkan-Headers/include")
+set(SUNSHINE_PYROWAVE_DLL "" CACHE FILEPATH
+        "Path to libpyrowave-shared-0.dll, copied next to sunshine.exe and packaged when set")
+
 # sunshine icon
 if(NOT DEFINED SUNSHINE_ICON_PATH)
     set(SUNSHINE_ICON_PATH "${CMAKE_SOURCE_DIR}/sunshine.ico")
@@ -75,6 +82,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
+        "${CMAKE_SOURCE_DIR}/src/pyrowave/pyrowave_d3d11.cpp"
+        "${CMAKE_SOURCE_DIR}/src/pyrowave/pyrowave_d3d11.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Client.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Common.h"

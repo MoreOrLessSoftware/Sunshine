@@ -36,7 +36,7 @@ namespace video {
     int slicesPerFrame;  ///< Number of slices per frame.
     int numRefFrames;  ///< Maximum number of reference frames.
     int encoderCscMode;  ///< Requested color range and SDR colorspace; HDR always uses BT.2020 and ST2084.
-    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1.
+    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1, 3 = PyroWave.
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
@@ -286,6 +286,30 @@ namespace video {
   };
 
   /**
+   * @brief PyroWave-specific pixel formats supported by a platform.
+   */
+  struct encoder_platform_formats_pyrowave: encoder_platform_formats_t {
+    /**
+     * @brief Construct PyroWave platform format mappings.
+     *
+     * @param dev_type Platform memory type.
+     * @param pix_fmt_8bit Platform 8-bit pixel format.
+     * @param pix_fmt_10bit Platform 10-bit pixel format.
+     */
+    encoder_platform_formats_pyrowave(
+      const platf::mem_type_e &dev_type,
+      const platf::pix_fmt_e &pix_fmt_8bit,
+      const platf::pix_fmt_e &pix_fmt_10bit
+    ) {
+      encoder_platform_formats_t::dev_type = dev_type;
+      encoder_platform_formats_t::pix_fmt_8bit = pix_fmt_8bit;
+      encoder_platform_formats_t::pix_fmt_10bit = pix_fmt_10bit;
+      encoder_platform_formats_t::pix_fmt_yuv444_8bit = platf::pix_fmt_e::unknown;
+      encoder_platform_formats_t::pix_fmt_yuv444_10bit = platf::pix_fmt_e::unknown;
+    }
+  };
+
+  /**
    * @brief Encoder name and feature flags advertised by Sunshine.
    */
   struct encoder_t {
@@ -400,7 +424,7 @@ namespace video {
      * @brief Select the codec descriptor requested by a stream configuration.
      *
      * @param config Configuration values to apply.
-     * @return Codec descriptor for H.264, HEVC, or AV1.
+     * @return Codec descriptor for H.264, HEVC, AV1, or PyroWave.
      */
     const codec_t &codec_from_config(const config_t &config) const {
       switch (config.videoFormat) {
@@ -413,10 +437,14 @@ namespace video {
           return hevc;
         case 2:
           return av1;
+        case 3:
+          return pyrowave;
       }
     }
 
     uint32_t flags;  ///< Encoder flags advertised to clients through GameStream capability responses.
+
+    codec_t pyrowave {};  ///< PyroWave codec capability and option set. Only the PyroWave encoder has one.
   };
 
   /**
@@ -471,6 +499,10 @@ namespace video {
 
 #ifdef __APPLE__
   extern encoder_t videotoolbox;
+#endif
+
+#ifdef _WIN32
+  extern encoder_t pyrowave_encoder;  // used for PyroWave streams alongside the chosen encoder
 #endif
 
   /**
@@ -683,6 +715,7 @@ namespace video {
 
   extern int active_hevc_mode;
   extern int active_av1_mode;
+  extern int active_pyrowave_mode;  // 1 - unavailable, 2 - 8-bit, 3 - 8-bit and 10-bit
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 
@@ -694,6 +727,17 @@ namespace video {
    * @return Effective stream configuration, downgraded to SDR when HDR is unsupported.
    */
   config_t resolve_dynamic_range(const encoder_t &encoder, config_t config);
+
+  /**
+   * @brief Largest encoded PyroWave frame for a stream.
+   *
+   * PyroWave's rate control caps each frame's size, so the client's bitrate is spread
+   * evenly over the frames of a second.
+   *
+   * @param config Stream configuration carrying the bitrate and framerate.
+   * @return Largest encoded frame in bytes.
+   */
+  std::size_t pyrowave_max_frame_size(const config_t &config);
 
   /**
    * @brief Capture and encode video for a streaming session.

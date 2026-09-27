@@ -26,6 +26,7 @@ extern "C" {
 #include "src/logging.h"
 #include "src/nvenc/nvenc_config.h"
 #include "src/nvenc/nvenc_dynamic_factory.h"
+#include "src/pyrowave/pyrowave_d3d11.h"
 #include "src/video.h"
 #include "utf_utils.h"
 
@@ -1298,6 +1299,85 @@ namespace platf::dxgi {
   };
 
   /**
+   * @brief D3D11 encode device that converts captured textures for PyroWave.
+   *
+   * The usual D3D11 conversion (scaling, cursor, colorspace) draws each frame into an
+   * NV12 or P010 texture that PyroWave reads through a shared handle.
+   */
+  class d3d_pyrowave_encode_device_t: public pyrowave_encode_device_t {
+  public:
+    /**
+     * @brief Create D3D11 and PyroWave resources for texture-based encoding.
+     *
+     * @param display Display object or identifier associated with the operation.
+     * @param adapter_p Adapter p.
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return True when the D3D11 device resources are initialized.
+     */
+    bool init_device(std::shared_ptr<platf::display_t> display, adapter_t::pointer adapter_p, pix_fmt_e pix_fmt) {
+      switch (pix_fmt) {
+        case pix_fmt_e::nv12:
+          format = DXGI_FORMAT_NV12;
+          break;
+        case pix_fmt_e::p010:
+          format = DXGI_FORMAT_P010;
+          break;
+        default:
+          BOOST_LOG(error) << "PyroWave doesn't support pixel format: "sv << from_pix_fmt(pix_fmt);
+          return false;
+      }
+
+      if (base.init(display, adapter_p, pix_fmt)) {
+        return false;
+      }
+
+      return pyrowave.init_device(base.device.get(), base.device_ctx.get());
+    }
+
+    /**
+     * @brief Initialize the platform encoder for the client stream configuration.
+     *
+     * @param client_config Client stream configuration negotiated for this session.
+     * @param colorspace Colorimetry information used for conversion or encoding.
+     * @return True when the PyroWave encoder initializes for the client configuration.
+     */
+    bool init_encoder(const ::video::config_t &client_config, const ::video::sunshine_colorspace_t &colorspace) override {
+      if (!pyrowave.create_encoder(client_config.width, client_config.height, format)) {
+        return false;
+      }
+
+      base.apply_colorspace(colorspace);
+      return base.init_output(pyrowave.input_texture(), client_config.width, client_config.height) == 0;
+    }
+
+    /**
+     * @brief Convert a captured D3D texture for PyroWave encoding.
+     *
+     * @param img_base D3D image supplied by the capture backend.
+     * @return Conversion status.
+     */
+    int convert(platf::img_t &img_base) override {
+      return base.convert(img_base);
+    }
+
+    /**
+     * @brief Encode the frame converted by the last convert() call.
+     *
+     * @param max_frame_size Largest encoded frame in bytes.
+     * @return Encoded frame, or an empty vector on failure.
+     */
+    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size) override {
+      return pyrowave.encode_frame(max_frame_size);
+    }
+
+  private:
+    // Declared first so it outlives the encoder, which reads what it draws
+    d3d_base_encode_device base;  ///< Converts captured frames into the encoder's input texture.
+    ::pyrowave::d3d11_encoder pyrowave;  ///< PyroWave encoder reading that texture.
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  ///< NV12 or P010.
+  };
+
+  /**
    * @brief Set cursor texture.
    *
    * @param device D3D, audio, or platform device used by the operation.
@@ -2164,6 +2244,14 @@ namespace platf::dxgi {
 
   std::unique_ptr<nvenc_encode_device_t> display_vram_t::make_nvenc_encode_device(pix_fmt_e pix_fmt) {
     auto device = std::make_unique<d3d_nvenc_encode_device_t>();
+    if (!device->init_device(shared_from_this(), adapter.get(), pix_fmt)) {
+      return nullptr;
+    }
+    return device;
+  }
+
+  std::unique_ptr<pyrowave_encode_device_t> display_vram_t::make_pyrowave_encode_device(pix_fmt_e pix_fmt) {
+    auto device = std::make_unique<d3d_pyrowave_encode_device_t>();
     if (!device->init_device(shared_from_this(), adapter.get(), pix_fmt)) {
       return nullptr;
     }

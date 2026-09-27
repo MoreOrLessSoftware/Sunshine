@@ -638,6 +638,76 @@ namespace video {
   };
 
   /**
+   * @brief PyroWave encode session.
+   *
+   * PyroWave is intra-only: every frame decodes on its own, so there are no IDR frames
+   * to request and no reference frames to invalidate.
+   */
+  class pyrowave_encode_session_t: public encode_session_t {
+  public:
+    /**
+     * @brief Initialize a PyroWave encode session and take ownership of its device.
+     *
+     * @param encode_device Encode device.
+     * @param max_frame_size Largest encoded frame in bytes.
+     */
+    pyrowave_encode_session_t(std::unique_ptr<platf::pyrowave_encode_device_t> encode_device, std::size_t max_frame_size):
+        device {std::move(encode_device)},
+        max_frame_size {max_frame_size} {
+    }
+
+    /**
+     * @brief Convert a captured frame into the encoder input texture.
+     *
+     * @param img Image or frame object to read from or populate.
+     * @return Conversion status.
+     */
+    int convert(platf::img_t &img) override {
+      if (!device) {
+        return -1;
+      }
+      return device->convert(img);
+    }
+
+    /**
+     * @brief Every frame is an IDR frame, so there is nothing to request.
+     */
+    void request_idr_frame() override {
+    }
+
+    /**
+     * @brief Every frame is an IDR frame, so there is nothing to request.
+     */
+    void request_normal_frame() override {
+    }
+
+    /**
+     * @brief Frames don't reference each other, so there is nothing to invalidate.
+     *
+     * @param first_frame First frame.
+     * @param last_frame Last frame.
+     */
+    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+    }
+
+    /**
+     * @brief Encode the last converted frame.
+     *
+     * @return Encoded frame, or an empty vector on failure.
+     */
+    std::vector<std::uint8_t> encode_frame() {
+      if (!device) {
+        return {};
+      }
+      return device->encode_frame(max_frame_size);
+    }
+
+  private:
+    std::unique_ptr<platf::pyrowave_encode_device_t> device;  ///< Device that converts and encodes frames.
+    std::size_t max_frame_size;  ///< Largest encoded frame in bytes.
+  };
+
+  /**
    * @brief Context object used while synchronizing encode sessions.
    */
   struct sync_session_ctx_t {
@@ -1465,6 +1535,37 @@ namespace video {
   };
 #endif
 
+#ifdef _WIN32
+  /**
+   * @brief PyroWave, an intra-only wavelet codec that encodes in Vulkan compute.
+   *
+   * It is not probed with the other encoders: it serves PyroWave streams whichever
+   * encoder was chosen for H.264, HEVC and AV1. See encoder_for_config().
+   */
+  encoder_t pyrowave_encoder {
+    "pyrowave"sv,
+    std::make_unique<encoder_platform_formats_pyrowave>(
+      platf::mem_type_e::dxgi,
+      platf::pix_fmt_e::nv12,
+      platf::pix_fmt_e::p010
+    ),
+    {},  // AV1
+    {},  // HEVC
+    {},  // H.264
+    PARALLEL_ENCODING,  // flags
+    {
+      {},  // Common options
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "pyrowave"s,
+      {},  // capabilities
+    },
+  };
+#endif
+
   static const std::vector encoders {
 #ifndef __APPLE__
     &nvenc,
@@ -1489,8 +1590,24 @@ namespace video {
   static encoder_t *chosen_encoder;
   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
   int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
+  int active_pyrowave_mode = 1;  ///< PyroWave mode found by the most recent encoder probe.
   bool last_encoder_probe_supported_ref_frames_invalidation = false;  ///< Whether the last probe found reference-frame invalidation support.
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};  ///< YUV444 support discovered for each probed codec.
+
+  /**
+   * @brief Pick the encoder for a stream.
+   *
+   * @param config Client-requested stream configuration.
+   * @return The PyroWave encoder for PyroWave streams, otherwise the encoder chosen by probing.
+   */
+  const encoder_t &encoder_for_config(const config_t &config) {
+#ifdef _WIN32
+    if (config.videoFormat == 3) {
+      return pyrowave_encoder;
+    }
+#endif
+    return *chosen_encoder;
+  }
 
   /**
    * @brief Recreate a display capture object after a capture failure.
@@ -1982,6 +2099,40 @@ namespace video {
   }
 
   /**
+   * @brief Encode one frame with PyroWave and queue it for transmission.
+   *
+   * @param frame_nr Frame nr.
+   * @param session Active PyroWave session.
+   * @param packets Packets queued or emitted by the stream.
+   * @param channel_data Channel data.
+   * @param frame_timestamp Frame timestamp.
+   * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
+   */
+  int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    auto frame = session.encode_frame();
+    if (frame.empty()) {
+      BOOST_LOG(error) << "PyroWave returned empty packet";
+      return -1;
+    }
+
+    // Every frame decodes on its own, so each one is sent as an IDR frame. After a lost
+    // frame the client picks up again with the next one.
+    auto packet = std::make_unique<packet_raw_generic>(std::move(frame), frame_nr, true);
+    packet->channel_data = channel_data;
+    packet->frame_timestamp = frame_timestamp;
+    packets->raise(std::move(packet));
+
+    return 0;
+  }
+
+  std::size_t pyrowave_max_frame_size(const config_t &config) {
+    // config.bitrate is in kilobits per second
+    const AVRational fps = framerate_to_rational(config);
+    const auto bytes_per_second = static_cast<std::int64_t>(std::max(config.bitrate, 1)) * 1000 / 8;
+    return static_cast<std::size_t>(std::max<std::int64_t>(bytes_per_second * fps.den / std::max(fps.num, 1), 4096));
+  }
+
+  /**
    * @brief Encode one captured frame and queue packets for transmission.
    *
    * @param frame_nr Frame nr.
@@ -1996,6 +2147,8 @@ namespace video {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
+    } else if (auto pyrowave_session = dynamic_cast<pyrowave_encode_session_t *>(&session)) {
+      return encode_pyrowave(frame_nr, *pyrowave_session, packets, channel_data, frame_timestamp);
     }
 
     return -1;
@@ -2433,6 +2586,12 @@ namespace video {
     } else if (dynamic_cast<platf::nvenc_encode_device_t *>(encode_device.get())) {
       auto nvenc_encode_device = boost::dynamic_pointer_cast<platf::nvenc_encode_device_t>(std::move(encode_device));
       return make_nvenc_encode_session(config, std::move(nvenc_encode_device));
+    } else if (dynamic_cast<platf::pyrowave_encode_device_t *>(encode_device.get())) {
+      auto pyrowave_encode_device = boost::dynamic_pointer_cast<platf::pyrowave_encode_device_t>(std::move(encode_device));
+      if (!pyrowave_encode_device->init_encoder(config, pyrowave_encode_device->colorspace)) {
+        return nullptr;
+      }
+      return std::make_unique<pyrowave_encode_session_t>(std::move(pyrowave_encode_device), pyrowave_max_frame_size(config));
     }
 
     return nullptr;
@@ -2659,6 +2818,13 @@ namespace video {
 
     auto colorspace = colorspace_from_client_config(config, disp.is_hdr());
 
+    const bool pyrowave = dynamic_cast<const encoder_platform_formats_pyrowave *>(encoder.platform_formats.get()) != nullptr;
+    if (pyrowave) {
+      // PyroWave is defined in full range, which the client assumes. Its wavelet
+      // coefficients are floating point, so there's nothing to gain from limited range.
+      colorspace.full_range = true;
+    }
+
     platf::pix_fmt_e pix_fmt;
     if (config.chromaSamplingType == 1) {
       // YUV 4:4:4
@@ -2696,6 +2862,8 @@ namespace video {
       result = disp.make_avcodec_encode_device(pix_fmt);
     } else if (dynamic_cast<const encoder_platform_formats_nvenc *>(encoder.platform_formats.get())) {
       result = disp.make_nvenc_encode_device(pix_fmt);
+    } else if (pyrowave) {
+      result = disp.make_pyrowave_encode_device(pix_fmt);
     }
 
     if (result) {
@@ -3002,7 +3170,7 @@ namespace video {
         display = ref->display_wp->lock();
       }
 
-      auto &encoder = *chosen_encoder;
+      const auto &encoder = encoder_for_config(config);
 
       auto encode_device = make_encode_device(*display, encoder, config);
       if (!encode_device) {
@@ -3031,7 +3199,7 @@ namespace video {
         display,
         std::move(encode_device),
         ref->reinit_event,
-        *ref->encoder_p,
+        config.videoFormat == 3 ? encoder : *ref->encoder_p,
         channel_data
       );
     }
@@ -3049,12 +3217,13 @@ namespace video {
     config_t config,
     void *channel_data
   ) {
-    config = resolve_dynamic_range(*chosen_encoder, config);
+    const auto &encoder = encoder_for_config(config);
+    config = resolve_dynamic_range(encoder, config);
 
     auto idr_events = mail->event<bool>(mail::idr);
 
     idr_events->raise(true);
-    if (chosen_encoder->flags & PARALLEL_ENCODING) {
+    if (encoder.flags & PARALLEL_ENCODING) {
       capture_async(std::move(mail), config, channel_data);
     } else {
       safe::signal_t join_event;
@@ -3344,6 +3513,47 @@ namespace video {
     return true;
   }
 
+  /**
+   * @brief Check whether PyroWave can encode on this system, in 8-bit and in 10-bit.
+   *
+   * Sets active_pyrowave_mode, which decides what is advertised to clients.
+   */
+  void probe_pyrowave() {
+    active_pyrowave_mode = 1;
+
+#ifdef _WIN32
+    auto &encoder = pyrowave_encoder;
+    encoder.pyrowave.capabilities.reset();
+
+    const auto output_name {display_device::map_output_name(config::video.output_name)};
+    std::shared_ptr<platf::display_t> disp;
+
+    // PyroWave targets bitrates of a few hundred Mbps
+    config_t config {1920, 1080, 60, 6000, 300000, 1, 1, 1, 3, 0, 0, 0};
+
+    reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
+    if (!disp) {
+      return;
+    }
+
+    BOOST_LOG(info) << "Trying encoder ["sv << encoder.name << ']';
+    if (validate_config(disp, encoder, config) < 0) {
+      BOOST_LOG(info) << "Encoder ["sv << encoder.name << "] failed"sv;
+      return;
+    }
+    encoder.pyrowave[encoder_t::PASSED] = true;
+    active_pyrowave_mode = 2;
+
+    config.dynamicRange = 1;
+    if (validate_config(disp, encoder, config) >= 0) {
+      encoder.pyrowave[encoder_t::DYNAMIC_RANGE] = true;
+      active_pyrowave_mode = 3;
+    }
+
+    BOOST_LOG(info) << "Found PyroWave encoder"sv << (active_pyrowave_mode == 3 ? " (8-bit and 10-bit)"sv : " (8-bit)"sv);
+#endif
+  }
+
   int probe_encoders() {
     if (!allow_encoder_probing()) {
       // Error already logged
@@ -3582,6 +3792,8 @@ namespace video {
       }
       BOOST_LOG(debug) << "ENCODER STATUS ACTIVE_AV1_MODE: "sv << active_av1_mode;
     }
+
+    probe_pyrowave();
 
     return 0;
   }

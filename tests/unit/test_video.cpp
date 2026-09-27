@@ -141,6 +141,7 @@ TEST_P(DynamicRangeTest, Resolve) {
   encoder.h264.name = "h264_test";
   encoder.hevc.name = "hevc_test";
   encoder.av1.name = "av1_test";
+  encoder.pyrowave.name = "pyrowave_test";
 
   video::config_t config {};
   config.videoFormat = video_format;
@@ -152,6 +153,8 @@ TEST_P(DynamicRangeTest, Resolve) {
     codec = &encoder.hevc;
   } else if (video_format == 2) {
     codec = &encoder.av1;
+  } else if (video_format == 3) {
+    codec = &encoder.pyrowave;
   }
   (*codec)[video::encoder_t::DYNAMIC_RANGE] = supports_hdr;
   (*codec)[video::encoder_t::DYNAMIC_RANGE_YUV444] = supports_hdr_yuv444;
@@ -173,7 +176,9 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(1, 0, 1, true, false, 1),
     std::make_tuple(2, 1, 1, true, false, 0),
     std::make_tuple(2, 1, 1, false, true, 1),
-    std::make_tuple(1, 0, 0, false, false, 0)
+    std::make_tuple(1, 0, 0, false, false, 0),
+    std::make_tuple(3, 0, 1, true, false, 1),
+    std::make_tuple(3, 0, 1, false, false, 0)
   )
 );
 
@@ -424,4 +429,43 @@ TEST(MaxFrameWaitTest, UsesTheMinimumFpsTarget) {
 
 TEST(MaxFrameWaitTest, NeverRepeatsFramesWhenNegative) {
   EXPECT_FALSE(video::max_frame_wait(-1.0, 120).has_value());
+}
+
+TEST(PyrowaveMaxFrameSizeTest, SpreadsTheBitrateOverTheFrames) {
+  video::config_t config {};
+  config.bitrate = 480000;  // 480 Mbps
+  config.framerate = 120;
+  EXPECT_EQ(video::pyrowave_max_frame_size(config), 500000u);
+}
+
+TEST(PyrowaveMaxFrameSizeTest, UsesTheExactFractionalFramerate) {
+  video::config_t config {};
+  config.bitrate = 300000;
+  config.framerate = 60;
+  config.framerateX100 = 5994;
+  // 37.5 MB/s at 60000/1001 fps
+  EXPECT_EQ(video::pyrowave_max_frame_size(config), 625625u);
+}
+
+TEST(PyrowaveMaxFrameSizeTest, NeverGoesBelowAMinimum) {
+  video::config_t config {};
+  config.bitrate = 0;
+  config.framerate = 240;
+  EXPECT_EQ(video::pyrowave_max_frame_size(config), 4096u);
+}
+
+TEST(PyrowaveCodecTest, VideoFormat3SelectsThePyrowaveCodec) {
+  video::encoder_t encoder {
+    "test"sv,
+    {},
+    {},
+    {},
+    {},
+    0,
+  };
+  encoder.pyrowave.name = "pyrowave_test";
+
+  video::config_t config {};
+  config.videoFormat = 3;
+  EXPECT_EQ(encoder.codec_from_config(config).name, "pyrowave_test");
 }
