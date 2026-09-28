@@ -1794,7 +1794,7 @@ namespace config {
     }
 #endif
 
-    int_between_f(vars, "fec_percentage", stream.fec_percentage, {1, 255});
+    int_between_f(vars, "fec_percentage", stream.fec_percentage, {0, 255});  // 0 sends no FEC
     int_between_f(vars, "video_send_rate", stream.video_send_rate, {100, 100000});
 
     map_int_int_f(vars, "keybindings"s, input.keybindings);

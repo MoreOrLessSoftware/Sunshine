@@ -2023,6 +2023,7 @@ supported on the current platform.
         <td>Description</td>
         <td colspan="2">
             Percentage of error correcting packets per data packet in each video frame.
+            0 sends no error correcting packets, so any lost packet loses its frame.
             @warning{Higher values can correct for more network packet loss,
             but at the cost of increasing bandwidth usage.}
         </td>
@@ -2035,7 +2036,7 @@ supported on the current platform.
     </tr>
     <tr>
         <td>Range</td>
-        <td colspan="2">1-255</td>
+        <td colspan="2">0-255</td>
     </tr>
     <tr>
         <td>Example</td>

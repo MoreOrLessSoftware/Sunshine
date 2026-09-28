@@ -469,3 +469,55 @@ TEST(PyrowaveCodecTest, VideoFormat3SelectsThePyrowaveCodec) {
   config.videoFormat = 3;
   EXPECT_EQ(encoder.codec_from_config(config).name, "pyrowave_test");
 }
+
+using FecPercentageConfigParam = std::tuple<std::string_view, int>;
+
+/**
+ * @brief Parameterized coverage for parsing and validating the FEC percentage.
+ */
+struct FecPercentageConfigTest: BaseTest, testing::WithParamInterface<FecPercentageConfigParam> {
+  void SetUp() override {
+    BaseTest::SetUp();
+    config::stream.fec_percentage = 20;
+    config::stream.file_apps = SUNSHINE_SOURCE_DIR "/tests/unit/test_video.cpp";
+  }
+
+  void TearDown() override {
+    config::video = original_video;
+    config::audio = original_audio;
+    config::stream = original_stream;
+    config::nvhttp = original_nvhttp;
+    config::input = original_input;
+    config::sunshine = original_sunshine;
+    config::modified_config_settings = original_modified_config_settings;
+    BaseTest::TearDown();
+  }
+
+  config::video_t original_video {config::video};  ///< Video configuration restored after each parameterized test.
+  config::audio_t original_audio {config::audio};  ///< Audio configuration restored after each parameterized test.
+  config::stream_t original_stream {config::stream};  ///< Stream configuration restored after each parameterized test.
+  config::nvhttp_t original_nvhttp {config::nvhttp};  ///< HTTP configuration restored after each parameterized test.
+  config::input_t original_input {config::input};  ///< Input configuration restored after each parameterized test.
+  config::sunshine_t original_sunshine {config::sunshine};  ///< Core configuration restored after each parameterized test.
+  decltype(config::modified_config_settings) original_modified_config_settings {config::modified_config_settings};  ///< Modified settings restored after each parameterized test.
+};
+
+TEST_P(FecPercentageConfigTest, AcceptsZeroThrough255) {
+  const auto &[setting, expected] = GetParam();
+  config::apply_config_for_test(setting);
+
+  EXPECT_EQ(expected, config::stream.fec_percentage);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  FecPercentageValues,
+  FecPercentageConfigTest,
+  testing::Values(
+    FecPercentageConfigParam {""sv, 20},
+    FecPercentageConfigParam {"fec_percentage = 0\n"sv, 0},
+    FecPercentageConfigParam {"fec_percentage = 1\n"sv, 1},
+    FecPercentageConfigParam {"fec_percentage = 255\n"sv, 255},
+    FecPercentageConfigParam {"fec_percentage = 256\n"sv, 20},
+    FecPercentageConfigParam {"fec_percentage = -1\n"sv, 20}
+  )
+);
