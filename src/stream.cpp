@@ -527,6 +527,8 @@ namespace stream {
         uint32_t timestamp = 0;  ///< RTP timestamp of the frame.
         bool dupe = false;  ///< Whether the frame repeats an earlier one.
         bool announced = false;  ///< Whether the first frame sent in parts has been logged.
+        std::chrono::steady_clock::time_point first_part_ready;  ///< When the frame's first part came out of the encoder.
+        std::chrono::steady_clock::duration last_remaining {};  ///< The last frame's time from its first part to its last coming out of the encoder.
       } subframe;  ///< Frame being sent in parts.
     } video;  ///< Video worker thread state for the active stream.
 
@@ -1570,7 +1572,10 @@ namespace stream {
     };
 
     // Builds the header that starts a frame's payload
-    auto make_frame_header = [&](session_t *session, video::packet_raw_t &packet, std::optional<size_t> payload_size) {
+    //
+    // For a frame sent in parts, remaining is added to the latency: the rest of the frame is
+    // still encoding when the header goes out. See video::subframe::estimated_latency().
+    auto make_frame_header = [&](session_t *session, video::packet_raw_t &packet, std::optional<size_t> payload_size, std::optional<std::chrono::steady_clock::duration> remaining = std::nullopt) {
       video_short_frame_header_t frame_header = {};
       frame_header.headerType = 0x01;  // Short header type
       frame_header.frameType = packet.is_idr()                     ? 2 :
@@ -1591,9 +1596,17 @@ namespace stream {
           return (uint16_t) std::clamp<decltype(duration_us)>((duration_us + 50) / 100, 0, std::numeric_limits<uint16_t>::max());
         };
 
-        uint16_t latency = duration_to_latency(std::chrono::steady_clock::now() - *packet.frame_timestamp);
-        frame_header.frame_processing_latency = latency;
-        frame_processing_latency_logger.collect_and_log(latency / 10.);
+        // A part of a frame is timed from when the encoder handed it over, like the rest
+        // of the frame (see send_subframe_part)
+        const auto since_capture = (remaining ? packet.subframe_ready : std::chrono::steady_clock::now()) - *packet.frame_timestamp;
+        if (remaining) {
+          // Logged when the last part comes out of the encoder, when it is known exactly
+          frame_header.frame_processing_latency = duration_to_latency(video::subframe::estimated_latency(since_capture, *remaining));
+        } else {
+          uint16_t latency = duration_to_latency(since_capture);
+          frame_header.frame_processing_latency = latency;
+          frame_processing_latency_logger.collect_and_log(latency / 10.);
+        }
       } else {
         frame_header.frame_processing_latency = 0;
       }
@@ -1778,8 +1791,13 @@ namespace stream {
     auto send_subframe_part = [&](session_t *session, video::packet_raw_t &packet) {
       auto &state = session->video.subframe;
 
+      // When this part came out of the encoder. It may have waited here for earlier parts
+      // to be sent, which isn't part of the frame's processing latency.
+      const auto part_ready = packet.subframe_ready;
+
       if (packet.subframe_part == 0) {
-        auto frame_header = make_frame_header(session, packet, std::nullopt);
+        auto frame_header = make_frame_header(session, packet, std::nullopt, state.last_remaining);
+        state.first_part_ready = part_ready;
 
         state.frame_index = packet.frame_index();
         state.blocks_sent = 0;
@@ -1865,6 +1883,15 @@ namespace stream {
       }
 
       if (packet.subframe_final) {
+        // How long the rest of the frame took, for the next frame's estimate, and the
+        // frame's actual latency for the log
+        if (state.frame_index == packet.frame_index()) {
+          state.last_remaining = part_ready - state.first_part_ready;
+        }
+        if (packet.frame_timestamp) {
+          frame_processing_latency_logger.collect_and_log(std::chrono::duration<double, std::milli>(part_ready - *packet.frame_timestamp).count());
+        }
+
         state.frame_index = -1;
         state.pending.clear();
       }

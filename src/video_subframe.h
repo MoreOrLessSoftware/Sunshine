@@ -7,6 +7,7 @@
 // standard includes
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -119,5 +120,21 @@ namespace video::subframe {
     }
 
     return sizes;
+  }
+
+  /**
+   * @brief Estimate a frame's processing latency when its first part is sent.
+   *
+   * @details The latency the client shows comes from the frame header, which goes out with
+   *          the first part, before the frame has finished encoding. Encoding the rest takes
+   *          about as long from one frame to the next, so the previous frame's time from its
+   *          first part to its last stands in for it.
+   *
+   * @param since_capture Time from capture to sending the first part.
+   * @param last_remaining The previous frame's time from its first part to its last, or zero.
+   * @return Estimated time from capture until the whole frame is encoded.
+   */
+  inline std::chrono::steady_clock::duration estimated_latency(std::chrono::steady_clock::duration since_capture, std::chrono::steady_clock::duration last_remaining) {
+    return since_capture + std::max(last_remaining, std::chrono::steady_clock::duration::zero());
   }
 }  // namespace video::subframe

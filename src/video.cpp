@@ -2059,6 +2059,7 @@ namespace video {
       packet->frame_timestamp = frame_timestamp;
       packet->subframe_part = parts_sent++;
       packet->subframe_final = final;
+      packet->subframe_ready = std::chrono::steady_clock::now();
       packets->raise(std::move(packet));
     };
 

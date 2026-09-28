@@ -158,3 +158,17 @@ TEST(VideoSubframeTest, FitsALargeIdrFrameInBlocksTheProtocolAllows) {
   }
   EXPECT_EQ(std::accumulate(blocks.begin(), blocks.end(), std::size_t {0}), 3'000'000u);
 }
+
+TEST(VideoSubframeTest, EstimatesLatencyFromTheLastFramesRemainingEncode) {
+  using namespace std::chrono_literals;
+
+  // First part out 2 ms after capture, and the last frame took 3 ms more to finish
+  EXPECT_EQ(video::subframe::estimated_latency(2ms, 3ms), std::chrono::steady_clock::duration {5ms});
+}
+
+TEST(VideoSubframeTest, EstimatesLatencyWithoutAPreviousFrame) {
+  using namespace std::chrono_literals;
+
+  EXPECT_EQ(video::subframe::estimated_latency(2ms, 0ms), std::chrono::steady_clock::duration {2ms});
+  EXPECT_EQ(video::subframe::estimated_latency(2ms, -1ms), std::chrono::steady_clock::duration {2ms});
+}
