@@ -10,6 +10,7 @@ extern "C" {
 }
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <format>
@@ -1189,17 +1190,7 @@ namespace rtsp_stream {
       config.monitor.height = (int) util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
       config.monitor.width = (int) util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
       config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));
-      config.monitor.framerateX100 = (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
-      // Validate framerateX100 against framerate. Some clients (e.g. Moonlight Android) send the
-      // client display's refresh rate as clientRefreshRateX100, which may differ from the requested
-      // streaming framerate. Discard framerateX100 if the derived fps is not within 1% of framerate.
-      if (config.monitor.framerateX100 > 0) {
-        double fps_strict = config.monitor.framerateX100 / 100.0;
-        double ratio = fps_strict / config.monitor.framerate;
-        if (ratio < 0.99 || ratio > 1.01) {
-          config.monitor.framerateX100 = 0;
-        }
-      }
+      config.monitor.framerateX100 = std::max(0, (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv)));
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
       config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));

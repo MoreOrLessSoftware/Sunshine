@@ -297,6 +297,79 @@ TEST_P(ParseRefreshRateOption, IntegrationTest) {
   }
 }
 
+using ParseRefreshRateOptionFpsX100 = DisplayDeviceConfigTest<std::pair<std::tuple<refresh_rate_option_e, client_fps_t, int>, std::variant<no_refresh_rate_tag_t, rational_t>>>;
+INSTANTIATE_TEST_SUITE_P(
+  DisplayDeviceConfigTest,
+  ParseRefreshRateOptionFpsX100,
+  testing::Values(
+    //---- Exact rate is used, in the same form as a parsed refresh rate string ----
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {60}, 5994), rational_t {5994, 100}),
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {60}, 5990), rational_t {599, 10}),
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {60}, 6000), rational_t {60, 1}),
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {120}, 11988), rational_t {11988, 100}),
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {59}, 5994), rational_t {5994, 100}),
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {60}, 14400), rational_t {144, 1}),
+    //---- No exact rate falls back to the integer rate ----
+    std::make_pair(std::make_tuple(refresh_rate_option_e::automatic, client_fps_t {60}, 0), rational_t {60, 1}),
+    //---- Exact rate is ignored when the option is not automatic ----
+    std::make_pair(std::make_tuple(refresh_rate_option_e::disabled, client_fps_t {60}, 5994), no_refresh_rate_tag_t {}),
+    std::make_pair(std::make_tuple(refresh_rate_option_e::manual, client_fps_t {60}, 5994), rational_t {144, 1})
+  )
+);
+
+TEST_P(ParseRefreshRateOptionFpsX100, IntegrationTest) {
+  const auto &[input_value, expected_value] = GetParam();
+  const auto &[input_refresh_rate_option, input_fps, input_fps_x100] = input_value;
+
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::verify_only;
+  video_config.dd.refresh_rate_option = input_refresh_rate_option;
+  video_config.dd.manual_refresh_rate = "144"s;
+
+  rtsp_stream::launch_session_t session {};
+  session.fps = input_fps;
+  session.fps_x100 = input_fps_x100;
+
+  const auto result {display_device::parse_configuration(video_config, session)};
+  std::optional<display_device::FloatingPoint> expected_refresh_rate;
+  if (const auto *valid_refresh_rate_option {std::get_if<rational_t>(&expected_value)}; valid_refresh_rate_option) {
+    expected_refresh_rate = *valid_refresh_rate_option;
+  }
+
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, expected_refresh_rate);
+}
+
+using RemapRefreshRateFpsX100 = DisplayDeviceConfigTest<std::pair<std::tuple<client_fps_t, int>, rational_t>>;
+INSTANTIATE_TEST_SUITE_P(
+  DisplayDeviceConfigTest,
+  RemapRefreshRateFpsX100,
+  testing::Values(
+    //---- Integer requested FPS entries match the client's integer FPS, even with an exact rate ----
+    std::make_pair(std::make_tuple(client_fps_t {60}, 5994), rational_t {11988, 100}),
+    std::make_pair(std::make_tuple(client_fps_t {60}, 0), rational_t {11988, 100}),
+    //---- No matching entry keeps the exact rate ----
+    std::make_pair(std::make_tuple(client_fps_t {50}, 4995), rational_t {4995, 100})
+  )
+);
+
+TEST_P(RemapRefreshRateFpsX100, IntegrationTest) {
+  const auto &[input_value, expected_value] = GetParam();
+  const auto &[input_fps, input_fps_x100] = input_value;
+
+  config::video_t video_config {};
+  video_config.dd.configuration_option = config_option_e::verify_only;
+  video_config.dd.refresh_rate_option = refresh_rate_option_e::automatic;
+  video_config.dd.mode_remapping.refresh_rate_only = {{"", "60", "", "119.88"}};
+
+  rtsp_stream::launch_session_t session {};
+  session.fps = input_fps;
+  session.fps_x100 = input_fps_x100;
+
+  const auto result {display_device::parse_configuration(video_config, session)};
+  const display_device::FloatingPoint expected_refresh_rate {expected_value};
+  EXPECT_EQ(std::get<display_device::SingleDisplayConfiguration>(result).m_refresh_rate, expected_refresh_rate);
+}
+
 namespace {
   using res_t = resolution_t;
   using fps_t = client_fps_t;

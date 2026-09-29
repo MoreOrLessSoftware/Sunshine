@@ -410,7 +410,15 @@ namespace display_device {
       switch (video_config.dd.refresh_rate_option) {
         case refresh_rate_option_e::automatic:
           {
-            if (session.fps >= 0) {
+            if (session.fps_x100 > 0) {
+              // Drop trailing decimal zeros the same way parse_refresh_rate_string does (e.g. 5990 -> 599/10, 6000 -> 60/1)
+              Rational refresh_rate {static_cast<unsigned int>(session.fps_x100), 100};
+              while (refresh_rate.m_denominator > 1 && refresh_rate.m_numerator % 10 == 0) {
+                refresh_rate.m_numerator /= 10;
+                refresh_rate.m_denominator /= 10;
+              }
+              config.m_refresh_rate = refresh_rate;
+            } else if (session.fps >= 0) {
               config.m_refresh_rate = Rational {static_cast<unsigned int>(session.fps), 1};
             } else {
               BOOST_LOG(error) << "FPS value provided by client session config is invalid: " << session.fps;
@@ -626,8 +634,9 @@ namespace display_device {
           continue;
         }
 
-        // Note: at this point config should already have parsed refresh rate set.
-        if (parsed_entry->requested_fps && parsed_entry->requested_fps != config.m_refresh_rate) {
+        // Note: requested FPS entries are integers only, so compare against the client's integer FPS
+        //       instead of the parsed refresh rate, which may hold the exact fractional rate.
+        if (parsed_entry->requested_fps && parsed_entry->requested_fps != FloatingPoint {Rational {static_cast<unsigned int>(session.fps), 1}}) {
           BOOST_LOG(verbose) << "Skipping remapping because requested FPS do not match! Entry:\n"
                              << entry_to_string(entry);
           continue;
