@@ -27,8 +27,8 @@
 	branch = master
 [submodule "third-party/moonlight-common-c"]
 	path = third-party/moonlight-common-c
-	url = https://github.com/moonlight-stream/moonlight-common-c.git
-	branch = master
+	url = https://github.com/MoreOrLessSoftware/moonlight-common-c.git
+	branch = mlsoft-pyrowave
 [submodule "third-party/nvapi"]
 	path = third-party/nvapi
 	url = https://github.com/NVIDIA/nvapi.git
