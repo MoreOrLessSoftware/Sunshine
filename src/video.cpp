@@ -2819,12 +2819,8 @@ namespace video {
 
     auto colorspace = colorspace_from_client_config(config, disp.is_hdr());
 
+    // PyroWave follows the range the client asked for, as other PyroWave hosts do
     const bool pyrowave = dynamic_cast<const encoder_platform_formats_pyrowave *>(encoder.platform_formats.get()) != nullptr;
-    if (pyrowave) {
-      // PyroWave is defined in full range, which the client assumes. Its wavelet
-      // coefficients are floating point, so there's nothing to gain from limited range.
-      colorspace.full_range = true;
-    }
 
     platf::pix_fmt_e pix_fmt;
     if (config.chromaSamplingType == 1) {

@@ -1197,8 +1197,8 @@ namespace nvhttp {
       codec_mode_flags |= SCM_AV1_HIGH10_444;
     }
 
-    // PyroWave extension of this fork, understood by the matching Moonlight build
-    constexpr uint32_t scm_pyrowave = 0x01000000;
+    // PyroWave 4:2:0, with the bits the Aurora, Solarflare and nonary (vibeshine) hosts use
+    constexpr uint32_t scm_pyrowave = 0x00800000;
     constexpr uint32_t scm_pyrowave_10bit = 0x02000000;
     if (video::active_pyrowave_mode >= 2) {
       codec_mode_flags |= scm_pyrowave;
