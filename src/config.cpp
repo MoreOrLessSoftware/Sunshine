@@ -795,7 +795,8 @@ namespace config {
     },  // display_device
 
     0,  // max_bitrate
-    0  // minimum_fps_target (0 = framerate)
+    0,  // minimum_fps_target (0 = framerate)
+    4.0  // low_fps_bitrate_boost
   };
 
   /**
@@ -1725,6 +1726,7 @@ namespace config {
 
     int_f(vars, "max_bitrate", video.max_bitrate);
     double_between_f(vars, "minimum_fps_target", video.minimum_fps_target, {-1.0, 1000.0});
+    double_between_f(vars, "low_fps_bitrate_boost", video.low_fps_bitrate_boost, {1.0, 8.0});
 
     path_f(vars, "pkey", nvhttp.pkey);
     path_f(vars, "cert", nvhttp.cert);

@@ -1498,6 +1498,41 @@ supported on the current platform.
     </tr>
 </table>
 
+### low_fps_bitrate_boost
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Encoders give each frame the client's bitrate divided by the stream's framerate, so a game rendering
+            60 frames a second in a 120 frame stream is encoded at half the bitrate. With this setting, Sunshine
+            measures how often frames are actually encoded and raises the bitrate to match, so the stream stays
+            close to the bitrate the client asked for. This value is the most the bitrate is multiplied by. Each
+            frame is also kept to a size that can be sent at [video_send_rate](#video_send_rate) within one frame
+            of the stream's framerate, so a boosted frame never delays the ones after it. Set video_send_rate to
+            suit your network for the boost to be sized correctly.
+            @note{Repeated frames count as encoded frames, so the boost is smaller when frames are repeated. Set
+            [minimum_fps_target](#minimum_fps_target) to -1 for the full boost.}
+            @note{Applies to NVENC and PyroWave. Other encoders always use the client's bitrate.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            4
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>1</td>
+        <td>Never raise the bitrate.</td>
+    </tr>
+    <tr>
+        <td>1-8</td>
+        <td>The most the bitrate is multiplied by. 2 covers a 60fps game in a 120fps stream, 4 a 30fps game.</td>
+    </tr>
+</table>
+
 ## Network
 
 ### upnp

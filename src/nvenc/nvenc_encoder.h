@@ -71,6 +71,18 @@ namespace nvenc {
      * @return `true` on success, `false` on error.
      */
     virtual bool invalidate_ref_frames(std::uint64_t first_frame, std::uint64_t last_frame) = 0;
+
+    /**
+     * @brief Change the bitrate while streaming, keeping the stream's frame rate.
+     *
+     * @details Each frame's share of the bitrate is still worked out from the stream's frame
+     *          rate, so this is how frames are given more room when they come slower.
+     *
+     * @param bitrate_kbps New bitrate in kilobits per second.
+     * @return The bitrate the encoder now targets, lower than asked for when the stream's level
+     *         doesn't allow more, or 0 if the encoder can't change its bitrate.
+     */
+    virtual std::uint32_t set_bitrate(std::uint32_t bitrate_kbps) = 0;
   };
 
 }  // namespace nvenc

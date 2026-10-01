@@ -478,6 +478,20 @@ namespace video {
      * @param last_frame Last frame.
      */
     virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
+
+    /**
+     * @brief Change the bitrate while streaming, keeping the stream's frame rate.
+     *
+     * @details Each frame's share of the bitrate is still worked out from the stream's frame
+     *          rate, so raising the bitrate gives frames more room when they come slower.
+     *
+     * @param bitrate_kbps New bitrate in kilobits per second.
+     * @return The bitrate the encoder now targets, which can be lower than asked for, or 0 if
+     *         it can't change its bitrate.
+     */
+    virtual int set_bitrate(int bitrate_kbps) {
+      return 0;
+    }
   };
 
   // encoders
@@ -739,6 +753,15 @@ namespace video {
    * @return Largest encoded frame in bytes.
    */
   std::size_t pyrowave_max_frame_size(const config_t &config);
+
+  /**
+   * @brief Work out the largest PyroWave frame for a bitrate at the stream's frame rate.
+   *
+   * @param bitrate_kbps Bitrate in kilobits per second.
+   * @param fps The stream's frame rate.
+   * @return Largest encoded frame in bytes, at least 4 KiB.
+   */
+  std::size_t pyrowave_max_frame_size(int bitrate_kbps, AVRational fps);
 
   /**
    * @brief Capture and encode video for a streaming session.

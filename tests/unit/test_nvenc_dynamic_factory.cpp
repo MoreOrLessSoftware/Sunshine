@@ -59,6 +59,10 @@ namespace {
       return true;
     }
 
+    std::uint32_t set_bitrate(std::uint32_t bitrate_kbps) override {
+      return bitrate_kbps;
+    }
+
     ID3D11Texture2D *get_input_texture() override {
       return nullptr;
     }

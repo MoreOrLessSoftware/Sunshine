@@ -304,6 +304,8 @@
     "locale_desc": "The locale used for Sunshine's user interface.",
     "log_path": "Logfile Path",
     "log_path_desc": "The file where the current Sunshine log is stored. At startup, up to five previous logs are retained with .1 through .5 suffixes.",
+    "low_fps_bitrate_boost": "Low FPS Bitrate Boost",
+    "low_fps_bitrate_boost_desc": "When the game renders fewer frames than the stream's FPS, each frame gets the bitrate of the frames that aren't rendered, so the stream stays close to the bitrate Moonlight asked for. This is the most the bitrate is multiplied by: 4 covers a 30fps game in a 120fps stream. 1 turns it off. Repeated frames count as frames, so set Minimum FPS Target to -1 for the full boost. Frames are also kept small enough to send within one frame at the Video Send Rate, so set that to suit your network. Works with NVENC and PyroWave.",
     "max_bitrate": "Maximum Bitrate",
     "max_bitrate_desc": "The maximum bitrate (in Kbps) that Sunshine will encode the stream at. If set to 0, it will always use the bitrate requested by Moonlight.",
     "minimum_fps_target": "Minimum FPS Target",

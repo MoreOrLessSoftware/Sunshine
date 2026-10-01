@@ -76,6 +76,14 @@ namespace NVENC_NAMESPACE {
      */
     bool invalidate_ref_frames(uint64_t first_frame, uint64_t last_frame) override;
 
+    /**
+     * @brief Change the bitrate while streaming with `NvEncReconfigureEncoder()`, without an IDR frame.
+     * @param bitrate_kbps New bitrate in kilobits per second.
+     * @return The bitrate the encoder now targets, at most what the encoder was created with
+     *         room for, or 0 if the gpu can't change bitrate on the fly or on error.
+     */
+    uint32_t set_bitrate(uint32_t bitrate_kbps) override;
+
   protected:
     /**
      * @brief Required. Used for loading NvEnc library and setting `nvenc` variable with `NvEncodeAPICreateInstance()`.
@@ -147,6 +155,37 @@ namespace NVENC_NAMESPACE {
                                          ///< Can be set in constructor or `init_library()`, must override `wait_for_async_event()`.
 
   private:
+    /**
+     * @brief Create the encoder, optionally with room to raise the bitrate later.
+     *
+     * @details The level an encoder signals can't change while streaming, and NVENC picks the
+     *          lowest level the starting bitrate fits. With `headroom_kbps`, the encoder is created
+     *          at that bitrate, so the level has room for it, then the level is fixed and the
+     *          bitrate lowered to the client's before the first frame.
+     *
+     * @param config NVENC encoder configuration.
+     * @param client_config Stream configuration requested by the client.
+     * @param colorspace YUV colorspace.
+     * @param buffer_format Platform-agnostic input surface format.
+     * @param headroom_kbps Highest bitrate to leave room for, or 0 for none.
+     * @return `true` on success, `false` on error.
+     */
+    bool create_encoder_with_headroom(
+      const ::nvenc::nvenc_config &config,
+      const video::config_t &client_config,
+      const video::sunshine_colorspace_t &colorspace,
+      platf::pix_fmt_e buffer_format,
+      uint32_t headroom_kbps
+    );
+
+    /**
+     * @brief Read the level the encoder picked from its parameter sets and fix it for reconfiguring.
+     *
+     * @param encode_guid Codec GUID: H.264 or HEVC.
+     * @return `true` once the level is fixed, `false` if it couldn't be read.
+     */
+    bool fix_level(const GUID &encode_guid);
+
     /**
      * @brief Query one encoder capability.
      *
@@ -356,7 +395,31 @@ namespace NVENC_NAMESPACE {
      */
     bool read_bitstream_in_slices(uint64_t frame_index, ::nvenc::nvenc_encoded_frame &encoded_frame, const ::nvenc::nvenc_subframe_callback &on_subframe, bool idr);
 
+    /**
+     * @brief Work out the VBV buffer size for a bitrate: one frame's worth plus the configured increase.
+     *
+     * @param bitrate_kbps Bitrate in kilobits per second.
+     * @param framerate Stream frame rate.
+     * @param vbv_percentage_increase Percentage to enlarge the buffer by.
+     * @return VBV buffer size in bits.
+     */
+    static uint32_t vbv_buffer_size(uint32_t bitrate_kbps, int framerate, int vbv_percentage_increase);
+
     NV_ENC_OUTPUT_PTR output_bitstream = nullptr;
+
+    /**
+     * @brief What `set_bitrate()` needs to reconfigure the encoder it created.
+     */
+    struct {
+      NV_ENC_INITIALIZE_PARAMS init_params {};  ///< Parameters the encoder was initialized with, pointing at `enc_config`.
+      NV_ENC_CONFIG enc_config {};  ///< Configuration the encoder was initialized with.
+      bool supported = false;  ///< Whether the gpu can change bitrate on the fly.
+      bool custom_vbv = false;  ///< Whether the VBV buffer size was set rather than left to the driver.
+      int framerate = 0;  ///< Stream frame rate the VBV buffer is sized for.
+      int vbv_percentage_increase = 0;  ///< Configured VBV buffer increase.
+      uint32_t max_kbps = 0;  ///< Highest bitrate the stream's level was created with room for.
+      uint32_t current_kbps = 0;  ///< Bitrate the encoder targets.
+    } reconfigure_state;
     std::vector<uint32_t> slice_offsets;  ///< Receives slice offsets during sub-frame readback, one entry per macroblock as the API requires.
     std::unique_ptr<platf::high_precision_timer> poll_timer;  ///< Paces polling during sub-frame readback.
 

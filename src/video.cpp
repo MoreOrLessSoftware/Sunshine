@@ -35,6 +35,7 @@ extern "C" {
 #include "platform/common.h"
 #include "sync.h"
 #include "video.h"
+#include "video_bitrate.h"
 #include "video_subframe.h"
 
 #ifdef _WIN32
@@ -616,6 +617,20 @@ namespace video {
     }
 
     /**
+     * @brief Change the bitrate NVENC targets, keeping the stream's frame rate.
+     *
+     * @param bitrate_kbps New bitrate in kilobits per second.
+     * @return The bitrate NVENC now targets, at most what the stream's level allows, or 0 if
+     *         it can't change its bitrate.
+     */
+    int set_bitrate(int bitrate_kbps) override {
+      if (!device || !device->nvenc || bitrate_kbps <= 0) {
+        return 0;
+      }
+      return static_cast<int>(device->nvenc->set_bitrate(static_cast<std::uint32_t>(bitrate_kbps)));
+    }
+
+    /**
      * @brief Submit the next frame to NVENC and return the encoded payload.
      *
      * @param frame_index Monotonic frame index assigned by the video pipeline.
@@ -649,11 +664,12 @@ namespace video {
      * @brief Initialize a PyroWave encode session and take ownership of its device.
      *
      * @param encode_device Encode device.
-     * @param max_frame_size Largest encoded frame in bytes.
+     * @param config Stream configuration, for the bitrate and frame rate that size each frame.
      */
-    pyrowave_encode_session_t(std::unique_ptr<platf::pyrowave_encode_device_t> encode_device, std::size_t max_frame_size):
+    pyrowave_encode_session_t(std::unique_ptr<platf::pyrowave_encode_device_t> encode_device, const config_t &config):
         device {std::move(encode_device)},
-        max_frame_size {max_frame_size} {
+        fps {framerate_to_rational(config)},
+        max_frame_size {pyrowave_max_frame_size(config.bitrate, fps)} {
     }
 
     /**
@@ -691,6 +707,20 @@ namespace video {
     }
 
     /**
+     * @brief Resize frames for a new bitrate at the stream's frame rate.
+     *
+     * @param bitrate_kbps New bitrate in kilobits per second.
+     * @return The new bitrate, as PyroWave sizes every frame on its own, or 0 if it isn't positive.
+     */
+    int set_bitrate(int bitrate_kbps) override {
+      if (bitrate_kbps <= 0) {
+        return 0;
+      }
+      max_frame_size = pyrowave_max_frame_size(bitrate_kbps, fps);
+      return bitrate_kbps;
+    }
+
+    /**
      * @brief Encode the last converted frame.
      *
      * @return Encoded frame, or an empty vector on failure.
@@ -704,6 +734,7 @@ namespace video {
 
   private:
     std::unique_ptr<platf::pyrowave_encode_device_t> device;  ///< Device that converts and encodes frames.
+    AVRational fps;  ///< The stream's frame rate.
     std::size_t max_frame_size;  ///< Largest encoded frame in bytes.
   };
 
@@ -1830,6 +1861,8 @@ namespace video {
       return false;
     };
 
+    std::uint64_t captured_frames = 0;  ///< Frames handed to the encoders so far.
+
     // Capture takes place on this thread
     platf::set_thread_name("video::capture");
     platf::adjust_thread_priority(platf::thread_priority_e::critical);
@@ -1838,6 +1871,11 @@ namespace video {
       bool artificial_reinit = false;
 
       auto push_captured_image_callback = [&](std::shared_ptr<platf::img_t> &&img, bool frame_captured) -> bool {
+        // Lets the encoder count frames replaced before it got to them
+        if (frame_captured && img) {
+          img->capture_sequence = ++captured_frames;
+        }
+
         KITTY_WHILE_LOOP(auto capture_ctx = std::begin(capture_ctxs), capture_ctx != std::end(capture_ctxs), {
           if (!capture_ctx->images->running()) {
             capture_ctx = capture_ctxs.erase(capture_ctx);
@@ -2127,9 +2165,11 @@ namespace video {
   }
 
   std::size_t pyrowave_max_frame_size(const config_t &config) {
-    // config.bitrate is in kilobits per second
-    const AVRational fps = framerate_to_rational(config);
-    const auto bytes_per_second = static_cast<std::int64_t>(std::max(config.bitrate, 1)) * 1000 / 8;
+    return pyrowave_max_frame_size(config.bitrate, framerate_to_rational(config));
+  }
+
+  std::size_t pyrowave_max_frame_size(int bitrate_kbps, AVRational fps) {
+    const auto bytes_per_second = static_cast<std::int64_t>(std::max(bitrate_kbps, 1)) * 1000 / 8;
     return static_cast<std::size_t>(std::max<std::int64_t>(bytes_per_second * fps.den / std::max(fps.num, 1), 4096));
   }
 
@@ -2592,7 +2632,7 @@ namespace video {
       if (!pyrowave_encode_device->init_encoder(config, pyrowave_encode_device->colorspace)) {
         return nullptr;
       }
-      return std::make_unique<pyrowave_encode_session_t>(std::move(pyrowave_encode_device), pyrowave_max_frame_size(config));
+      return std::make_unique<pyrowave_encode_session_t>(std::move(pyrowave_encode_device), config);
     }
 
     return nullptr;
@@ -2660,6 +2700,16 @@ namespace video {
       BOOST_LOG(info) << "Minimum FPS target disabled, frames are not repeated"sv;
     }
 
+    // Frames get the bitrate of the ones the game doesn't render. See video_bitrate.h.
+    std::optional<bitrate::booster> bitrate_booster;
+    std::uint64_t last_capture_sequence = 0;
+    int applied_kbps = config.bitrate;
+    bool limit_logged = false;
+    if (config::video.low_fps_bitrate_boost > 1.0) {
+      const AVRational fps = framerate_to_rational(config);
+      bitrate_booster.emplace(config.bitrate, av_q2d(fps), config::video.low_fps_bitrate_boost, config::stream.video_send_rate);
+    }
+
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
@@ -2697,6 +2747,7 @@ namespace video {
       }
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
+      std::size_t frames_since_last_encode = 1;
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
@@ -2713,6 +2764,15 @@ namespace video {
 
         if (img) {
           frame_timestamp = img->frame_timestamp;
+
+          // Frames captured while the last one was encoding were replaced by this one
+          if (img->capture_sequence > last_capture_sequence && last_capture_sequence != 0) {
+            frames_since_last_encode = static_cast<std::size_t>(img->capture_sequence - last_capture_sequence);
+          }
+          if (img->capture_sequence != 0) {
+            last_capture_sequence = img->capture_sequence;
+          }
+
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
@@ -2737,6 +2797,30 @@ namespace video {
       // in flight after encoder teardown.
       if (shutdown_event->peek() || !images->running() || (reinit_event.peek() && frame_nr > 1)) {
         break;
+      }
+
+      if (bitrate_booster) {
+        if (const auto bitrate_kbps = bitrate_booster->on_frame(std::chrono::steady_clock::now(), frames_since_last_encode)) {
+          if (const auto applied = session->set_bitrate(*bitrate_kbps); applied > 0) {
+            if (applied < *bitrate_kbps && !limit_logged) {
+              BOOST_LOG(info) << "The stream's level keeps the bitrate at or below "sv << applied << " kbps"sv;
+              limit_logged = true;
+            }
+            if (applied != applied_kbps) {
+              BOOST_LOG(info) << "Encoding at "sv << applied << " kbps for "sv << std::lround(bitrate_booster->fps()) << " fps"sv;
+              applied_kbps = applied;
+            }
+          } else {
+            // The encoder may be left at a boosted bitrate, so go back to the client's
+            const auto client_kbps = bitrate_booster->client_bitrate_kbps();
+            if (*bitrate_kbps == client_kbps || session->set_bitrate(client_kbps) != client_kbps) {
+              BOOST_LOG(warning) << "Encoder can't change its bitrate while streaming; boosting for the game's frame rate is off"sv;
+            } else {
+              BOOST_LOG(warning) << "Encoder couldn't change its bitrate; back at the client's "sv << client_kbps << " kbps with boosting off"sv;
+            }
+            bitrate_booster.reset();
+          }
+        }
       }
 
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {

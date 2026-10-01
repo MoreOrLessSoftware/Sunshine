@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <format>
+#include <span>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -22,11 +23,21 @@
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/utility.h"
+#include "src/video_bitrate.h"
+#include "src/video_level.h"
 #include "src/video_subframe.h"
 
 namespace {
 
   using namespace NVENC_NAMESPACE;
+
+  /**
+   * @brief Highest bitrate the encoder is created with room for, in kilobits per second.
+   *
+   * The highest H.264 and HEVC levels, 6.2 (High tier for HEVC), allow 800 Mbps. A level
+   * that can't fit the bitrate would fail to create the encoder.
+   */
+  constexpr double max_level_bitrate_kbps = 800'000;
 
   /**
    * @brief Determine whether an NVENC buffer format stores 10-bit samples.
@@ -285,11 +296,16 @@ namespace NVENC_NAMESPACE {
     enc_config.rcParams.enableAQ = config.adaptive_quantization;
     enc_config.rcParams.averageBitRate = client_config.bitrate * 1000;
     if (get_encoder_cap(encode_guid, NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE)) {
-      enc_config.rcParams.vbvBufferSize = client_config.bitrate * 1000 / client_config.framerate;
-      if (config.vbv_percentage_increase > 0) {
-        enc_config.rcParams.vbvBufferSize += enc_config.rcParams.vbvBufferSize * config.vbv_percentage_increase / 100;
-      }
+      enc_config.rcParams.vbvBufferSize = vbv_buffer_size(client_config.bitrate, client_config.framerate, config.vbv_percentage_increase);
     }
+  }
+
+  uint32_t nvenc_base::vbv_buffer_size(uint32_t bitrate_kbps, int framerate, int vbv_percentage_increase) {
+    uint32_t size = bitrate_kbps * 1000 / std::max(framerate, 1);
+    if (vbv_percentage_increase > 0) {
+      size += size * vbv_percentage_increase / 100;
+    }
+    return size;
   }
 
   void nvenc_base::configure_reference_frames(
@@ -580,6 +596,33 @@ namespace NVENC_NAMESPACE {
     const video::sunshine_colorspace_t &sunshine_colorspace,
     platf::pix_fmt_e sunshine_buffer_format
   ) {
+    // Room for the most the bitrate is raised when the game renders fewer frames than the
+    // stream's frame rate. See video_bitrate.h.
+    uint32_t headroom_kbps = 0;
+    if (config::video.low_fps_bitrate_boost > 1.0 && client_config.bitrate > 0 && (client_config.videoFormat == 0 || client_config.videoFormat == 1)) {
+      const AVRational fps = video::framerate_to_rational(client_config);
+      const double stream_fps = static_cast<double>(fps.num) / std::max(fps.den, 1);
+      const auto factor = video::bitrate::max_boost_factor(stream_fps, config::video.low_fps_bitrate_boost, client_config.bitrate, config::stream.video_send_rate);
+      headroom_kbps = static_cast<uint32_t>(std::min<double>(std::round(client_config.bitrate * factor), max_level_bitrate_kbps));
+    }
+
+    if (headroom_kbps > static_cast<uint32_t>(client_config.bitrate)) {
+      if (create_encoder_with_headroom(config, client_config, sunshine_colorspace, sunshine_buffer_format, headroom_kbps)) {
+        return true;
+      }
+      BOOST_LOG(info) << "NvEnc: couldn't leave room to raise the bitrate; creating the encoder at the client's bitrate";
+    }
+
+    return create_encoder_with_headroom(config, client_config, sunshine_colorspace, sunshine_buffer_format, 0);
+  }
+
+  bool nvenc_base::create_encoder_with_headroom(
+    const ::nvenc::nvenc_config &config,
+    const video::config_t &client_config,
+    const video::sunshine_colorspace_t &sunshine_colorspace,
+    platf::pix_fmt_e sunshine_buffer_format,
+    uint32_t headroom_kbps
+  ) {
     if (!nvenc && !init_library()) {
       return false;
     }
@@ -676,9 +719,41 @@ namespace NVENC_NAMESPACE {
     enc_config.profileGUID = NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID;
     configure_rate_control(enc_config, config, client_config, init_params.encodeGUID);
     configure_codec(enc_config, config, client_config, colorspace, buffer_format, init_params.encodeGUID);
+
+    const auto client_kbps = static_cast<uint32_t>(client_config.bitrate);
+    const bool supported = get_encoder_cap(init_params.encodeGUID, NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
+    if (headroom_kbps > 0 && !supported) {
+      return false;
+    }
+    if (headroom_kbps > 0) {
+      // The level NVENC picks has room for this bitrate
+      enc_config.rcParams.averageBitRate = headroom_kbps * 1000;
+      if (enc_config.rcParams.vbvBufferSize != 0) {
+        enc_config.rcParams.vbvBufferSize = vbv_buffer_size(headroom_kbps, client_config.framerate, config.vbv_percentage_increase);
+      }
+    }
+
     init_params.encodeConfig = &enc_config;
     if (!initialize_encoder_resources(init_params)) {
       return false;
+    }
+
+    reconfigure_state.init_params = init_params;
+    reconfigure_state.enc_config = enc_config;
+    reconfigure_state.init_params.encodeConfig = &reconfigure_state.enc_config;
+    reconfigure_state.supported = supported;
+    reconfigure_state.custom_vbv = enc_config.rcParams.vbvBufferSize != 0;
+    reconfigure_state.framerate = client_config.framerate;
+    reconfigure_state.vbv_percentage_increase = config.vbv_percentage_increase;
+    reconfigure_state.max_kbps = client_kbps;
+    reconfigure_state.current_kbps = client_kbps;
+
+    if (headroom_kbps > 0) {
+      reconfigure_state.max_kbps = headroom_kbps;
+      reconfigure_state.current_kbps = headroom_kbps;
+      if (!fix_level(init_params.encodeGUID) || set_bitrate(client_kbps) != client_kbps) {
+        return false;
+      }
     }
 
     auto frame_size_format = stat_trackers::two_digits_after_decimal();
@@ -720,6 +795,76 @@ namespace NVENC_NAMESPACE {
 
     encoder_state = {};
     encoder_params = {};
+    reconfigure_state = {};
+  }
+
+  uint32_t nvenc_base::set_bitrate(uint32_t bitrate_kbps) {
+    if (!encoder || !reconfigure_state.supported || bitrate_kbps == 0) {
+      return 0;
+    }
+
+    // The level was fixed when the encoder was created, and a higher bitrate needs a higher one
+    bitrate_kbps = std::min(bitrate_kbps, reconfigure_state.max_kbps);
+    if (bitrate_kbps == reconfigure_state.current_kbps) {
+      return bitrate_kbps;
+    }
+
+    auto &rc_params = reconfigure_state.enc_config.rcParams;
+    rc_params.averageBitRate = bitrate_kbps * 1000;
+    if (reconfigure_state.custom_vbv) {
+      rc_params.vbvBufferSize = vbv_buffer_size(bitrate_kbps, reconfigure_state.framerate, reconfigure_state.vbv_percentage_increase);
+    }
+
+    NV_ENC_RECONFIGURE_PARAMS reconfigure_params = {.version = NV_ENC_RECONFIGURE_PARAMS_VER};
+    reconfigure_params.reInitEncodeParams = reconfigure_state.init_params;
+    reconfigure_params.resetEncoder = 0;
+    reconfigure_params.forceIDR = 0;
+
+    if (nvenc_failed(nvenc->nvEncReconfigureEncoder(encoder, &reconfigure_params))) {
+      BOOST_LOG(error) << "NvEnc: NvEncReconfigureEncoder() failed: " << last_nvenc_error_string;
+      return 0;
+    }
+
+    reconfigure_state.current_kbps = bitrate_kbps;
+    return bitrate_kbps;
+  }
+
+  bool nvenc_base::fix_level(const GUID &encode_guid) {
+    std::vector<uint8_t> parameter_sets(1024);
+    uint32_t size = 0;
+    NV_ENC_SEQUENCE_PARAM_PAYLOAD payload = {.version = NV_ENC_SEQUENCE_PARAM_PAYLOAD_VER};
+    payload.inBufferSize = static_cast<uint32_t>(parameter_sets.size());
+    payload.spsppsBuffer = parameter_sets.data();
+    payload.outSPSPPSPayloadSize = &size;
+    if (nvenc_failed(nvenc->nvEncGetSequenceParams(encoder, &payload))) {
+      BOOST_LOG(error) << "NvEnc: NvEncGetSequenceParams() failed: " << last_nvenc_error_string;
+      return false;
+    }
+
+    const std::span<const uint8_t> stream {parameter_sets.data(), std::min<std::size_t>(size, parameter_sets.size())};
+    auto &codec_config = reconfigure_state.enc_config.encodeCodecConfig;
+    if (equal_guids(encode_guid, NV_ENC_CODEC_H264_GUID)) {
+      const auto level = video::level::h264_level(stream);
+      if (!level) {
+        BOOST_LOG(error) << "NvEnc: couldn't read the H.264 level";
+        return false;
+      }
+      codec_config.h264Config.level = level->level;
+      BOOST_LOG(info) << "NvEnc: H.264 level " << level->level / 10. << " leaves room for " << reconfigure_state.max_kbps << " kbps";
+    } else if (equal_guids(encode_guid, NV_ENC_CODEC_HEVC_GUID)) {
+      const auto level = video::level::hevc_level(stream);
+      if (!level) {
+        BOOST_LOG(error) << "NvEnc: couldn't read the HEVC level";
+        return false;
+      }
+      codec_config.hevcConfig.level = level->level;
+      codec_config.hevcConfig.tier = level->tier;
+      BOOST_LOG(info) << "NvEnc: HEVC level " << level->level / 30. << (level->tier ? " High" : " Main") << " tier leaves room for " << reconfigure_state.max_kbps << " kbps";
+    } else {
+      return false;
+    }
+
+    return true;
   }
 
   ::nvenc::nvenc_encoded_frame nvenc_base::encode_frame(uint64_t frame_index, bool force_idr, const ::nvenc::nvenc_subframe_callback &on_subframe) {

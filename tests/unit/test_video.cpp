@@ -454,6 +454,15 @@ TEST(PyrowaveMaxFrameSizeTest, NeverGoesBelowAMinimum) {
   EXPECT_EQ(video::pyrowave_max_frame_size(config), 4096u);
 }
 
+TEST(PyrowaveMaxFrameSizeTest, SizesFramesForAChangedBitrate) {
+  // A boosted bitrate at the stream's frame rate: 960 Mbps at 120 fps
+  EXPECT_EQ(video::pyrowave_max_frame_size(960000, AVRational {120, 1}), 1000000u);
+}
+
+TEST(PyrowaveMaxFrameSizeTest, ToleratesAZeroFrameRate) {
+  EXPECT_EQ(video::pyrowave_max_frame_size(8000, AVRational {0, 1}), 1000000u);
+}
+
 TEST(PyrowaveCodecTest, VideoFormat3SelectsThePyrowaveCodec) {
   video::encoder_t encoder {
     "test"sv,
@@ -469,6 +478,58 @@ TEST(PyrowaveCodecTest, VideoFormat3SelectsThePyrowaveCodec) {
   config.videoFormat = 3;
   EXPECT_EQ(encoder.codec_from_config(config).name, "pyrowave_test");
 }
+
+using LowFpsBitrateBoostConfigParam = std::tuple<std::string_view, double>;
+
+/**
+ * @brief Parameterized coverage for parsing and validating the low FPS bitrate boost.
+ */
+struct LowFpsBitrateBoostConfigTest: BaseTest, testing::WithParamInterface<LowFpsBitrateBoostConfigParam> {
+  void SetUp() override {
+    BaseTest::SetUp();
+    config::video.low_fps_bitrate_boost = 4.0;
+    config::stream.file_apps = SUNSHINE_SOURCE_DIR "/tests/unit/test_video.cpp";
+  }
+
+  void TearDown() override {
+    config::video = original_video;
+    config::audio = original_audio;
+    config::stream = original_stream;
+    config::nvhttp = original_nvhttp;
+    config::input = original_input;
+    config::sunshine = original_sunshine;
+    config::modified_config_settings = original_modified_config_settings;
+    BaseTest::TearDown();
+  }
+
+  config::video_t original_video {config::video};  ///< Video configuration restored after each parameterized test.
+  config::audio_t original_audio {config::audio};  ///< Audio configuration restored after each parameterized test.
+  config::stream_t original_stream {config::stream};  ///< Stream configuration restored after each parameterized test.
+  config::nvhttp_t original_nvhttp {config::nvhttp};  ///< HTTP configuration restored after each parameterized test.
+  config::input_t original_input {config::input};  ///< Input configuration restored after each parameterized test.
+  config::sunshine_t original_sunshine {config::sunshine};  ///< Core configuration restored after each parameterized test.
+  decltype(config::modified_config_settings) original_modified_config_settings {config::modified_config_settings};  ///< Modified settings restored after each parameterized test.
+};
+
+TEST_P(LowFpsBitrateBoostConfigTest, AcceptsOneThroughEight) {
+  const auto &[setting, expected] = GetParam();
+  config::apply_config_for_test(setting);
+
+  EXPECT_DOUBLE_EQ(expected, config::video.low_fps_bitrate_boost);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  LowFpsBitrateBoostValues,
+  LowFpsBitrateBoostConfigTest,
+  testing::Values(
+    LowFpsBitrateBoostConfigParam {""sv, 4.0},
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 1\n"sv, 1.0},
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 2.5\n"sv, 2.5},
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 8\n"sv, 8.0},
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 0.5\n"sv, 4.0},
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 9\n"sv, 4.0}
+  )
+);
 
 using FecPercentageConfigParam = std::tuple<std::string_view, int>;
 
