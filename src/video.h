@@ -581,6 +581,7 @@ namespace video {
     int subframe_part = -1;  ///< Which part of a frame sent while it is encoded this is, from 0, or -1 for a whole frame. See video_subframe.h.
     bool subframe_final = false;  ///< Whether this is the last part of a frame sent in parts.
     std::chrono::steady_clock::time_point subframe_ready {};  ///< When the encoder handed over this part of a frame sent in parts.
+    std::optional<frame_trace::trace_t> trace;  ///< Where a whole frame spent its time so far, when it was traced. See frame_trace.h.
   };
 
   /**

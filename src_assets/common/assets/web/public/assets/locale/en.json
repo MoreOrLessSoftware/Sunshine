@@ -300,6 +300,8 @@
     "lan_encryption_mode_1": "Enabled for supported clients",
     "lan_encryption_mode_2": "Required for all clients",
     "lan_encryption_mode_desc": "This determines when encryption will be used when streaming over your local network. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
+    "latency_log": "Latency Log",
+    "latency_log_desc": "Trace each video frame through capture, encoding and sending, and write where its time went to a latency log next to the main log file. Every 10 seconds the log summarizes each stage, and every frame much slower than usual gets a line of its own, to find what causes host processing latency spikes. Takes effect after restarting Sunshine.",
     "locale": "Locale",
     "locale_desc": "The locale used for Sunshine's user interface.",
     "log_path": "Logfile Path",

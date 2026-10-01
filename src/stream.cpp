@@ -1546,6 +1546,13 @@ namespace stream {
 
     logging::min_max_avg_periodic_logger<double> frame_processing_latency_logger(debug, "Frame processing latency", "ms");
 
+    // Where each frame spends its time, written to the latency log. See frame_trace.h.
+    std::optional<frame_trace::reporter> trace_reporter;
+    if (config::sunshine.latency_log) {
+      trace_reporter.emplace();
+    }
+    using trace_clock = frame_trace::trace_clock;
+
     logging::time_delta_periodic_logger frame_send_batch_latency_logger(debug, "Network: each send_batch() latency");
     logging::time_delta_periodic_logger frame_fec_latency_logger(debug, "Network: each FEC block latency");
     logging::time_delta_periodic_logger frame_network_latency_logger(debug, "Network: frame's overall network latency");
@@ -1667,8 +1674,12 @@ namespace stream {
       }
 
       frame_fec_latency_logger.first_point_now();
+      const auto fec_start = trace_clock::now();
       // If video encryption is enabled, we allocate space for the encryption header before each shard
       auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+      if (packet.trace) {
+        packet.trace->fec += trace_clock::now() - fec_start;
+      }
       frame_fec_latency_logger.second_point_now_and_log();
 
       auto peer_address = session->video.peer.address();
@@ -1718,10 +1729,14 @@ namespace stream {
           session->video.gcm_iv_counter++;
 
           // Encrypt the target buffer in place
+          const auto encrypt_start = trace_clock::now();
           auto *prefix = (video_packet_enc_prefix_t *) shards.prefix(x);
           prefix->frameNumber = (std::uint32_t) packet.frame_index();
           std::copy(std::begin(iv), std::end(iv), prefix->iv);
           session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
+          if (packet.trace) {
+            packet.trace->encrypt += trace_clock::now() - encrypt_start;
+          }
         }
 
         if (x - next_shard_to_send + 1 >= send_batch_size || x + 1 == shards.size()) {
@@ -1736,6 +1751,9 @@ namespace stream {
             auto now = std::chrono::steady_clock::now();
             if (now < due) {
               timer->sleep_for(due - now);
+              if (packet.trace) {
+                packet.trace->pacing += trace_clock::now() - now;
+              }
             }
 
             burst.group_packets_sent = 0;
@@ -1746,6 +1764,7 @@ namespace stream {
           batch_info.block_count = current_batch_size;
 
           frame_send_batch_latency_logger.first_point_now();
+          const auto send_start = trace_clock::now();
           // Use a batched send if it's supported on this platform
           if (!platf::send_batch(batch_info)) {
             // Batched send is not available, so send each packet individually
@@ -1766,6 +1785,9 @@ namespace stream {
             }
           }
           frame_send_batch_latency_logger.second_point_now_and_log();
+          if (packet.trace) {
+            packet.trace->send += trace_clock::now() - send_start;
+          }
 
           burst.group_packets_sent += current_batch_size;
           burst.frame_packets_sent += current_batch_size;
@@ -1921,6 +1943,9 @@ namespace stream {
       session->video.subframe.frame_index = -1;
 
       frame_network_latency_logger.first_point_now();
+      if (packet->trace) {
+        packet->trace->mark(frame_trace::point_e::broadcast_popped);
+      }
 
       std::string_view payload {(char *) packet->data(), packet->data_size()};
       std::vector<uint8_t> payload_with_replacements;
@@ -1940,6 +1965,9 @@ namespace stream {
       }
 
       video_short_frame_header_t frame_header = make_frame_header(session, *packet, payload.size());
+      if (packet->trace) {
+        packet->trace->mark(frame_trace::point_e::header);
+      }
 
       auto fecPercentage = config::stream.fec_percentage;
 
@@ -2012,6 +2040,13 @@ namespace stream {
         });
 
         frame_network_latency_logger.second_point_now_and_log();
+
+        if (trace_reporter && packet->trace) {
+          packet->trace->mark(frame_trace::point_e::sent);
+          for (const auto &line : trace_reporter->add(*packet->trace)) {
+            BOOST_LOG(latency) << line;
+          }
+        }
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);

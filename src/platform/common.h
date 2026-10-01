@@ -21,6 +21,7 @@
 
 // local includes
 #include "src/config.h"
+#include "src/frame_trace.h"
 #include "src/logging.h"
 #include "src/thread_safe.h"
 #include "src/utility.h"
@@ -538,6 +539,7 @@ namespace platf {
 
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
     std::uint64_t capture_sequence {};  ///< Counts frames handed to the encoder by the capture thread, from 1. 0 if not set.
+    frame_trace::trace_t trace;  ///< Where the frame spent its time so far. See frame_trace.h.
 
     /**
      * @brief Destroy the image.
@@ -681,9 +683,10 @@ namespace platf {
      * @brief Encode the frame converted by the last convert() call.
      *
      * @param max_frame_size Largest encoded frame in bytes.
+     * @param trace Optional. Marked as the encode passes each step.
      * @return Encoded frame, or an empty vector on failure.
      */
-    virtual std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size) = 0;
+    virtual std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace) = 0;
   };
 
   /**

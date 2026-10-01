@@ -135,6 +135,13 @@ function removeCmd(index) {
 
     <!-- Notify Pre-Releases -->
     <Checkbox class="mb-3"
+              id="latency_log"
+              locale-prefix="config"
+              v-model="config.latency_log"
+              default="false"
+    ></Checkbox>
+
+    <Checkbox class="mb-3"
               id="notify_pre_releases"
               locale-prefix="config"
               v-model="config.notify_pre_releases"

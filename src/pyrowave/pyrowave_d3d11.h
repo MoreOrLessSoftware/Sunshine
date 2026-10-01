@@ -15,6 +15,9 @@
   #include <d3d11_4.h>
   #include <vulkan/vulkan_core.h>
 
+  // local includes
+  #include "src/frame_trace.h"
+
 // Handle type of an image in the PyroWave C API (pyrowave_image)
 struct pyrowave_image_opaque;
 
@@ -113,9 +116,10 @@ namespace pyrowave {
      * work on the input textures wait until PyroWave has read them.
      *
      * @param max_frame_size Largest encoded frame in bytes.
+     * @param trace Optional. Marked once the frame is flushed to the GPU, submitted, and encoded.
      * @return Encoded frame, or an empty vector on failure.
      */
-    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size);
+    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace = nullptr);
 
   private:
     /**

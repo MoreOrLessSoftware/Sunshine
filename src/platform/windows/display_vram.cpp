@@ -1371,10 +1371,11 @@ namespace platf::dxgi {
      * @brief Encode the frame converted by the last convert() call.
      *
      * @param max_frame_size Largest encoded frame in bytes.
+     * @param trace Optional. Marked as the encode passes each step.
      * @return Encoded frame, or an empty vector on failure.
      */
-    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size) override {
-      return pyrowave.encode_frame(max_frame_size);
+    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace) override {
+      return pyrowave.encode_frame(max_frame_size, trace);
     }
 
   private:
@@ -1450,6 +1451,7 @@ namespace platf::dxgi {
 
     resource_t::pointer res_p {};
     auto capture_status = dup.next_frame(frame_info, timeout, &res_p);
+    const auto acquired_timestamp = std::chrono::steady_clock::now();
     resource_t res {res_p};
 
     bool send_held_back_cursor = false;
@@ -1871,6 +1873,7 @@ namespace platf::dxgi {
 
     if (img_out) {
       img_out->frame_timestamp = frame_timestamp;
+      img_out->trace.mark(frame_trace::point_e::acquired, acquired_timestamp);
     }
 
     return capture_e::ok;
@@ -1971,7 +1974,8 @@ namespace platf::dxgi {
       return capture_status;
     }
 
-    auto frame_timestamp = std::chrono::steady_clock::now() - qpc_time_difference(qpc_counter(), frame_qpc);
+    const auto acquired_timestamp = std::chrono::steady_clock::now();
+    auto frame_timestamp = acquired_timestamp - qpc_time_difference(qpc_counter(), frame_qpc);
     D3D11_TEXTURE2D_DESC desc;
     src->GetDesc(&desc);
 
@@ -2010,6 +2014,7 @@ namespace platf::dxgi {
     img_out = img;
     if (img_out) {
       img_out->frame_timestamp = frame_timestamp;
+      img_out->trace.mark(frame_trace::point_e::acquired, acquired_timestamp);
     }
 
     return capture_e::ok;

@@ -254,7 +254,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file);
+  auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file, config::sunshine.latency_log);
   if (!log_deinit_guard) {
     BOOST_LOG(error) << "Logging failed to initialize"sv;
   }

@@ -365,7 +365,7 @@ namespace pyrowave {
     return uv_tex;
   }
 
-  std::vector<std::uint8_t> d3d11_encoder::encode_frame(std::size_t max_frame_size) {
+  std::vector<std::uint8_t> d3d11_encoder::encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace) {
     if (!handles->encoder) {
       return {};
     }
@@ -376,6 +376,9 @@ namespace pyrowave {
     const auto read_value = ++fence_value;
     device_ctx->Signal(fence, drawn_value);
     device_ctx->Flush();
+    if (trace) {
+      trace->mark(frame_trace::point_e::encode_flushed);
+    }
 
     auto semaphore = api->sync_object_get_semaphore(handles->sync);
     std::array<pyrowave_gpu_external_reference, 2> refs {{
@@ -395,6 +398,9 @@ namespace pyrowave {
 
     pyrowave_rate_control rate_control {max_frame_size};
     auto result = api->encoder_encode_gpu_synchronous(handles->encoder, &acquire, &release, &handles->buffers, &rate_control);
+    if (trace) {
+      trace->mark(frame_trace::point_e::encode_submitted);
+    }
 
     // Drawing the next frame into the textures waits until PyroWave has read this one
     device_ctx->Wait(fence, read_value);
@@ -411,6 +417,9 @@ namespace pyrowave {
     // Waits for the encode to finish
     std::size_t num_packets = 0;
     result = api->encoder_compute_num_packets(handles->encoder, boundary, &num_packets);
+    if (trace) {
+      trace->mark(frame_trace::point_e::encode_finished);
+    }
     if (result != PYROWAVE_SUCCESS || num_packets == 0) {
       BOOST_LOG(error) << "PyroWave: couldn't size the encoded frame ("sv << result << ')';
       return {};

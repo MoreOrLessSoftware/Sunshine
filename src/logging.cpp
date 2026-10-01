@@ -36,6 +36,7 @@ using namespace std::literals;
 namespace bl = boost::log;
 
 boost::shared_ptr<boost::log::sinks::asynchronous_sink<boost::log::sinks::text_ostream_backend>> sink;  ///< Sink.
+boost::shared_ptr<boost::log::sinks::asynchronous_sink<boost::log::sinks::text_ostream_backend>> latency_sink;  ///< Sink for the latency log, when enabled.
 
 bl::sources::severity_logger<int> verbose {0};  ///< Dominating output.
 bl::sources::severity_logger<int> debug {1};  ///< Follow what is happening.
@@ -43,6 +44,7 @@ bl::sources::severity_logger<int> info {2};  ///< Should be informed about.
 bl::sources::severity_logger<int> warning {3};  ///< Strange events.
 bl::sources::severity_logger<int> error {4};  ///< Recoverable errors.
 bl::sources::severity_logger<int> fatal {5};  ///< Unrecoverable errors.
+bl::sources::severity_logger<int> latency {logging::latency_severity};  ///< Video frame latency traces, written to their own file.
 #ifdef SUNSHINE_TESTS
 bl::sources::severity_logger<int> tests {10};  ///< Automatic tests output.
 #endif
@@ -58,6 +60,11 @@ namespace logging {
     log_flush();
     bl::core::get()->remove_sink(sink);
     sink.reset();
+    if (latency_sink) {
+      latency_sink->flush();
+      bl::core::get()->remove_sink(latency_sink);
+      latency_sink.reset();
+    }
   }
 
   /**
@@ -88,6 +95,9 @@ namespace logging {
         break;
       case 5:
         log_type = "Fatal: "sv;
+        break;
+      case latency_severity:
+        log_type = "Latency: "sv;
         break;
 #ifdef SUNSHINE_TESTS
       case 10:
@@ -150,7 +160,7 @@ namespace logging {
   };
 #endif
 
-  [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file) {
+  [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file, bool latency_log) {
     if (sink) {
       // Deinitialize the logging system before reinitializing it. This can probably only ever be hit in tests.
       deinit();
@@ -174,7 +184,8 @@ namespace logging {
 #endif
 
     sink->locked_backend()->add_stream(boost::make_shared<std::ofstream>(log_file));
-    sink->set_filter(severity >= min_log_level);
+    // Latency traces only ever go to their own file
+    sink->set_filter(severity >= min_log_level && severity != latency_severity);
     sink->set_formatter(&formatter);
 
     // Prevent the async sink's background thread from dying on backend exceptions.
@@ -187,6 +198,21 @@ namespace logging {
     sink->locked_backend()->auto_flush(true);
 
     bl::core::get()->add_sink(sink);
+
+    if (latency_log) {
+      const auto latency_path = latency_log_path(log_path);
+      if (const auto rotation_error = rotate_log_file(latency_path)) {
+        std::cerr << "Failed to rotate log file '" << latency_path.string() << "': " << rotation_error.message() << '\n';
+      }
+
+      latency_sink = boost::make_shared<text_sink>();
+      latency_sink->locked_backend()->add_stream(boost::make_shared<std::ofstream>(latency_path));
+      latency_sink->set_filter(severity == latency_severity);
+      latency_sink->set_formatter(&formatter);
+      latency_sink->set_exception_handler(bl::make_exception_suppressor());
+      latency_sink->locked_backend()->auto_flush(true);
+      bl::core::get()->add_sink(latency_sink);
+    }
 
 #ifdef __ANDROID__
     auto android_sink = boost::make_shared<sinks::synchronous_sink<android_sink_backend>>();

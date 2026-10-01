@@ -176,6 +176,7 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/video_subframe.h"
         "${CMAKE_SOURCE_DIR}/src/video_bitrate.h"
         "${CMAKE_SOURCE_DIR}/src/video_level.h"
+        "${CMAKE_SOURCE_DIR}/src/frame_trace.h"
         "${CMAKE_SOURCE_DIR}/src/input.cpp"
         "${CMAKE_SOURCE_DIR}/src/input.h"
         "${CMAKE_SOURCE_DIR}/src/audio.cpp"

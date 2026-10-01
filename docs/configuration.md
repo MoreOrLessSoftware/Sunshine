@@ -242,6 +242,34 @@ supported on the current platform.
     </tr>
 </table>
 
+### latency_log
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Trace each video frame through capture, encoding and sending, and write where its time went to a
+            latency log next to the main log file, with `-latency` added to its name. Every 10 seconds the log
+            summarizes each stage with its median, 99th percentile and maximum, and every frame much slower than
+            usual gets a line of its own, to find what causes spikes in host processing latency.
+            @note{Frames are traced with NVENC (except when sent in parts) and PyroWave. Takes effect after
+            restarting Sunshine.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            latency_log = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### notify_pre_releases
 
 <table>

@@ -387,6 +387,7 @@ namespace config {
     std::string bind_address;  ///< Local address Sunshine should bind to.
 
     std::string log_file;  ///< Path to the configured log file.
+    bool latency_log;  ///< Write where each video frame spends its time to a latency log next to the log file.
     bool notify_pre_releases;  ///< Notify users about pre-release updates.
     bool system_tray;  ///< Enable the system tray integration.
     std::vector<prep_cmd_t> prep_cmds;  ///< Preparation commands executed around application launch.

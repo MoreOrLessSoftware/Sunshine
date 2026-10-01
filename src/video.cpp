@@ -723,13 +723,14 @@ namespace video {
     /**
      * @brief Encode the last converted frame.
      *
+     * @param trace Optional. Marked as the encode passes each step.
      * @return Encoded frame, or an empty vector on failure.
      */
-    std::vector<std::uint8_t> encode_frame() {
+    std::vector<std::uint8_t> encode_frame(frame_trace::trace_t *trace = nullptr) {
       if (!device) {
         return {};
       }
-      return device->encode_frame(max_frame_size);
+      return device->encode_frame(max_frame_size, trace);
     }
 
   private:
@@ -1852,6 +1853,7 @@ namespace video {
           // trim allocated but unused portion of the pool based on timeouts
           trim_imgs();
           img_out->frame_timestamp.reset();
+          img_out->trace = {};
           return true;
         } else {
           // sleep and retry if image pool is full
@@ -1874,6 +1876,7 @@ namespace video {
         // Lets the encoder count frames replaced before it got to them
         if (frame_captured && img) {
           img->capture_sequence = ++captured_frames;
+          img->trace.mark(frame_trace::point_e::queued);
         }
 
         KITTY_WHILE_LOOP(auto capture_ctx = std::begin(capture_ctxs), capture_ctx != std::end(capture_ctxs), {
@@ -2079,9 +2082,10 @@ namespace video {
    * @param packets Output queue that receives the encoded packet.
    * @param channel_data Platform or protocol state attached to the packet.
    * @param frame_timestamp Capture timestamp associated with the encoded frame.
+   * @param trace Optional. The frame's trace, passed on with a whole frame.
    * @return 0 when packets are queued; nonzero when NVENC encoding fails.
    */
-  int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+  int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
     // With sub-frame readback, groups of slices are sent as they finish, while the rest is
     // still encoding. See video_subframe.h.
     size_t bytes_sent = 0;
@@ -2132,6 +2136,12 @@ namespace video {
     packet->channel_data = channel_data;
     packet->after_ref_frame_invalidation = encoded_frame.after_ref_frame_invalidation;
     packet->frame_timestamp = frame_timestamp;
+    if (trace) {
+      trace->bytes = packet->data_size();
+      trace->idr = packet->is_idr();
+      trace->mark(frame_trace::point_e::encoded);
+      packet->trace = *trace;
+    }
     packets->raise(std::move(packet));
 
     return 0;
@@ -2145,10 +2155,11 @@ namespace video {
    * @param packets Packets queued or emitted by the stream.
    * @param channel_data Channel data.
    * @param frame_timestamp Frame timestamp.
+   * @param trace Optional. The frame's trace, marked through the encode and passed on with the frame.
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
-  int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
-    auto frame = session.encode_frame();
+  int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
+    auto frame = session.encode_frame(trace);
     if (frame.empty()) {
       BOOST_LOG(error) << "PyroWave returned empty packet";
       return -1;
@@ -2159,6 +2170,11 @@ namespace video {
     auto packet = std::make_unique<packet_raw_generic>(std::move(frame), frame_nr, true);
     packet->channel_data = channel_data;
     packet->frame_timestamp = frame_timestamp;
+    if (trace) {
+      trace->bytes = packet->data_size();
+      trace->mark(frame_trace::point_e::encoded);
+      packet->trace = *trace;
+    }
     packets->raise(std::move(packet));
 
     return 0;
@@ -2181,15 +2197,16 @@ namespace video {
    * @param packets Packets queued or emitted by the stream.
    * @param channel_data Channel data.
    * @param frame_timestamp Frame timestamp.
+   * @param trace Optional. The frame's trace, for encoders that pass it on to the network thread.
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
-  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+  int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace = nullptr) {
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
-      return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
+      return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, trace);
     } else if (auto pyrowave_session = dynamic_cast<pyrowave_encode_session_t *>(&session)) {
-      return encode_pyrowave(frame_nr, *pyrowave_session, packets, channel_data, frame_timestamp);
+      return encode_pyrowave(frame_nr, *pyrowave_session, packets, channel_data, frame_timestamp, trace);
     }
 
     return -1;
@@ -2748,6 +2765,7 @@ namespace video {
 
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
       std::size_t frames_since_last_encode = 1;
+      std::optional<frame_trace::trace_t> trace;
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
@@ -2773,10 +2791,19 @@ namespace video {
             last_capture_sequence = img->capture_sequence;
           }
 
+          trace = img->trace;
+          if (frame_timestamp) {
+            trace->mark(frame_trace::point_e::present, *frame_timestamp);
+          }
+          trace->mark(frame_trace::point_e::popped);
+          trace->frame_index = frame_nr;
+          trace->frames_skipped = frames_since_last_encode - 1;
+
           if (session->convert(*img)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             return;
           }
+          trace->mark(frame_trace::point_e::converted);
         } else if (!images->running()) {
           break;
         } else if (keep_waiting()) {
@@ -2823,7 +2850,7 @@ namespace video {
         }
       }
 
-      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp)) {
+      if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, trace ? &*trace : nullptr)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
       }

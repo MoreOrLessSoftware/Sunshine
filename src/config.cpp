@@ -889,6 +889,7 @@ namespace config {
     "ipv4",  // Address family
     {},  // Bind address
     platf::appdata().string() + "/sunshine.log",  // log file
+    false,  // latency_log
     false,  // notify_pre_releases
     true,  // system_tray
     {},  // prep commands
@@ -1856,6 +1857,7 @@ namespace config {
     bool_f(vars, "high_resolution_scrolling", input.high_resolution_scrolling);
     bool_f(vars, "native_pen_touch", input.native_pen_touch);
 
+    bool_f(vars, "latency_log", sunshine.latency_log);
     bool_f(vars, "notify_pre_releases", sunshine.notify_pre_releases);
     bool_f(vars, "system_tray", sunshine.system_tray);
 

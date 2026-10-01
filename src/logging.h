@@ -26,6 +26,7 @@ extern boost::log::sources::severity_logger<int> info;  ///< Info.
 extern boost::log::sources::severity_logger<int> warning;  ///< Warning.
 extern boost::log::sources::severity_logger<int> error;  ///< Error.
 extern boost::log::sources::severity_logger<int> fatal;  ///< Fatal.
+extern boost::log::sources::severity_logger<int> latency;  ///< Video frame latency traces, written to their own file when enabled.
 #ifdef SUNSHINE_TESTS
 extern boost::log::sources::severity_logger<int> tests;
 #endif
@@ -37,6 +38,24 @@ extern boost::log::sources::severity_logger<int> tests;
  * @brief Handles the initialization and deinitialization of the logging system.
  */
 namespace logging {
+  /**
+   * @brief Severity of latency traces. They go to their own file, never to the main log.
+   */
+  inline constexpr int latency_severity {7};
+
+  /**
+   * @brief Find the file latency traces are written to, next to the main log file.
+   *
+   * @param log_file Path to the main log file.
+   * @return The path with "-latency" added to the file name, before the extension.
+   */
+  inline std::filesystem::path latency_log_path(const std::filesystem::path &log_file) {
+    auto name = log_file.stem();
+    name += "-latency";
+    name += log_file.extension();
+    return log_file.parent_path() / name;
+  }
+
   /**
    * @brief The number of previous log files retained during rotation.
    */
@@ -109,12 +128,13 @@ namespace logging {
    * @brief Rotate the current log file and initialize the logging system.
    * @param min_log_level The minimum log level to output.
    * @param log_file The log file to write to.
+   * @param latency_log Whether to also write latency traces to their own file. See latency_log_path().
    * @return An object that will deinitialize the logging system when it goes out of scope.
    * @examples
    * log_init(2, "sunshine.log");
    * @examples_end
    */
-  [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file);
+  [[nodiscard]] std::unique_ptr<deinit_t> init(int min_log_level, const std::string &log_file, bool latency_log = false);
 
   /**
    * @brief Setup AV logging.
