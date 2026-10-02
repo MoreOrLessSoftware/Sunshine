@@ -60,6 +60,8 @@ namespace frame_trace {
     std::size_t bytes = 0;  ///< Encoded size of the frame.
     std::size_t frames_skipped = 0;  ///< Frames captured while the encoder was busy and replaced by this one.
     bool idr = false;  ///< Whether the frame is a key frame.
+    std::uint32_t rtp_timestamp = 0;  ///< RTP timestamp the frame was sent with, 90 kHz.
+    std::size_t packets = 0;  ///< Packets the frame was sent as, FEC included.
 
     /**
      * @brief Record that the frame passed a point.
@@ -287,4 +289,72 @@ namespace frame_trace {
     std::size_t slow_frames = 0;  ///< Slow frames this interval, logged or not.
     std::optional<double> typical_ms;  ///< Median latency of the last interval.
   };
+  /**
+   * @brief Header of the per-frame CSV. See csv_row().
+   *
+   * @return The header line, with a newline.
+   */
+  inline std::string csv_header() {
+    return "frame,rtp_us,present_us,present_interval_us,"
+           "acquired_us,queued_us,popped_us,converted_us,flushed_us,submitted_us,gpu_done_us,encoded_us,"
+           "broadcast_popped_us,header_us,sent_us,bytes,packets,fec_us,encrypt_us,pacing_us,send_us,replaced,idr\n";
+  }
+
+  /**
+   * @brief Format one sent frame as a row of the per-frame CSV.
+   *
+   * @details `rtp_us` is the RTP timestamp in microseconds, as Moonlight computes a frame's
+   *          presentation time (timestamp * 1000 / 90), so rows can be matched with the client's
+   *          own traces. `present_us` is when the frame was presented on the host's clock, and each
+   *          later point is microseconds after it, or -1 if the frame didn't pass it.
+   *
+   * @param trace The frame's trace, marked as sent.
+   * @param previous_present When the previous sent frame was presented, or unset for the first.
+   * @return The row, with a newline.
+   */
+  inline std::string csv_row(const trace_t &trace, trace_clock::time_point previous_present) {
+    using us = std::chrono::microseconds;
+    const auto present = trace.at[static_cast<std::size_t>(point_e::present)];
+    const auto has_present = trace.has(point_e::present);
+    const auto since_present = [&](point_e point) -> long long {
+      if (!has_present || !trace.has(point)) {
+        return -1;
+      }
+      return std::chrono::duration_cast<us>(trace.at[static_cast<std::size_t>(point)] - present).count();
+    };
+    const auto total_us = [](trace_clock::duration d) {
+      return static_cast<long long>(std::chrono::duration_cast<us>(d).count());
+    };
+
+    const long long present_us = has_present ? std::chrono::duration_cast<us>(present.time_since_epoch()).count() : -1;
+    const long long interval_us = has_present && previous_present.time_since_epoch().count() != 0 ? std::chrono::duration_cast<us>(present - previous_present).count() : -1;
+    const auto rtp_us = static_cast<unsigned long long>(trace.rtp_timestamp) * 1000 / 90;
+
+    return std::format(
+      "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+      trace.frame_index,
+      rtp_us,
+      present_us,
+      interval_us,
+      since_present(point_e::acquired),
+      since_present(point_e::queued),
+      since_present(point_e::popped),
+      since_present(point_e::converted),
+      since_present(point_e::encode_flushed),
+      since_present(point_e::encode_submitted),
+      since_present(point_e::encode_finished),
+      since_present(point_e::encoded),
+      since_present(point_e::broadcast_popped),
+      since_present(point_e::header),
+      since_present(point_e::sent),
+      trace.bytes,
+      trace.packets,
+      total_us(trace.fec),
+      total_us(trace.encrypt),
+      total_us(trace.pacing),
+      total_us(trace.send),
+      trace.frames_skipped,
+      trace.idr ? 1 : 0
+    );
+  }
 }  // namespace frame_trace

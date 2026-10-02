@@ -1546,10 +1546,23 @@ namespace stream {
 
     logging::min_max_avg_periodic_logger<double> frame_processing_latency_logger(debug, "Frame processing latency", "ms");
 
-    // Where each frame spends its time, written to the latency log. See frame_trace.h.
+    // Where each frame spends its time, written to the latency log, and every sent frame to a
+    // CSV that can be matched with the client's own traces. See frame_trace.h.
     std::optional<frame_trace::reporter> trace_reporter;
+    std::ofstream trace_csv;
+    frame_trace::trace_clock::time_point previous_present {};
+    std::size_t trace_csv_rows = 0;
     if (config::sunshine.latency_log) {
       trace_reporter.emplace();
+
+      const auto csv_path = logging::frame_trace_csv_path(config::sunshine.log_file, std::chrono::system_clock::now());
+      trace_csv.open(csv_path);
+      if (trace_csv) {
+        trace_csv << frame_trace::csv_header();
+        BOOST_LOG(info) << "Writing each sent video frame to "sv << csv_path.string();
+      } else {
+        BOOST_LOG(warning) << "Couldn't open "sv << csv_path.string() << " for the per-frame trace"sv;
+      }
     }
     using trace_clock = frame_trace::trace_clock;
 
@@ -1679,6 +1692,7 @@ namespace stream {
       auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
       if (packet.trace) {
         packet.trace->fec += trace_clock::now() - fec_start;
+        packet.trace->packets += shards.size();
       }
       frame_fec_latency_logger.second_point_now_and_log();
 
@@ -2032,6 +2046,9 @@ namespace stream {
 
         bool frame_is_dupe;
         auto timestamp = rtp_timestamp(*packet, frame_is_dupe);
+        if (packet->trace) {
+          packet->trace->rtp_timestamp = timestamp;
+        }
 
         auto blockIndex = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
@@ -2045,6 +2062,16 @@ namespace stream {
           packet->trace->mark(frame_trace::point_e::sent);
           for (const auto &line : trace_reporter->add(*packet->trace)) {
             BOOST_LOG(latency) << line;
+          }
+
+          if (trace_csv) {
+            trace_csv << frame_trace::csv_row(*packet->trace, previous_present);
+            previous_present = packet->trace->at[static_cast<std::size_t>(frame_trace::point_e::present)];
+
+            // About once a second, so little is lost if Sunshine stops
+            if (++trace_csv_rows % 120 == 0) {
+              trace_csv.flush();
+            }
           }
         }
       } catch (const std::exception &e) {

@@ -252,6 +252,9 @@ supported on the current platform.
             latency log next to the main log file, with `-latency` added to its name. Every 10 seconds the log
             summarizes each stage with its median, 99th percentile and maximum, and every frame much slower than
             usual gets a line of its own, to find what causes spikes in host processing latency.
+            Each streaming session also writes every frame it sends to a CSV next to the log file, named for
+            when the session started, with the frame's RTP timestamp in microseconds as Moonlight computes it, so
+            the rows can be matched with client-side traces.
             @note{Frames are traced with NVENC (except when sent in parts) and PyroWave. Takes effect after
             restarting Sunshine.}
         </td>

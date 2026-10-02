@@ -7,8 +7,10 @@
 
 // standard includes
 #include <chrono>
+#include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // local includes
 #include <src/frame_trace.h>
@@ -196,4 +198,89 @@ TEST(FrameTraceReporterTest, UsesTheCurrentTimeForFramesNotSent) {
 TEST(LatencyLogPathTest, IsNextToTheMainLog) {
   EXPECT_EQ(logging::latency_log_path(std::filesystem::path {"logs"} / "sunshine.log"), std::filesystem::path {"logs"} / "sunshine-latency.log");
   EXPECT_EQ(logging::latency_log_path("sunshine"), std::filesystem::path {"sunshine-latency"});
+}
+
+namespace {
+  /**
+   * @brief Split a CSV line into its fields.
+   *
+   * @param line The line, with or without its newline.
+   * @return Each field.
+   */
+  std::vector<std::string> fields(std::string line) {
+    if (!line.empty() && line.back() == '\n') {
+      line.pop_back();
+    }
+    std::vector<std::string> out;
+    std::string field;
+    for (const char c : line) {
+      if (c == ',') {
+        out.push_back(field);
+        field.clear();
+      } else {
+        field += c;
+      }
+    }
+    out.push_back(field);
+    return out;
+  }
+}  // namespace
+
+TEST(FrameTraceCsvTest, RowsHaveAFieldForEveryColumn) {
+  const auto header = fields(frame_trace::csv_header());
+  const auto row = fields(frame_trace::csv_row(make_trace(start, 6ms), {}));
+  EXPECT_EQ(header.size(), row.size());
+  EXPECT_EQ(header.front(), "frame");
+  EXPECT_EQ(header.back(), "idr");
+}
+
+TEST(FrameTraceCsvTest, MatchesTheClientsPresentationTime) {
+  auto trace = make_trace(start, 6ms);
+  trace.frame_index = 7;
+  trace.rtp_timestamp = 90'000 * 5 + 45;  // 5 s and half a millisecond at 90 kHz
+  trace.packets = 412;
+  trace.frames_skipped = 1;
+
+  const auto row = fields(frame_trace::csv_row(trace, trace.at[static_cast<std::size_t>(point_e::present)] - 8333us));
+  EXPECT_EQ(row[0], "7");
+  EXPECT_EQ(row[1], "5000500");  // timestamp * 1000 / 90, as Moonlight computes it
+  EXPECT_EQ(row[3], "8333");
+  EXPECT_EQ(row[4], "100");  // acquired, after present
+  EXPECT_EQ(row[13], "6000");  // header, after present: the frame's latency
+  EXPECT_EQ(row[15], std::to_string(500 * 1024));
+  EXPECT_EQ(row[16], "412");
+  EXPECT_EQ(row[19], "1000");  // pacing
+  EXPECT_EQ(row[21], "1");
+  EXPECT_EQ(row[22], "0");
+}
+
+TEST(FrameTraceCsvTest, MarksPointsAFrameDidNotPass) {
+  frame_trace::trace_t trace;
+  trace.mark(point_e::present, start);
+  trace.mark(point_e::header, start + 2ms);
+
+  const auto row = fields(frame_trace::csv_row(trace, {}));
+  EXPECT_EQ(row[3], "-1");  // no previous frame
+  EXPECT_EQ(row[4], "-1");  // never acquired
+  EXPECT_EQ(row[8], "-1");  // not a PyroWave frame
+  EXPECT_EQ(row[13], "2000");
+}
+
+TEST(FrameTraceCsvTest, LeavesTimesOutWithoutAPresentTime) {
+  frame_trace::trace_t trace;
+  trace.mark(point_e::header, start);
+
+  const auto row = fields(frame_trace::csv_row(trace, start));
+  EXPECT_EQ(row[2], "-1");
+  EXPECT_EQ(row[3], "-1");
+  EXPECT_EQ(row[13], "-1");
+}
+
+TEST(FrameTraceCsvTest, FileIsNamedForTheSessionNextToTheLog) {
+  const auto path = logging::frame_trace_csv_path(std::filesystem::path {"logs"} / "sunshine.log", std::chrono::system_clock::now());
+  EXPECT_EQ(path.parent_path(), std::filesystem::path {"logs"});
+  const auto name = path.filename().string();
+  EXPECT_TRUE(name.starts_with("sunshine-frames-")) << name;
+  EXPECT_TRUE(name.ends_with(".csv")) << name;
+  EXPECT_EQ(name.size(), std::string_view {"sunshine-frames-20261001-153012.csv"}.size()) << name;
 }

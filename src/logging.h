@@ -6,6 +6,8 @@
 
 // standard includes
 #include <cstddef>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <format>
 #include <string>
@@ -53,6 +55,21 @@ namespace logging {
     auto name = log_file.stem();
     name += "-latency";
     name += log_file.extension();
+    return log_file.parent_path() / name;
+  }
+
+  /**
+   * @brief Find the file a streaming session's per-frame trace is written to, next to the main log file.
+   *
+   * @param log_file Path to the main log file.
+   * @param when When the session started, for a file name of its own.
+   * @return The path, such as "sunshine-frames-20261001-153012.csv" next to "sunshine.log".
+   */
+  inline std::filesystem::path frame_trace_csv_path(const std::filesystem::path &log_file, std::chrono::system_clock::time_point when) {
+    const auto time = std::chrono::system_clock::to_time_t(when);
+    const auto local = *std::localtime(&time);
+    auto name = log_file.stem();
+    name += std::format("-frames-{:04}{:02}{:02}-{:02}{:02}{:02}.csv", local.tm_year + 1900, local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec);
     return log_file.parent_path() / name;
   }
 
