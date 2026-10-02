@@ -165,19 +165,47 @@ TEST(MaxFrameBytesTest, FitsOneFrameIntervalAtTheSendRate) {
   EXPECT_NEAR(video::bitrate::max_frame_bytes(120.0, 800), 833333.3, 0.1);
 }
 
+TEST(MaxFrameBytesTest, UsesMostOfTheGamesFrameInterval) {
+  // 800 Mbps for 85% of 1/75 of a second
+  EXPECT_NEAR(video::bitrate::max_frame_bytes(120.0, 800, 75.0), 1133333.3, 0.1);
+}
+
+TEST(MaxFrameBytesTest, AlwaysAllowsOneStreamInterval) {
+  // 85% of 1/110 of a second is less than 1/120, so the stream's interval stands
+  EXPECT_NEAR(video::bitrate::max_frame_bytes(120.0, 800, 110.0), 833333.3, 0.1);
+  EXPECT_NEAR(video::bitrate::max_frame_bytes(120.0, 800, 144.0), 833333.3, 0.1);
+}
+
+TEST(MaxFrameBytesTest, StaysWithinTheStreamsPacketsWhenTheGameIsSlow) {
+  EXPECT_DOUBLE_EQ(video::bitrate::max_frame_bytes(120.0, 800, 20.0), 2'000'000.0);
+}
+
 TEST(MaxFrameBytesTest, StaysWithinTheStreamsPackets) {
   EXPECT_DOUBLE_EQ(video::bitrate::max_frame_bytes(120.0, 0), 2'000'000.0);
   EXPECT_DOUBLE_EQ(video::bitrate::max_frame_bytes(60.0, 10000), 2'000'000.0);
   EXPECT_DOUBLE_EQ(video::bitrate::max_frame_bytes(0.0, 800), 2'000'000.0);
 }
 
-TEST(BoostFactorTest, KeepsFramesSendableWithinOneInterval) {
-  // 740 Mbps at 120 fps is 770833 bytes a frame; at 800 Mbps, 833333 bytes can be sent in time
-  EXPECT_NEAR(video::bitrate::boost_factor(120.0, 60.0, 4.0, 740000, 800), 833333.3 / 770833.3, 0.0001);
+TEST(BoostFactorTest, KeepsFramesSendableBeforeTheNextOne) {
+  // 740 Mbps at 120 fps is 770833 bytes a frame; at 60 fps, 800 Mbps sends 1416667 bytes in
+  // 85% of a frame interval
+  EXPECT_NEAR(video::bitrate::boost_factor(120.0, 60.0, 4.0, 740000, 800), 1416666.7 / 770833.3, 0.0001);
+}
+
+TEST(BoostFactorTest, FillsTheClientBitrateWhenTheLinkHasRoom) {
+  // 650 Mbps at 120 fps with the game at 75 fps wants frames 1.6 times as large: 1083333 bytes,
+  // which 800 Mbps sends within 85% of 1/75 of a second
+  EXPECT_DOUBLE_EQ(video::bitrate::boost_factor(120.0, 75.0, 4.0, 650000, 800), 1.6);
+}
+
+TEST(BoostFactorTest, StopsAtWhatTheLinkCanSendInTime) {
+  // 700 Mbps would want 1166667 bytes a frame at 75 fps, but 800 Mbps sends 1133333 in time
+  EXPECT_NEAR(video::bitrate::boost_factor(120.0, 75.0, 4.0, 700000, 800), 1133333.3 / 729166.7, 0.0001);
 }
 
 TEST(BoostFactorTest, NeverBoostsFramesThatAlreadyTakeAnInterval) {
-  EXPECT_DOUBLE_EQ(video::bitrate::boost_factor(120.0, 60.0, 4.0, 900000, 800), 1.0);
+  // At the stream's rate a frame already takes the whole interval to send
+  EXPECT_DOUBLE_EQ(video::bitrate::boost_factor(120.0, 120.0, 4.0, 900000, 800), 1.0);
 }
 
 TEST(BoostFactorTest, MakesUpForMissingFrames) {
@@ -323,14 +351,15 @@ TEST(BoosterTest, DoesNotBoostTheFrameAfterAHitch) {
   EXPECT_EQ(changes, 0);
 }
 
-TEST(BoosterTest, KeepsBoostedFramesSendableWithinOneInterval) {
+TEST(BoosterTest, KeepsBoostedFramesSendableBeforeTheNextOne) {
   video::bitrate::booster booster {740000, 120.0, 4.0, 800};
   int changes = 0;
   feed(booster, start, 60.0, 120, changes);
 
-  // 800 Mbps sends 833333 bytes in 1/120 of a second, which is 800 Mbps of frames at 120 fps
-  EXPECT_LE(booster.bitrate_kbps(), 800000);
-  EXPECT_GT(booster.bitrate_kbps(), 740000);
+  // At 60 fps, 800 Mbps sends 1416667 bytes in 85% of a frame interval: 1360000 kbps at 120 fps,
+  // short of the doubled 1480000 kbps
+  EXPECT_NEAR(booster.bitrate_kbps(), 1360000, 1);
+  EXPECT_LE(booster.bitrate_kbps() * 60.0 / 120.0, 740000.0);
 }
 
 TEST(BoosterTest, WaitsForAFrameRate) {

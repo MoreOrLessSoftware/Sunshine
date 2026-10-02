@@ -1536,9 +1536,9 @@ supported on the current platform.
             60 frames a second in a 120 frame stream is encoded at half the bitrate. With this setting, Sunshine
             measures how often frames are actually encoded and raises the bitrate to match, so the stream stays
             close to the bitrate the client asked for. This value is the most the bitrate is multiplied by. Each
-            frame is also kept to a size that can be sent at [video_send_rate](#video_send_rate) within one frame
-            of the stream's framerate, so a boosted frame never delays the ones after it. Set video_send_rate to
-            suit your network for the boost to be sized correctly.
+            frame is also kept to a size that can be sent at [video_send_rate](#video_send_rate) within most of the
+            time until the game's next frame, so a boosted frame doesn't delay the ones after it. Set
+            video_send_rate to suit your network for the boost to be sized correctly.
             @note{Repeated frames count as encoded frames, so the boost is smaller when frames are repeated. Set
             [minimum_fps_target](#minimum_fps_target) to -1 for the full boost.}
             @note{Applies to NVENC and PyroWave. Other encoders always use the client's bitrate.}

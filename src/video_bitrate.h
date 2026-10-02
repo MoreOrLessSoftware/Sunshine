@@ -40,6 +40,7 @@ namespace video::bitrate {
   constexpr auto rate_window = std::chrono::seconds {1};  ///< How far back the slower measurement of the frame rate looks.
   constexpr std::size_t recent_intervals = 3;  ///< How many of the latest frame intervals the faster measurement uses.
   constexpr std::size_t median_intervals = 8;  ///< How many of the latest frame intervals the median measurement uses.
+  constexpr double send_time_share = 0.85;  ///< Share of the game's frame interval a boosted frame may take to send, leaving room for the frame to come out late.
   constexpr double change_threshold = 0.1;  ///< How far, as a fraction, the bitrate must rise before the encoder is changed. Lowering it always goes through.
 
   /**
@@ -143,19 +144,30 @@ namespace video::bitrate {
   /**
    * @brief Work out the largest frame a boost allows.
    *
-   * @details A frame must fit in the stream's packets, and must be sent within one interval of
-   *          the stream's frame rate. Frames can come at the full rate again at any moment, and
-   *          a larger frame would still be sending when the next one is ready, so that frame and
-   *          the ones after it would wait.
+   * @details A frame must fit in the stream's packets, and must be sent before the next frame
+   *          is ready, or that frame and the ones after it wait for it. The next frame comes
+   *          about one of the game's frame intervals later, so a frame may take most of that
+   *          interval to send: `send_time_share` of it, leaving room for the frame to come out
+   *          late. It may always take one interval of the stream's frame rate, which is what a
+   *          frame takes at the client's bitrate.
+   *
+   *          When the game speeds up again, the boost comes down within a few frames (see
+   *          frame_rate_estimator), so only those few take longer to send than frames then come.
    *
    * @param stream_fps The stream's frame rate.
    * @param send_rate_mbps The rate frames are sent at, in megabits per second, or 0 if unknown.
+   * @param source_fps How often the game produces frames, or 0 if unknown.
    * @return The largest frame in bytes.
    */
-  inline double max_frame_bytes(double stream_fps, int send_rate_mbps) {
+  inline double max_frame_bytes(double stream_fps, int send_rate_mbps, double source_fps = 0.0) {
     double bytes = max_boosted_frame_bytes;
     if (send_rate_mbps > 0 && stream_fps > 0.0) {
-      bytes = std::min(bytes, send_rate_mbps * 1'000'000.0 / 8.0 / stream_fps);
+      const double bytes_per_second = send_rate_mbps * 1'000'000.0 / 8.0;
+      double sendable = bytes_per_second / stream_fps;
+      if (source_fps > 0.0 && source_fps < stream_fps) {
+        sendable = std::max(sendable, bytes_per_second * send_time_share / source_fps);
+      }
+      bytes = std::min(bytes, sendable);
     }
     return bytes;
   }
@@ -180,7 +192,7 @@ namespace video::bitrate {
 
     // Frames are kept to a size the stream can send in time
     const auto frame_bytes = bitrate_kbps * 1000.0 / 8.0 / stream_fps;
-    return std::max(1.0, std::min(factor, max_frame_bytes(stream_fps, send_rate_mbps) / frame_bytes));
+    return std::max(1.0, std::min(factor, max_frame_bytes(stream_fps, send_rate_mbps, source_fps) / frame_bytes));
   }
 
   /**
