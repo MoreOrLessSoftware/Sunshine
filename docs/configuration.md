@@ -255,8 +255,9 @@ supported on the current platform.
             Each streaming session also writes every frame it sends to a CSV next to the log file, named for
             when the session started, with the frame's RTP timestamp in microseconds as Moonlight computes it, so
             the rows can be matched with client-side traces.
-            @note{Frames are traced with NVENC (except when sent in parts) and PyroWave. Takes effect after
-            restarting Sunshine.}
+            @note{Frames are traced with NVENC and PyroWave. For a frame sent in parts, the header is written
+            with its first part, so it can come before the frame is encoded. Takes effect after restarting
+            Sunshine.}
         </td>
     </tr>
     <tr>

@@ -2082,7 +2082,7 @@ namespace video {
    * @param packets Output queue that receives the encoded packet.
    * @param channel_data Platform or protocol state attached to the packet.
    * @param frame_timestamp Capture timestamp associated with the encoded frame.
-   * @param trace Optional. The frame's trace, passed on with a whole frame.
+   * @param trace Optional. The frame's trace, passed on with a whole frame, or with the first and last parts of a frame sent in parts.
    * @return 0 when packets are queued; nonzero when NVENC encoding fails.
    */
   int encode_nvenc(int64_t frame_nr, nvenc_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
@@ -2102,6 +2102,17 @@ namespace video {
       packet->subframe_part = parts_sent++;
       packet->subframe_final = final;
       packet->subframe_ready = std::chrono::steady_clock::now();
+
+      // The first part carries the trace to the network thread, and the last part what is
+      // only known once the whole frame is encoded
+      if (trace && (packet->subframe_part == 0 || final)) {
+        if (final) {
+          trace->bytes = data.size();
+          trace->idr = idr;
+          trace->mark(frame_trace::point_e::encoded);
+        }
+        packet->trace = *trace;
+      }
       packets->raise(std::move(packet));
     };
 

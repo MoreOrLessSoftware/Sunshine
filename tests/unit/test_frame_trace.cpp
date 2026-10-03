@@ -132,6 +132,43 @@ TEST(FrameTraceTest, LeavesOutStagesAFrameSkipped) {
   EXPECT_FALSE(contains(line, "frames")) << line;
 }
 
+TEST(FrameTraceTest, FrameSentInPartsTakesItsEncodeFromTheLastPart) {
+  // Carried by the first part, with what sending the parts cost added on the way
+  frame_trace::trace_t frame;
+  frame.mark(point_e::present, start);
+  frame.mark(point_e::converted, start + 400us);
+  frame.mark(point_e::header, start + 1ms);
+  frame.fec = 300us;
+  frame.packets = 120;
+  frame.frames_skipped = 1;
+  frame.rtp_timestamp = 900;
+
+  frame_trace::trace_t last_part = frame;
+  last_part.mark(point_e::encoded, start + 4ms);
+  last_part.bytes = 300 * 1024;
+  last_part.idr = true;
+  last_part.fec = 0us;
+  last_part.packets = 0;
+
+  frame_trace::finish_parts(frame, last_part);
+
+  EXPECT_EQ(frame.at[static_cast<std::size_t>(point_e::encoded)], start + 4ms);
+  EXPECT_EQ(frame.bytes, 300 * 1024);
+  EXPECT_TRUE(frame.idr);
+
+  // What the network thread collected stays
+  EXPECT_EQ(frame.at[static_cast<std::size_t>(point_e::header)], start + 1ms);
+  EXPECT_EQ(frame.fec, 300us);
+  EXPECT_EQ(frame.packets, 120);
+  EXPECT_EQ(frame.frames_skipped, 1);
+  EXPECT_EQ(frame.rtp_timestamp, 900);
+
+  // The header goes out before the frame is encoded, so latency is shorter than the encode
+  ASSERT_TRUE(frame.ms(point_e::present, point_e::header).has_value());
+  ASSERT_TRUE(frame.ms(point_e::converted, point_e::encoded).has_value());
+  EXPECT_LT(*frame.ms(point_e::present, point_e::header), *frame.ms(point_e::converted, point_e::encoded));
+}
+
 TEST(FrameTraceReporterTest, SummarizesEachInterval) {
   frame_trace::reporter reporter {10s};
   for (int i = 0; i < 100; ++i) {

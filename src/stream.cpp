@@ -529,6 +529,7 @@ namespace stream {
         bool announced = false;  ///< Whether the first frame sent in parts has been logged.
         std::chrono::steady_clock::time_point first_part_ready;  ///< When the frame's first part came out of the encoder.
         std::chrono::steady_clock::duration last_remaining {};  ///< The last frame's time from its first part to its last coming out of the encoder.
+        std::optional<frame_trace::trace_t> trace;  ///< The frame's trace, from its first part until its last is sent, when it is traced.
       } subframe;  ///< Frame being sent in parts.
     } video;  ///< Video worker thread state for the active stream.
 
@@ -1646,8 +1647,9 @@ namespace stream {
       return std::chrono::round<rtp_tick>(*packet.frame_timestamp - video_epoch).count();
     };
 
-    // Sends one FEC block of a frame, laid out as concat_and_insert() produces it, with room for each packet's header
-    auto send_fec_block = [&](session_t *session, video::packet_raw_t &packet, std::string_view current_payload, int blockIndex, int fec_blocks_needed, size_t fecPercentage, uint32_t timestamp, bool frame_is_dupe, send_burst_t &burst) {
+    // Sends one FEC block of a frame, laid out as concat_and_insert() produces it, with room for each packet's header.
+    // What sending it costs is added to trace, the frame's trace if it has one.
+    auto send_fec_block = [&](session_t *session, video::packet_raw_t &packet, std::string_view current_payload, int blockIndex, int fec_blocks_needed, size_t fecPercentage, uint32_t timestamp, bool frame_is_dupe, send_burst_t &burst, std::optional<frame_trace::trace_t> &trace) {
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto lowseq = session->video.lowseq;
 
@@ -1690,9 +1692,9 @@ namespace stream {
       const auto fec_start = trace_clock::now();
       // If video encryption is enabled, we allocate space for the encryption header before each shard
       auto shards = fec::encode(current_payload, blocksize, fecPercentage, session->config.minRequiredFecPackets, session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
-      if (packet.trace) {
-        packet.trace->fec += trace_clock::now() - fec_start;
-        packet.trace->packets += shards.size();
+      if (trace) {
+        trace->fec += trace_clock::now() - fec_start;
+        trace->packets += shards.size();
       }
       frame_fec_latency_logger.second_point_now_and_log();
 
@@ -1748,8 +1750,8 @@ namespace stream {
           prefix->frameNumber = (std::uint32_t) packet.frame_index();
           std::copy(std::begin(iv), std::end(iv), prefix->iv);
           session->video.cipher->encrypt(std::string_view {(char *) inspect, (size_t) blocksize}, prefix->tag, (uint8_t *) inspect, &iv);
-          if (packet.trace) {
-            packet.trace->encrypt += trace_clock::now() - encrypt_start;
+          if (trace) {
+            trace->encrypt += trace_clock::now() - encrypt_start;
           }
         }
 
@@ -1765,8 +1767,8 @@ namespace stream {
             auto now = std::chrono::steady_clock::now();
             if (now < due) {
               timer->sleep_for(due - now);
-              if (packet.trace) {
-                packet.trace->pacing += trace_clock::now() - now;
+              if (trace) {
+                trace->pacing += trace_clock::now() - now;
               }
             }
 
@@ -1799,8 +1801,8 @@ namespace stream {
             }
           }
           frame_send_batch_latency_logger.second_point_now_and_log();
-          if (packet.trace) {
-            packet.trace->send += trace_clock::now() - send_start;
+          if (trace) {
+            trace->send += trace_clock::now() - send_start;
           }
 
           burst.group_packets_sent += current_batch_size;
@@ -1823,6 +1825,28 @@ namespace stream {
       session->video.lowseq = lowseq + shards.size();
     };
 
+    // Marks a traced frame as sent, and writes it to the latency log and the per-frame CSV
+    auto report_sent = [&](frame_trace::trace_t &trace) {
+      if (!trace_reporter) {
+        return;
+      }
+
+      trace.mark(frame_trace::point_e::sent);
+      for (const auto &line : trace_reporter->add(trace)) {
+        BOOST_LOG(latency) << line;
+      }
+
+      if (trace_csv) {
+        trace_csv << frame_trace::csv_row(trace, previous_present);
+        previous_present = trace.at[static_cast<std::size_t>(frame_trace::point_e::present)];
+
+        // About once a second, so little is lost if Sunshine stops
+        if (++trace_csv_rows % 120 == 0) {
+          trace_csv.flush();
+        }
+      }
+    };
+
     // Sends what it can of a frame being sent in parts while it is encoded. See video_subframe.h.
     auto send_subframe_part = [&](session_t *session, video::packet_raw_t &packet) {
       auto &state = session->video.subframe;
@@ -1832,6 +1856,9 @@ namespace stream {
       const auto part_ready = packet.subframe_ready;
 
       if (packet.subframe_part == 0) {
+        // The first part carries the frame's trace, which collects what every part costs
+        state.trace = std::move(packet.trace);
+
         auto frame_header = make_frame_header(session, packet, std::nullopt, state.last_remaining);
         state.first_part_ready = part_ready;
 
@@ -1839,9 +1866,19 @@ namespace stream {
         state.blocks_sent = 0;
         state.pending.assign((uint8_t *) &frame_header, (uint8_t *) &frame_header + sizeof(frame_header));
         state.timestamp = rtp_timestamp(packet, state.dupe);
+        if (state.trace) {
+          state.trace->mark(frame_trace::point_e::header);
+          state.trace->rtp_timestamp = state.timestamp;
+        }
       } else if (state.frame_index != packet.frame_index()) {
         // The start of this frame never came through
         return;
+      }
+
+      // The frame's header went out with its first part, but the network thread has the
+      // whole frame only once it takes the last part
+      if (packet.subframe_final && state.trace) {
+        state.trace->mark(frame_trace::point_e::broadcast_popped);
       }
 
       state.pending.insert(std::end(state.pending), packet.data(), packet.data() + packet.data_size());
@@ -1905,7 +1942,7 @@ namespace stream {
             BOOST_LOG(error) << "Encoder produced a frame too large to send! Is the encoder broken? (needed "sv << block_packets << " packets in one block)"sv;
           }
 
-          send_fec_block(session, packet, std::string_view {(char *) block_payload.data(), block_payload.size()}, state.blocks_sent, fec_blocks_needed, block_fec_percentage, state.timestamp, state.dupe, burst);
+          send_fec_block(session, packet, std::string_view {(char *) block_payload.data(), block_payload.size()}, state.blocks_sent, fec_blocks_needed, block_fec_percentage, state.timestamp, state.dupe, burst, state.trace);
 
           ++state.blocks_sent;
           offset += bytes;
@@ -1923,6 +1960,12 @@ namespace stream {
         // frame's actual latency for the log
         if (state.frame_index == packet.frame_index()) {
           state.last_remaining = part_ready - state.first_part_ready;
+
+          // The last part carries what is only known once the frame is encoded
+          if (state.trace && packet.trace) {
+            frame_trace::finish_parts(*state.trace, *packet.trace);
+            report_sent(*state.trace);
+          }
         }
         if (packet.frame_timestamp) {
           frame_processing_latency_logger.collect_and_log(std::chrono::duration<double, std::milli>(part_ready - *packet.frame_timestamp).count());
@@ -1930,6 +1973,7 @@ namespace stream {
 
         state.frame_index = -1;
         state.pending.clear();
+        state.trace.reset();
       }
     };
 
@@ -1955,6 +1999,7 @@ namespace stream {
 
       // A frame that was being sent in parts will not be finished now
       session->video.subframe.frame_index = -1;
+      session->video.subframe.trace.reset();
 
       frame_network_latency_logger.first_point_now();
       if (packet->trace) {
@@ -2052,27 +2097,14 @@ namespace stream {
 
         auto blockIndex = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
-          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fecPercentage, timestamp, frame_is_dupe, burst);
+          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fecPercentage, timestamp, frame_is_dupe, burst, packet->trace);
           ++blockIndex;
         });
 
         frame_network_latency_logger.second_point_now_and_log();
 
-        if (trace_reporter && packet->trace) {
-          packet->trace->mark(frame_trace::point_e::sent);
-          for (const auto &line : trace_reporter->add(*packet->trace)) {
-            BOOST_LOG(latency) << line;
-          }
-
-          if (trace_csv) {
-            trace_csv << frame_trace::csv_row(*packet->trace, previous_present);
-            previous_present = packet->trace->at[static_cast<std::size_t>(frame_trace::point_e::present)];
-
-            // About once a second, so little is lost if Sunshine stops
-            if (++trace_csv_rows % 120 == 0) {
-              trace_csv.flush();
-            }
-          }
+        if (packet->trace) {
+          report_sent(*packet->trace);
         }
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();

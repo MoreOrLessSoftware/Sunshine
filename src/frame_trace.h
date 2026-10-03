@@ -40,9 +40,9 @@ namespace frame_trace {
     encode_flushed,  ///< PyroWave: the conversion was flushed to the GPU.
     encode_submitted,  ///< PyroWave: the encode was submitted.
     encode_finished,  ///< PyroWave: the GPU finished encoding.
-    encoded,  ///< The encoded frame was handed to the network thread.
-    broadcast_popped,  ///< The network thread took the frame.
-    header,  ///< The frame header was written. Host processing latency is measured to here.
+    encoded,  ///< The encoded frame was handed to the network thread. For a frame sent in parts, its last part.
+    broadcast_popped,  ///< The network thread took the frame. For a frame sent in parts, its last part.
+    header,  ///< The frame header was written. Host processing latency is measured to here. For a frame sent in parts, this is with its first part, before the rest is encoded.
     sent,  ///< The last packet of the frame was sent.
     count  ///< Number of points.
   };
@@ -97,6 +97,23 @@ namespace frame_trace {
       return std::chrono::duration<double, std::milli>(at[static_cast<std::size_t>(to)] - at[static_cast<std::size_t>(from)]).count();
     }
   };
+
+  /**
+   * @brief Complete the trace of a frame sent in parts with what its last part carries.
+   *
+   * @details The first part brings the trace to the network thread, which adds to it what
+   *          sending every part costs. Only the last part knows when the frame finished
+   *          encoding, how large it is and whether it is a key frame.
+   *
+   * @param frame The frame's trace, carried from its first part.
+   * @param last_part The trace the last part carries.
+   */
+  inline void finish_parts(trace_t &frame, const trace_t &last_part) {
+    const auto encoded = static_cast<std::size_t>(point_e::encoded);
+    frame.at[encoded] = last_part.at[encoded];
+    frame.bytes = last_part.bytes;
+    frame.idr = last_part.idr;
+  }
 
   /**
    * @brief A stage of the pipeline, reported as one value per frame.
