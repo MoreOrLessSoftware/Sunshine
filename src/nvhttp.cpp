@@ -1197,14 +1197,22 @@ namespace nvhttp {
       codec_mode_flags |= SCM_AV1_HIGH10_444;
     }
 
-    // PyroWave 4:2:0, with the bits the Aurora, Solarflare and nonary (vibeshine) hosts use
+    // PyroWave, with the bits the Aurora, Solarflare and nonary (vibeshine) hosts use
     constexpr uint32_t scm_pyrowave = 0x00800000;
+    constexpr uint32_t scm_pyrowave_444 = 0x01000000;
     constexpr uint32_t scm_pyrowave_10bit = 0x02000000;
+    constexpr uint32_t scm_pyrowave_10bit_444 = 0x04000000;
     if (video::active_pyrowave_mode >= 2) {
       codec_mode_flags |= scm_pyrowave;
     }
     if (video::active_pyrowave_mode == 3) {
       codec_mode_flags |= scm_pyrowave_10bit;
+    }
+    if (video::active_pyrowave_yuv444_mode >= 2) {
+      codec_mode_flags |= scm_pyrowave_444;
+    }
+    if (video::active_pyrowave_yuv444_mode == 3) {
+      codec_mode_flags |= scm_pyrowave_10bit_444;
     }
     return codec_mode_flags;
   }
@@ -1870,6 +1878,10 @@ namespace nvhttp {
 
     void reload_client_state() {
       load_state();
+    }
+
+    uint32_t codec_mode_flags() {
+      return get_codec_mode_flags();
     }
   }  // namespace test_support
 #endif

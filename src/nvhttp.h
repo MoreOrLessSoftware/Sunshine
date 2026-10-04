@@ -414,6 +414,13 @@ namespace nvhttp {
      * @brief Reload paired-client authorization state from the configured state file.
      */
     void reload_client_state();
+
+    /**
+     * @brief Build the codec mode flags advertised in /serverinfo from the probed encoder modes.
+     *
+     * @return Moonlight codec capability bitmask (ServerCodecModeSupport).
+     */
+    uint32_t codec_mode_flags();
   }  // namespace test_support
 #endif
 }  // namespace nvhttp

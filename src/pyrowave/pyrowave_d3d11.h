@@ -62,10 +62,11 @@ namespace pyrowave {
   /**
    * @brief PyroWave encoder that reads frames from D3D11 textures.
    *
-   * The caller draws each frame's Y plane into y_texture() and its interleaved UV plane into
-   * uv_texture() with its own D3D11 device, then calls encode_frame(). PyroWave runs in Vulkan
-   * on the same GPU and reads the textures through shared handles; a shared D3D11 fence
-   * orders the two.
+   * For 4:2:0, the caller draws each frame's Y plane into y_texture() and its interleaved UV
+   * plane into uv_texture() with its own D3D11 device. For 4:4:4, it draws Y, U and V into the
+   * R, G and B channels of y_texture(), and there is no uv_texture(). It then calls
+   * encode_frame(). PyroWave runs in Vulkan on the same GPU and reads the textures through
+   * shared handles; a shared D3D11 fence orders the two.
    */
   class d3d11_encoder {
   public:
@@ -87,25 +88,31 @@ namespace pyrowave {
     /**
      * @brief Create the input textures and the PyroWave encoder.
      *
-     * @param width Encoded frame width, must be even.
-     * @param height Encoded frame height, must be even.
-     * @param format DXGI_FORMAT_NV12 for 8-bit or DXGI_FORMAT_P010 for 10-bit input, given as
-     *               those formats' two planes in separate textures.
+     * @param width Encoded frame width, must be even for 4:2:0.
+     * @param height Encoded frame height, must be even for 4:2:0.
+     * @param format The input layout. DXGI_FORMAT_NV12 (8-bit) or DXGI_FORMAT_P010 (10-bit)
+     *               for 4:2:0, given as those formats' two planes in separate textures.
+     *               DXGI_FORMAT_AYUV (8-bit) or DXGI_FORMAT_Y410 (10-bit) for 4:4:4, given
+     *               as Y, U and V in the R, G and B channels of an R8G8B8A8_UNORM or
+     *               R10G10B10A2_UNORM texture.
      * @return True on success.
      */
     bool create_encoder(int width, int height, DXGI_FORMAT format);
 
     /**
-     * @brief Texture the caller draws each frame's Y plane into (R8 or R16, full size).
+     * @brief Texture the caller draws each frame into.
      *
-     * @return Y texture owned by the encoder.
+     * For 4:2:0, the Y plane (R8 or R16, full size). For 4:4:4, the whole frame as YUVA
+     * (R8G8B8A8 or R10G10B10A2, full size).
+     *
+     * @return Y or YUV texture owned by the encoder.
      */
     ID3D11Texture2D *y_texture() const;
 
     /**
      * @brief Texture the caller draws each frame's UV plane into (R8G8 or R16G16, half size).
      *
-     * @return UV texture owned by the encoder.
+     * @return UV texture owned by the encoder, or nullptr for 4:4:4.
      */
     ID3D11Texture2D *uv_texture() const;
 
@@ -145,8 +152,8 @@ namespace pyrowave {
     ID3D11DeviceContext4Ptr device_ctx;  ///< Immediate context of that device.
     ID3D11FencePtr fence;  ///< Fence shared with PyroWave to order access to the input textures.
     std::uint64_t fence_value = 0;  ///< Last value signaled or waited for on the fence.
-    ID3D11Texture2DPtr y_tex;  ///< Shared Y input texture.
-    ID3D11Texture2DPtr uv_tex;  ///< Shared UV input texture.
+    ID3D11Texture2DPtr y_tex;  ///< Shared Y (4:2:0) or YUV (4:4:4) input texture.
+    ID3D11Texture2DPtr uv_tex;  ///< Shared UV input texture, 4:2:0 only.
 
     struct handles_t;
     std::unique_ptr<handles_t> handles;  ///< PyroWave objects.

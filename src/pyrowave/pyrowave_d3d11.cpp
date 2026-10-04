@@ -121,9 +121,9 @@ namespace pyrowave {
   struct d3d11_encoder::handles_t {
     pyrowave_device device = nullptr;  ///< Vulkan device on the same GPU as the D3D11 device.
     pyrowave_sync_object sync = nullptr;  ///< The shared D3D11 fence, imported as a timeline semaphore.
-    std::array<pyrowave_image, 2> images {};  ///< The Y and UV input textures, imported through their shared handles.
+    std::array<pyrowave_image, 2> images {};  ///< The Y and UV (4:2:0) or the YUV (4:4:4, only the first) input textures, imported through their shared handles.
     pyrowave_encoder encoder = nullptr;  ///< The encoder.
-    pyrowave_gpu_buffers buffers {};  ///< Y, Cb and Cr views of the input textures.
+    pyrowave_gpu_buffers buffers {};  ///< Y, Cb and Cr views of the input textures, each picking one channel.
   };
 
   d3d11_encoder::d3d11_encoder():
@@ -307,35 +307,57 @@ namespace pyrowave {
       return false;
     }
 
-    if ((width & 1) || (height & 1)) {
+    if (format != DXGI_FORMAT_NV12 && format != DXGI_FORMAT_P010 && format != DXGI_FORMAT_AYUV && format != DXGI_FORMAT_Y410) {
+      BOOST_LOG(error) << "PyroWave: unsupported input format "sv << format;
+      return false;
+    }
+    const bool yuv444 = format == DXGI_FORMAT_AYUV || format == DXGI_FORMAT_Y410;
+    const bool ten_bit = format == DXGI_FORMAT_P010 || format == DXGI_FORMAT_Y410;
+
+    if (!yuv444 && ((width & 1) || (height & 1))) {
       BOOST_LOG(error) << "PyroWave: 4:2:0 needs an even width and height, not "sv << width << 'x' << height;
       return false;
     }
 
-    if (format != DXGI_FORMAT_NV12 && format != DXGI_FORMAT_P010) {
-      BOOST_LOG(error) << "PyroWave: unsupported input format "sv << format;
-      return false;
-    }
-    const bool ten_bit = format == DXGI_FORMAT_P010;
+    pyrowave_result result;
+    if (yuv444) {
+      // One texture with Y, U and V in its R, G and B channels, drawn in a single pass.
+      // Each plane is a view of it that picks one channel.
+      const auto yuv_format = ten_bit ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R8G8B8A8_UNORM;
+      const auto vk_yuv_format = ten_bit ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : VK_FORMAT_R8G8B8A8_UNORM;
+      if (!import_texture(width, height, yuv_format, vk_yuv_format, y_tex, handles->images[0])) {
+        return false;
+      }
 
-    // Y and UV go in separate textures rather than one NV12/P010 texture. Importing
-    // planar D3D11 textures into Vulkan is where drivers disagree about the plane layout.
-    const auto y_format = ten_bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
-    const auto uv_format = ten_bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
-    const auto vk_y_format = ten_bit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM;
-    const auto vk_uv_format = ten_bit ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM;
-    if (!import_texture(width, height, y_format, vk_y_format, y_tex, handles->images[0]) ||
-        !import_texture(width / 2, height / 2, uv_format, vk_uv_format, uv_tex, handles->images[1])) {
-      return false;
-    }
+      pyrowave_image_view view;
+      result = api->image_get_image_view(handles->images[0], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &view);
+      if (result == PYROWAVE_SUCCESS) {
+        constexpr std::array swizzles {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B};
+        for (std::size_t i = 0; i < swizzles.size(); i++) {
+          handles->buffers.planes[i] = view;
+          handles->buffers.planes[i].swizzle = swizzles[i];
+        }
+      }
+    } else {
+      // Y and UV go in separate textures rather than one NV12/P010 texture. Importing
+      // planar D3D11 textures into Vulkan is where drivers disagree about the plane layout.
+      const auto y_format = ten_bit ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R8_UNORM;
+      const auto uv_format = ten_bit ? DXGI_FORMAT_R16G16_UNORM : DXGI_FORMAT_R8G8_UNORM;
+      const auto vk_y_format = ten_bit ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM;
+      const auto vk_uv_format = ten_bit ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM;
+      if (!import_texture(width, height, y_format, vk_y_format, y_tex, handles->images[0]) ||
+          !import_texture(width / 2, height / 2, uv_format, vk_uv_format, uv_tex, handles->images[1])) {
+        return false;
+      }
 
-    // Cb and Cr are the R and G channels of the UV texture
-    auto result = api->image_get_image_view(handles->images[0], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[0]);
-    if (result == PYROWAVE_SUCCESS) {
-      result = api->image_get_image_view(handles->images[1], VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[1]);
-    }
-    if (result == PYROWAVE_SUCCESS) {
-      result = api->image_get_image_view(handles->images[1], VK_IMAGE_ASPECT_PLANE_2_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[2]);
+      // Cb and Cr are the R and G channels of the UV texture
+      result = api->image_get_image_view(handles->images[0], VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[0]);
+      if (result == PYROWAVE_SUCCESS) {
+        result = api->image_get_image_view(handles->images[1], VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[1]);
+      }
+      if (result == PYROWAVE_SUCCESS) {
+        result = api->image_get_image_view(handles->images[1], VK_IMAGE_ASPECT_PLANE_2_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &handles->buffers.planes[2]);
+      }
     }
     if (result != PYROWAVE_SUCCESS) {
       BOOST_LOG(error) << "PyroWave: couldn't view the input textures ("sv << result << ')';
@@ -346,14 +368,14 @@ namespace pyrowave {
     encoder_info.device = handles->device;
     encoder_info.width = width;
     encoder_info.height = height;
-    encoder_info.chroma = PYROWAVE_CHROMA_SUBSAMPLING_420;
+    encoder_info.chroma = yuv444 ? PYROWAVE_CHROMA_SUBSAMPLING_444 : PYROWAVE_CHROMA_SUBSAMPLING_420;
     result = api->encoder_create(&encoder_info, &handles->encoder);
     if (result != PYROWAVE_SUCCESS) {
       BOOST_LOG(error) << "PyroWave: couldn't create the encoder ("sv << result << ')';
       return false;
     }
 
-    BOOST_LOG(info) << "PyroWave: encoding "sv << width << 'x' << height << (ten_bit ? " 10-bit"sv : " 8-bit"sv) << " 4:2:0"sv;
+    BOOST_LOG(info) << "PyroWave: encoding "sv << width << 'x' << height << (ten_bit ? " 10-bit"sv : " 8-bit"sv) << (yuv444 ? " 4:4:4"sv : " 4:2:0"sv);
     return true;
   }
 
@@ -381,19 +403,23 @@ namespace pyrowave {
     }
 
     auto semaphore = api->sync_object_get_semaphore(handles->sync);
-    std::array<pyrowave_gpu_external_reference, 2> refs {{
-      {handles->images[0], VK_QUEUE_FAMILY_EXTERNAL},
-      {handles->images[1], VK_QUEUE_FAMILY_EXTERNAL},
-    }};
+    std::array<pyrowave_gpu_external_reference, 2> refs {};
+    std::size_t num_refs = 0;
+    for (auto image : handles->images) {
+      // 4:4:4 has a single input texture
+      if (image) {
+        refs[num_refs++] = {image, VK_QUEUE_FAMILY_EXTERNAL};
+      }
+    }
 
     pyrowave_gpu_sync_operation acquire {};
     acquire.images = refs.data();
-    acquire.num_images = refs.size();
+    acquire.num_images = num_refs;
     acquire.sync = {semaphore, drawn_value};
 
     pyrowave_gpu_sync_operation release {};
     release.images = refs.data();
-    release.num_images = refs.size();
+    release.num_images = num_refs;
     release.sync = {semaphore, read_value};
 
     pyrowave_rate_control rate_control {max_frame_size};

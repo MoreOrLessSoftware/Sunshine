@@ -178,7 +178,9 @@ INSTANTIATE_TEST_SUITE_P(
     std::make_tuple(2, 1, 1, false, true, 1),
     std::make_tuple(1, 0, 0, false, false, 0),
     std::make_tuple(3, 0, 1, true, false, 1),
-    std::make_tuple(3, 0, 1, false, false, 0)
+    std::make_tuple(3, 0, 1, false, false, 0),
+    std::make_tuple(3, 1, 1, true, false, 0),
+    std::make_tuple(3, 1, 1, false, true, 1)
   )
 );
 
@@ -478,6 +480,16 @@ TEST(PyrowaveCodecTest, VideoFormat3SelectsThePyrowaveCodec) {
   config.videoFormat = 3;
   EXPECT_EQ(encoder.codec_from_config(config).name, "pyrowave_test");
 }
+
+#ifdef _WIN32
+TEST(PyrowaveCodecTest, ConvertsToPackedFormatsFor444) {
+  const auto &formats = *video::pyrowave_encoder.platform_formats;
+  EXPECT_EQ(formats.pix_fmt_8bit, platf::pix_fmt_e::nv12);
+  EXPECT_EQ(formats.pix_fmt_10bit, platf::pix_fmt_e::p010);
+  EXPECT_EQ(formats.pix_fmt_yuv444_8bit, platf::pix_fmt_e::ayuv);
+  EXPECT_EQ(formats.pix_fmt_yuv444_10bit, platf::pix_fmt_e::y410);
+}
+#endif
 
 using LowFpsBitrateBoostConfigParam = std::tuple<std::string_view, double>;
 

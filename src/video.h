@@ -295,17 +295,21 @@ namespace video {
      * @param dev_type Platform memory type.
      * @param pix_fmt_8bit Platform 8-bit pixel format.
      * @param pix_fmt_10bit Platform 10-bit pixel format.
+     * @param pix_fmt_yuv444_8bit Platform 8-bit YUV444 pixel format.
+     * @param pix_fmt_yuv444_10bit Platform 10-bit YUV444 pixel format.
      */
     encoder_platform_formats_pyrowave(
       const platf::mem_type_e &dev_type,
       const platf::pix_fmt_e &pix_fmt_8bit,
-      const platf::pix_fmt_e &pix_fmt_10bit
+      const platf::pix_fmt_e &pix_fmt_10bit,
+      const platf::pix_fmt_e &pix_fmt_yuv444_8bit,
+      const platf::pix_fmt_e &pix_fmt_yuv444_10bit
     ) {
       encoder_platform_formats_t::dev_type = dev_type;
       encoder_platform_formats_t::pix_fmt_8bit = pix_fmt_8bit;
       encoder_platform_formats_t::pix_fmt_10bit = pix_fmt_10bit;
-      encoder_platform_formats_t::pix_fmt_yuv444_8bit = platf::pix_fmt_e::unknown;
-      encoder_platform_formats_t::pix_fmt_yuv444_10bit = platf::pix_fmt_e::unknown;
+      encoder_platform_formats_t::pix_fmt_yuv444_8bit = pix_fmt_yuv444_8bit;
+      encoder_platform_formats_t::pix_fmt_yuv444_10bit = pix_fmt_yuv444_10bit;
     }
   };
 
@@ -732,6 +736,7 @@ namespace video {
   extern int active_hevc_mode;
   extern int active_av1_mode;
   extern int active_pyrowave_mode;  // 1 - unavailable, 2 - 8-bit, 3 - 8-bit and 10-bit
+  extern int active_pyrowave_yuv444_mode;  // PyroWave 4:4:4: 1 - unavailable, 2 - 8-bit, 3 - 8-bit and 10-bit
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
 

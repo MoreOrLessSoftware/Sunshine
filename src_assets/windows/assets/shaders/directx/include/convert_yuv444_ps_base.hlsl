@@ -15,6 +15,8 @@ cbuffer color_matrix_cbuffer : register(b0) {
 
 #ifdef PLANAR_VIEWPORTS
 uint main_ps(vertex_t input) : SV_Target
+#elif defined(UNORM_PACKED)
+float4 main_ps(vertex_t input) : SV_Target
 #else
 uint4 main_ps(vertex_t input) : SV_Target
 #endif
@@ -29,7 +31,10 @@ uint4 main_ps(vertex_t input) : SV_Target
     float u = dot(color_vec_u.xyz, rgb) + color_vec_u.w;
     float v = dot(color_vec_v.xyz, rgb) + color_vec_v.w;
 
-#ifdef Y410
+#if defined(UNORM_PACKED)
+    // UNORM YUVA, for encoders that read Y, U and V as the R, G and B channels
+    return float4(y, u, v, 1);
+#elif defined(Y410)
     return uint4(u, y, v, 0);
 #else
     // AYUV

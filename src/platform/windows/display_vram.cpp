@@ -139,6 +139,9 @@ namespace platf::dxgi {
   blob_t convert_yuv420_planar_y_vs_hlsl;  ///< Convert yuv420 planar y vs hlsl.
   blob_t convert_yuv444_packed_ayuv_ps_hlsl;  ///< Convert YUV444 packed ayuv ps hlsl.
   blob_t convert_yuv444_packed_ayuv_ps_linear_hlsl;  ///< Convert YUV444 packed ayuv ps linear hlsl.
+  blob_t convert_yuv444_packed_unorm_ps_hlsl;  ///< Convert YUV444 packed unorm ps hlsl.
+  blob_t convert_yuv444_packed_unorm_ps_linear_hlsl;  ///< Convert YUV444 packed unorm ps linear hlsl.
+  blob_t convert_yuv444_packed_unorm_ps_perceptual_quantizer_hlsl;  ///< Convert YUV444 packed unorm ps perceptual quantizer hlsl.
   blob_t convert_yuv444_packed_vs_hlsl;  ///< Convert YUV444 packed vs hlsl.
   blob_t convert_yuv444_planar_ps_hlsl;  ///< Convert YUV444 planar ps hlsl.
   blob_t convert_yuv444_planar_ps_linear_hlsl;  ///< Convert YUV444 planar ps linear hlsl.
@@ -557,7 +560,7 @@ namespace platf::dxgi {
     void apply_colorspace(const ::video::sunshine_colorspace_t &colorspace) {
       auto color_vectors = ::video::color_vectors_from_colorspace(colorspace, true);
 
-      if (format == DXGI_FORMAT_AYUV || format == DXGI_FORMAT_R16_UINT || format == DXGI_FORMAT_Y410) {
+      if ((format == DXGI_FORMAT_AYUV || format == DXGI_FORMAT_R16_UINT || format == DXGI_FORMAT_Y410) && !unorm_yuv444) {
         color_vectors = ::video::color_vectors_from_colorspace(colorspace, false);
       }
 
@@ -672,13 +675,27 @@ namespace platf::dxgi {
           break;
 
         case DXGI_FORMAT_AYUV:
-          // Packed 8-bit YUV 4:4:4
-          create_vertex_shader_helper(convert_yuv444_packed_vs_hlsl, convert_Y_or_YUV_vs);
-          create_pixel_shader_helper(convert_yuv444_packed_ayuv_ps_hlsl, convert_Y_or_YUV_ps);
-          create_pixel_shader_helper(convert_yuv444_packed_ayuv_ps_linear_hlsl, convert_Y_or_YUV_fp16_ps);
-          break;
-
         case DXGI_FORMAT_Y410:
+          if (unorm_yuv444) {
+            // Packed YUVA 4:4:4 in UNORM channels, 8 or 10 bits
+            create_vertex_shader_helper(convert_yuv444_packed_vs_hlsl, convert_Y_or_YUV_vs);
+            create_pixel_shader_helper(convert_yuv444_packed_unorm_ps_hlsl, convert_Y_or_YUV_ps);
+            if (format == DXGI_FORMAT_Y410 && display->is_hdr()) {
+              create_pixel_shader_helper(convert_yuv444_packed_unorm_ps_perceptual_quantizer_hlsl, convert_Y_or_YUV_fp16_ps);
+            } else {
+              create_pixel_shader_helper(convert_yuv444_packed_unorm_ps_linear_hlsl, convert_Y_or_YUV_fp16_ps);
+            }
+            break;
+          }
+
+          if (format == DXGI_FORMAT_AYUV) {
+            // Packed 8-bit YUV 4:4:4
+            create_vertex_shader_helper(convert_yuv444_packed_vs_hlsl, convert_Y_or_YUV_vs);
+            create_pixel_shader_helper(convert_yuv444_packed_ayuv_ps_hlsl, convert_Y_or_YUV_ps);
+            create_pixel_shader_helper(convert_yuv444_packed_ayuv_ps_linear_hlsl, convert_Y_or_YUV_fp16_ps);
+            break;
+          }
+
           // Packed 10-bit YUV 4:4:4
           create_vertex_shader_helper(convert_yuv444_packed_vs_hlsl, convert_Y_or_YUV_vs);
           create_pixel_shader_helper(convert_yuv444_packed_y410_ps_hlsl, convert_Y_or_YUV_ps);
@@ -765,7 +782,7 @@ namespace platf::dxgi {
           break;
 
         case DXGI_FORMAT_AYUV:
-          rtv_Y_or_YUV_format = DXGI_FORMAT_R8G8B8A8_UINT;
+          rtv_Y_or_YUV_format = unorm_yuv444 ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_R8G8B8A8_UINT;
           break;
 
         case DXGI_FORMAT_R16_UINT:
@@ -773,7 +790,7 @@ namespace platf::dxgi {
           break;
 
         case DXGI_FORMAT_Y410:
-          rtv_Y_or_YUV_format = DXGI_FORMAT_R10G10B10A2_UINT;
+          rtv_Y_or_YUV_format = unorm_yuv444 ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R10G10B10A2_UINT;
           break;
 
         default:
@@ -1096,6 +1113,14 @@ namespace platf::dxgi {
 
     DXGI_FORMAT format;  ///< DXGI format required by the encoder input texture.
 
+    /**
+     * @brief For AYUV and Y410, draw Y, U and V as UNORM values into the R, G and B channels
+     *        of an R8G8B8A8_UNORM or R10G10B10A2_UNORM texture instead of AYUV/Y410 integers.
+     *
+     * Set before init_output() and apply_colorspace().
+     */
+    bool unorm_yuv444 = false;
+
     device_t device;  ///< D3D11 device used for encoder-side texture conversion.
     device_ctx_t device_ctx;  ///< D3D11 device context used to issue conversion commands.
 
@@ -1309,7 +1334,8 @@ namespace platf::dxgi {
    * @brief D3D11 encode device that converts captured textures for PyroWave.
    *
    * The usual D3D11 conversion (scaling, cursor, colorspace) draws each frame into Y and
-   * UV textures that PyroWave reads through shared handles.
+   * UV textures (4:2:0), or one packed YUV texture (4:4:4), that PyroWave reads through
+   * shared handles.
    */
   class d3d_pyrowave_encode_device_t: public pyrowave_encode_device_t {
   public:
@@ -1329,11 +1355,19 @@ namespace platf::dxgi {
         case pix_fmt_e::p010:
           format = DXGI_FORMAT_P010;
           break;
+        case pix_fmt_e::ayuv:
+          format = DXGI_FORMAT_AYUV;
+          break;
+        case pix_fmt_e::y410:
+          format = DXGI_FORMAT_Y410;
+          break;
         default:
           BOOST_LOG(error) << "PyroWave doesn't support pixel format: "sv << from_pix_fmt(pix_fmt);
           return false;
       }
 
+      // PyroWave reads 4:4:4 as UNORM Y, U and V channels rather than AYUV/Y410 integers
+      base.unorm_yuv444 = true;
       if (base.init(display, adapter_p, pix_fmt)) {
         return false;
       }
@@ -1382,7 +1416,7 @@ namespace platf::dxgi {
     // Declared first so it outlives the encoder, which reads what it draws
     d3d_base_encode_device base;  ///< Converts captured frames into the encoder's input texture.
     ::pyrowave::d3d11_encoder pyrowave;  ///< PyroWave encoder reading that texture.
-    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  ///< NV12 or P010.
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;  ///< NV12 or P010 for 4:2:0, AYUV or Y410 for 4:4:4.
   };
 
   /**
@@ -2301,6 +2335,9 @@ namespace platf::dxgi {
     compile_vertex_shader_helper(convert_yuv420_planar_y_vs);
     compile_pixel_shader_helper(convert_yuv444_packed_ayuv_ps);
     compile_pixel_shader_helper(convert_yuv444_packed_ayuv_ps_linear);
+    compile_pixel_shader_helper(convert_yuv444_packed_unorm_ps);
+    compile_pixel_shader_helper(convert_yuv444_packed_unorm_ps_linear);
+    compile_pixel_shader_helper(convert_yuv444_packed_unorm_ps_perceptual_quantizer);
     compile_vertex_shader_helper(convert_yuv444_packed_vs);
     compile_pixel_shader_helper(convert_yuv444_planar_ps);
     compile_pixel_shader_helper(convert_yuv444_planar_ps_linear);

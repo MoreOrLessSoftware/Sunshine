@@ -1579,12 +1579,14 @@ namespace video {
     std::make_unique<encoder_platform_formats_pyrowave>(
       platf::mem_type_e::dxgi,
       platf::pix_fmt_e::nv12,
-      platf::pix_fmt_e::p010
+      platf::pix_fmt_e::p010,
+      platf::pix_fmt_e::ayuv,
+      platf::pix_fmt_e::y410
     ),
     {},  // AV1
     {},  // HEVC
     {},  // H.264
-    PARALLEL_ENCODING,  // flags
+    PARALLEL_ENCODING | YUV444_SUPPORT,  // flags
     {
       {},  // Common options
       {},  // SDR-specific options
@@ -1623,6 +1625,7 @@ namespace video {
   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
   int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
   int active_pyrowave_mode = 1;  ///< PyroWave mode found by the most recent encoder probe.
+  int active_pyrowave_yuv444_mode = 1;  ///< PyroWave 4:4:4 mode found by the most recent encoder probe.
   bool last_encoder_probe_supported_ref_frames_invalidation = false;  ///< Whether the last probe found reference-frame invalidation support.
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};  ///< YUV444 support discovered for each probed codec.
 
@@ -3633,12 +3636,15 @@ namespace video {
   }
 
   /**
-   * @brief Check whether PyroWave can encode on this system, in 8-bit and in 10-bit.
+   * @brief Check whether PyroWave can encode on this system, in 8-bit and in 10-bit, each
+   *        in 4:2:0 and 4:4:4.
    *
-   * Sets active_pyrowave_mode, which decides what is advertised to clients.
+   * Sets active_pyrowave_mode and active_pyrowave_yuv444_mode, which decide what is advertised
+   * to clients, and the PyroWave encoder's capability flags.
    */
   void probe_pyrowave() {
     active_pyrowave_mode = 1;
+    active_pyrowave_yuv444_mode = 1;
 
 #ifdef _WIN32
     auto &encoder = pyrowave_encoder;
@@ -3669,7 +3675,23 @@ namespace video {
       active_pyrowave_mode = 3;
     }
 
-    BOOST_LOG(info) << "Found PyroWave encoder"sv << (active_pyrowave_mode == 3 ? " (8-bit and 10-bit)"sv : " (8-bit)"sv);
+    config.dynamicRange = 0;
+    config.chromaSamplingType = 1;
+    if (validate_config(disp, encoder, config) >= 0) {
+      encoder.pyrowave[encoder_t::YUV444] = true;
+      active_pyrowave_yuv444_mode = 2;
+
+      config.dynamicRange = 1;
+      if (validate_config(disp, encoder, config) >= 0) {
+        encoder.pyrowave[encoder_t::DYNAMIC_RANGE_YUV444] = true;
+        active_pyrowave_yuv444_mode = 3;
+      }
+    }
+
+    BOOST_LOG(info) << "Found PyroWave encoder"sv << (active_pyrowave_mode == 3 ? " (8-bit and 10-bit)"sv : " (8-bit)"sv)
+                    << (active_pyrowave_yuv444_mode == 3 ? ", 4:4:4 (8-bit and 10-bit)"sv :
+                        active_pyrowave_yuv444_mode == 2 ? ", 4:4:4 (8-bit)"sv :
+                                                           ", no 4:4:4"sv);
 #endif
   }
 
