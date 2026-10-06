@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -463,6 +464,62 @@ TEST(PyrowaveMaxFrameSizeTest, SizesFramesForAChangedBitrate) {
 
 TEST(PyrowaveMaxFrameSizeTest, ToleratesAZeroFrameRate) {
   EXPECT_EQ(video::pyrowave_max_frame_size(8000, AVRational {0, 1}), 1000000u);
+}
+
+TEST(FrameBufferPoolTest, StartsEmpty) {
+  video::frame_buffer_pool_t pool;
+  EXPECT_EQ(pool.size(), 0u);
+  EXPECT_EQ(pool.take().capacity(), 0u);
+}
+
+TEST(FrameBufferPoolTest, HandsBackTheSameMemory) {
+  video::frame_buffer_pool_t pool;
+  std::vector<std::uint8_t> buffer(1024, 7);
+  const auto *data = buffer.data();
+
+  pool.give(std::move(buffer));
+  ASSERT_EQ(pool.size(), 1u);
+
+  auto taken = pool.take();
+  EXPECT_EQ(taken.data(), data);
+  EXPECT_EQ(taken.size(), 1024u);
+  EXPECT_EQ(pool.size(), 0u);
+}
+
+TEST(FrameBufferPoolTest, IgnoresBuffersWithoutMemory) {
+  video::frame_buffer_pool_t pool;
+  pool.give({});
+  EXPECT_EQ(pool.size(), 0u);
+}
+
+TEST(FrameBufferPoolTest, KeepsNoMoreThanItsLimit) {
+  video::frame_buffer_pool_t pool {2};
+  for (int i = 0; i < 3; i++) {
+    pool.give(std::vector<std::uint8_t>(16));
+  }
+  EXPECT_EQ(pool.size(), 2u);
+}
+
+TEST(FrameBufferPoolTest, AGenericPacketGivesItsBytesBack) {
+  auto pool = std::make_shared<video::frame_buffer_pool_t>();
+  std::vector<std::uint8_t> frame {1, 2, 3};
+  const auto *data = frame.data();
+
+  {
+    video::packet_raw_generic packet {std::move(frame), 5, true, pool};
+    EXPECT_EQ(packet.data(), data);
+    EXPECT_EQ(packet.data_size(), 3u);
+    EXPECT_EQ(pool->size(), 0u);
+  }
+
+  ASSERT_EQ(pool->size(), 1u);
+  EXPECT_EQ(pool->take().data(), data);
+}
+
+TEST(FrameBufferPoolTest, AGenericPacketWithoutAPoolFreesItsBytes) {
+  // Nothing to give back to, so destroying it must simply not crash
+  video::packet_raw_generic packet {std::vector<std::uint8_t> {1, 2, 3}, 5, true};
+  EXPECT_EQ(packet.data_size(), 3u);
 }
 
 TEST(PyrowaveCodecTest, VideoFormat3SelectsThePyrowaveCodec) {

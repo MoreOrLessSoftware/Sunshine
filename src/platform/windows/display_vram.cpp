@@ -1405,11 +1405,12 @@ namespace platf::dxgi {
      * @brief Encode the frame converted by the last convert() call.
      *
      * @param max_frame_size Largest encoded frame in bytes.
+     * @param frame Receives the encoded frame, reusing its storage.
      * @param trace Optional. Marked as the encode passes each step.
-     * @return Encoded frame, or an empty vector on failure.
+     * @return True on success.
      */
-    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace) override {
-      return pyrowave.encode_frame(max_frame_size, trace);
+    bool encode_frame(std::size_t max_frame_size, std::vector<std::uint8_t> &frame, frame_trace::trace_t *trace) override {
+      return pyrowave.encode_frame(max_frame_size, frame, trace);
     }
 
   private:

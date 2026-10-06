@@ -6,8 +6,10 @@
 #ifdef _WIN32
 
   // standard includes
+  #include <chrono>
   #include <cstdint>
   #include <memory>
+  #include <string_view>
   #include <vector>
 
   // platform includes
@@ -20,6 +22,8 @@
 
 // Handle type of an image in the PyroWave C API (pyrowave_image)
 struct pyrowave_image_opaque;
+// Where one packet of an encoded frame is in the bitstream, in the PyroWave C API
+struct pyrowave_packet;
 
 namespace pyrowave {
 
@@ -58,6 +62,26 @@ namespace pyrowave {
    * @return True when the library loaded and its API version matches the one built against.
    */
   bool library_available();
+
+  /**
+   * @brief Move packets of an encoded frame together so they follow one another.
+   *
+   * PyroWave places each packet at its own offset in the bitstream. Blocks are
+   * self-delimiting, so the frame is the packets back to back.
+   *
+   * @param frame Bitstream the packets were written to. Shrunk to the joined frame.
+   * @param packets Packets in the order they were written, which is by increasing offset.
+   * @param count Number of packets.
+   */
+  void join_packets(std::vector<std::uint8_t> &frame, const ::pyrowave_packet *packets, std::size_t count);
+
+  /**
+   * @brief Name a Vulkan queue priority for the log.
+   *
+   * @param priority Queue priority.
+   * @return Lowercase name, or "unknown".
+   */
+  std::string_view priority_name(VkQueueGlobalPriority priority);
 
   /**
    * @brief PyroWave encoder that reads frames from D3D11 textures.
@@ -123,12 +147,19 @@ namespace pyrowave {
      * work on the input textures wait until PyroWave has read them.
      *
      * @param max_frame_size Largest encoded frame in bytes.
+     * @param frame Receives the encoded frame. Its storage is reused, so passing in the
+     *              buffer of an earlier frame avoids allocating a new one.
      * @param trace Optional. Marked once the frame is flushed to the GPU, submitted, and encoded.
-     * @return Encoded frame, or an empty vector on failure.
+     * @return True on success.
      */
-    std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace = nullptr);
+    bool encode_frame(std::size_t max_frame_size, std::vector<std::uint8_t> &frame, frame_trace::trace_t *trace = nullptr);
 
   private:
+    /**
+     * @brief Log PyroWave's GPU timings at debug level every few seconds, then start over.
+     */
+    void report_performance();
+
     /**
      * @brief Destroy the PyroWave objects, waiting for the GPU to be done with them.
      */
@@ -154,6 +185,7 @@ namespace pyrowave {
     std::uint64_t fence_value = 0;  ///< Last value signaled or waited for on the fence.
     ID3D11Texture2DPtr y_tex;  ///< Shared Y (4:2:0) or YUV (4:4:4) input texture.
     ID3D11Texture2DPtr uv_tex;  ///< Shared UV input texture, 4:2:0 only.
+    std::chrono::steady_clock::time_point last_report;  ///< When GPU timings were last logged.
 
     struct handles_t;
     std::unique_ptr<handles_t> handles;  ///< PyroWave objects.

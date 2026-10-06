@@ -683,10 +683,12 @@ namespace platf {
      * @brief Encode the frame converted by the last convert() call.
      *
      * @param max_frame_size Largest encoded frame in bytes.
+     * @param frame Receives the encoded frame. Its storage is reused, so it may be the
+     *              buffer of an earlier frame.
      * @param trace Optional. Marked as the encode passes each step.
-     * @return Encoded frame, or an empty vector on failure.
+     * @return True on success.
      */
-    virtual std::vector<std::uint8_t> encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace) = 0;
+    virtual bool encode_frame(std::size_t max_frame_size, std::vector<std::uint8_t> &frame, frame_trace::trace_t *trace) = 0;
   };
 
   /**

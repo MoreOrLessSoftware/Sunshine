@@ -669,7 +669,8 @@ namespace video {
     pyrowave_encode_session_t(std::unique_ptr<platf::pyrowave_encode_device_t> encode_device, const config_t &config):
         device {std::move(encode_device)},
         fps {framerate_to_rational(config)},
-        max_frame_size {pyrowave_max_frame_size(config.bitrate, fps)} {
+        max_frame_size {pyrowave_max_frame_size(config.bitrate, fps)},
+        frame_buffers {std::make_shared<frame_buffer_pool_t>()} {
     }
 
     /**
@@ -721,7 +722,7 @@ namespace video {
     }
 
     /**
-     * @brief Encode the last converted frame.
+     * @brief Encode the last converted frame into a buffer from the session's pool.
      *
      * @param trace Optional. Marked as the encode passes each step.
      * @return Encoded frame, or an empty vector on failure.
@@ -730,13 +731,29 @@ namespace video {
       if (!device) {
         return {};
       }
-      return device->encode_frame(max_frame_size, trace);
+
+      auto frame = frame_buffers->take();
+      if (!device->encode_frame(max_frame_size, frame, trace)) {
+        frame_buffers->give(std::move(frame));
+        return {};
+      }
+      return frame;
+    }
+
+    /**
+     * @brief Get the pool that sent frames give their buffers back to.
+     *
+     * @return The session's frame buffer pool, which may outlive the session.
+     */
+    const std::shared_ptr<frame_buffer_pool_t> &buffers() const {
+      return frame_buffers;
     }
 
   private:
     std::unique_ptr<platf::pyrowave_encode_device_t> device;  ///< Device that converts and encodes frames.
     AVRational fps;  ///< The stream's frame rate.
     std::size_t max_frame_size;  ///< Largest encoded frame in bytes.
+    std::shared_ptr<frame_buffer_pool_t> frame_buffers;  ///< Buffers of sent frames, reused for the next ones.
   };
 
   /**
@@ -2181,7 +2198,8 @@ namespace video {
 
     // Every frame decodes on its own, so each one is sent as an IDR frame. After a lost
     // frame the client picks up again with the next one.
-    auto packet = std::make_unique<packet_raw_generic>(std::move(frame), frame_nr, true);
+    // The network thread gives the buffer back once the frame is sent
+    auto packet = std::make_unique<packet_raw_generic>(std::move(frame), frame_nr, true, session.buffers());
     packet->channel_data = channel_data;
     packet->frame_timestamp = frame_timestamp;
     if (trace) {
@@ -2192,6 +2210,36 @@ namespace video {
     packets->raise(std::move(packet));
 
     return 0;
+  }
+
+  frame_buffer_pool_t::frame_buffer_pool_t(std::size_t max_buffers):
+      max_buffers {max_buffers} {
+  }
+
+  std::vector<std::uint8_t> frame_buffer_pool_t::take() {
+    std::lock_guard lock {mutex};
+    if (buffers.empty()) {
+      return {};
+    }
+    auto buffer = std::move(buffers.back());
+    buffers.pop_back();
+    return buffer;
+  }
+
+  void frame_buffer_pool_t::give(std::vector<std::uint8_t> &&buffer) {
+    if (buffer.capacity() == 0) {
+      return;
+    }
+
+    std::lock_guard lock {mutex};
+    if (buffers.size() < max_buffers) {
+      buffers.push_back(std::move(buffer));
+    }
+  }
+
+  std::size_t frame_buffer_pool_t::size() const {
+    std::lock_guard lock {mutex};
+    return buffers.size();
   }
 
   std::size_t pyrowave_max_frame_size(const config_t &config) {

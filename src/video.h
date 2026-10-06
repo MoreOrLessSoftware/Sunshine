@@ -6,8 +6,12 @@
 
 // standard includes
 #include <chrono>
+#include <cstdint>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 // local includes
 #include "input.h"
@@ -640,6 +644,49 @@ namespace video {
   };
 
   /**
+   * @brief Encoded frame buffers kept for reuse once their frames are sent.
+   *
+   * A buffer of a megabyte or more comes from the OS each time it is allocated, which
+   * faults in and clears every page. Reusing a few of them avoids that on every frame.
+   * Buffers are taken on the encoding thread and given back on the network thread.
+   */
+  class frame_buffer_pool_t {
+  public:
+    /**
+     * @brief Create an empty pool.
+     *
+     * @param max_buffers Most buffers kept at once. Further ones given back are freed.
+     */
+    explicit frame_buffer_pool_t(std::size_t max_buffers = 4);
+
+    /**
+     * @brief Take a buffer to encode a frame into.
+     *
+     * @return A buffer given back earlier, still holding its last frame, or an empty one.
+     */
+    std::vector<std::uint8_t> take();
+
+    /**
+     * @brief Give back a buffer once its frame is no longer needed.
+     *
+     * @param buffer Buffer to keep. Kept only if it holds memory and the pool isn't full.
+     */
+    void give(std::vector<std::uint8_t> &&buffer);
+
+    /**
+     * @brief Count the buffers waiting to be taken.
+     *
+     * @return Number of buffers in the pool.
+     */
+    std::size_t size() const;
+
+  private:
+    mutable std::mutex mutex;  ///< Guards buffers.
+    std::vector<std::vector<std::uint8_t>> buffers;  ///< Buffers waiting to be taken.
+    std::size_t max_buffers;  ///< Most buffers kept at once.
+  };
+
+  /**
    * @brief Generic encoded packet bytes and metadata.
    */
   struct packet_raw_generic: packet_raw_t {
@@ -649,11 +696,22 @@ namespace video {
      * @param frame_data Encoded frame bytes produced by a non-FFmpeg encoder.
      * @param frame_index Monotonic frame index assigned to the encoded frame.
      * @param idr Whether the packet begins an IDR frame.
+     * @param pool Optional. Pool the frame bytes are given back to when the packet is destroyed.
      */
-    packet_raw_generic(std::vector<uint8_t> &&frame_data, int64_t frame_index, bool idr):
+    packet_raw_generic(std::vector<uint8_t> &&frame_data, int64_t frame_index, bool idr, std::shared_ptr<frame_buffer_pool_t> pool = nullptr):
         frame_data {std::move(frame_data)},
         index {frame_index},
-        idr {idr} {
+        idr {idr},
+        pool {std::move(pool)} {
+    }
+
+    /**
+     * @brief Give the frame bytes back to the pool, if there is one.
+     */
+    ~packet_raw_generic() override {
+      if (pool) {
+        pool->give(std::move(frame_data));
+      }
     }
 
     /**
@@ -695,6 +753,7 @@ namespace video {
     std::vector<uint8_t> frame_data;  ///< Encoded frame bytes owned by this packet.
     int64_t index;  ///< Monotonic frame index assigned to this packet.
     bool idr;  ///< Whether the packet belongs to an IDR frame.
+    std::shared_ptr<frame_buffer_pool_t> pool;  ///< Where frame_data goes back to, or null to free it.
   };
 
   /**

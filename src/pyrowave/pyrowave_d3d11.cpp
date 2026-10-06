@@ -31,7 +31,8 @@ namespace pyrowave {
   struct api_t {
     decltype(&::pyrowave_get_api_version) get_api_version;  ///< pyrowave_get_api_version
     decltype(&::pyrowave_create_device_by_compat2) create_device_by_compat2;  ///< pyrowave_create_device_by_compat2
-    decltype(&::pyrowave_device_set_queue_type) device_set_queue_type;  ///< pyrowave_device_set_queue_type
+    decltype(&::pyrowave_device_get_global_priority) device_get_global_priority;  ///< pyrowave_device_get_global_priority
+    decltype(&::pyrowave_device_report_performance_stats) device_report_performance_stats;  ///< pyrowave_device_report_performance_stats
     decltype(&::pyrowave_device_destroy) device_destroy;  ///< pyrowave_device_destroy
     decltype(&::pyrowave_sync_object_create) sync_object_create;  ///< pyrowave_sync_object_create
     decltype(&::pyrowave_sync_object_get_semaphore) sync_object_get_semaphore;  ///< pyrowave_sync_object_get_semaphore
@@ -76,7 +77,8 @@ namespace pyrowave {
 
         resolve(api.get_api_version, "pyrowave_get_api_version");
         resolve(api.create_device_by_compat2, "pyrowave_create_device_by_compat2");
-        resolve(api.device_set_queue_type, "pyrowave_device_set_queue_type");
+        resolve(api.device_get_global_priority, "pyrowave_device_get_global_priority");
+        resolve(api.device_report_performance_stats, "pyrowave_device_report_performance_stats");
         resolve(api.device_destroy, "pyrowave_device_destroy");
         resolve(api.sync_object_create, "pyrowave_sync_object_create");
         resolve(api.sync_object_get_semaphore, "pyrowave_sync_object_get_semaphore");
@@ -113,6 +115,33 @@ namespace pyrowave {
 
   bool library_available() {
     return load_api() != nullptr;
+  }
+
+  void join_packets(std::vector<std::uint8_t> &frame, const ::pyrowave_packet *packets, std::size_t count) {
+    std::size_t size = 0;
+    for (std::size_t i = 0; i < count; i++) {
+      // A packet never starts before the end of the ones already moved, so it only moves back
+      if (packets[i].offset != size) {
+        std::memmove(frame.data() + size, frame.data() + packets[i].offset, packets[i].size);
+      }
+      size += packets[i].size;
+    }
+    frame.resize(size);
+  }
+
+  std::string_view priority_name(VkQueueGlobalPriority priority) {
+    switch (priority) {
+      case VK_QUEUE_GLOBAL_PRIORITY_LOW:
+        return "low"sv;
+      case VK_QUEUE_GLOBAL_PRIORITY_MEDIUM:
+        return "medium"sv;
+      case VK_QUEUE_GLOBAL_PRIORITY_HIGH:
+        return "high"sv;
+      case VK_QUEUE_GLOBAL_PRIORITY_REALTIME:
+        return "realtime"sv;
+      default:
+        return "unknown"sv;
+    }
   }
 
   /**
@@ -206,12 +235,21 @@ namespace pyrowave {
 
     // High priority puts PyroWave on an async compute queue, so a busy graphics queue
     // doesn't hold up encoding. Without the privilege for it, the driver gives a lower one.
-    auto result = api->create_device_by_compat2(0, 0, nullptr, nullptr, &pyro_luid, VK_QUEUE_GLOBAL_PRIORITY_HIGH, &handles->device);
+    constexpr auto requested_priority = VK_QUEUE_GLOBAL_PRIORITY_HIGH;
+    auto result = api->create_device_by_compat2(0, 0, nullptr, nullptr, &pyro_luid, requested_priority, &handles->device);
     if (result != PYROWAVE_SUCCESS) {
       BOOST_LOG(error) << "PyroWave: couldn't create a Vulkan device for this GPU ("sv << result << ')';
       return false;
     }
-    api->device_set_queue_type(handles->device, VK_QUEUE_COMPUTE_BIT);
+
+    const auto priority = api->device_get_global_priority(handles->device);
+    if (priority < requested_priority) {
+      BOOST_LOG(info) << "PyroWave: the driver gave the compute queue "sv << priority_name(priority) << " priority rather than "sv
+                      << priority_name(requested_priority) << ", so encoding can wait behind other GPU work"sv;
+    } else {
+      BOOST_LOG(info) << "PyroWave: encoding on a compute queue at "sv << priority_name(priority) << " priority"sv;
+    }
+    last_report = std::chrono::steady_clock::now();
 
     // D3D11 signals this when a frame is drawn, and PyroWave when it has read it
     status = device->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(&fence));
@@ -387,9 +425,9 @@ namespace pyrowave {
     return uv_tex;
   }
 
-  std::vector<std::uint8_t> d3d11_encoder::encode_frame(std::size_t max_frame_size, frame_trace::trace_t *trace) {
+  bool d3d11_encoder::encode_frame(std::size_t max_frame_size, std::vector<std::uint8_t> &frame, frame_trace::trace_t *trace) {
     if (!handles->encoder) {
-      return {};
+      return false;
     }
 
     // PyroWave waits for the D3D11 work that drew the frame. The signal only reaches the
@@ -433,7 +471,7 @@ namespace pyrowave {
 
     if (result != PYROWAVE_SUCCESS) {
       BOOST_LOG(error) << "PyroWave: encoding failed ("sv << result << ')';
-      return {};
+      return false;
     }
 
     // One packet holds the whole frame: the RTP layer splits it up and adds FEC. The
@@ -448,30 +486,41 @@ namespace pyrowave {
     }
     if (result != PYROWAVE_SUCCESS || num_packets == 0) {
       BOOST_LOG(error) << "PyroWave: couldn't size the encoded frame ("sv << result << ')';
-      return {};
+      return false;
     }
 
+    // A reused buffer already has its pages, and only what it grows by is cleared. A new
+    // one this large would come from the OS and fault in every page on every frame.
     std::vector<pyrowave_packet> packets(num_packets);
-    std::vector<std::uint8_t> bitstream(num_packets * boundary);
+    frame.resize(num_packets * boundary);
     std::size_t out_packets = 0;
-    result = api->encoder_packetize(handles->encoder, packets.data(), boundary, &out_packets, bitstream.data(), bitstream.size());
+    result = api->encoder_packetize(handles->encoder, packets.data(), boundary, &out_packets, frame.data(), frame.size());
     if (result != PYROWAVE_SUCCESS || out_packets == 0) {
       BOOST_LOG(error) << "PyroWave: couldn't packetize the encoded frame ("sv << result << ')';
-      return {};
+      return false;
     }
+    join_packets(frame, packets.data(), out_packets);
 
-    if (out_packets == 1 && packets[0].offset == 0) {
-      bitstream.resize(packets[0].size);
-      return bitstream;
-    }
+    report_performance();
+    return true;
+  }
 
-    // Blocks are self-delimiting, so packets can simply follow one another
-    std::vector<std::uint8_t> frame;
-    for (std::size_t i = 0; i < out_packets; i++) {
-      auto begin = std::begin(bitstream) + packets[i].offset;
-      frame.insert(std::end(frame), begin, begin + packets[i].size);
+  void d3d11_encoder::report_performance() {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_report < 10s) {
+      return;
     }
-    return frame;
+    last_report = now;
+
+    // Averages per frame since the last report: each PyroWave pass, then GPU memory
+    api->device_report_performance_stats(
+      handles->device,
+      [](void *, const char *msg) {
+        BOOST_LOG(debug) << "PyroWave: "sv << msg;
+      },
+      nullptr,
+      true
+    );
   }
 
 }  // namespace pyrowave
