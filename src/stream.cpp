@@ -649,6 +649,11 @@ namespace stream {
 
   static auto broadcast = safe::make_shared<broadcast_ctx_t>(start_broadcast, end_broadcast);
 
+  int session_fec_percentage(int requested, int host_default) {
+    // The same range the host's own setting allows
+    return requested >= 0 && requested <= 255 ? requested : host_default;
+  }
+
   /**
    * @brief Parse a control message from an ENet packet.
    *
@@ -1885,7 +1890,7 @@ namespace stream {
 
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);
-      auto fecPercentage = config::stream.fec_percentage;
+      auto fecPercentage = session->config.fecPercentage;
       auto max_data_shards_per_fec_block = (DATA_SHARDS_MAX * 100) / (100 + fecPercentage);
 
       int fec_blocks_needed;
@@ -2028,7 +2033,7 @@ namespace stream {
         packet->trace->mark(frame_trace::point_e::header);
       }
 
-      auto fecPercentage = config::stream.fec_percentage;
+      auto fecPercentage = session->config.fecPercentage;
 
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;

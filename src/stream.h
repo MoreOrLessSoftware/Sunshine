@@ -31,6 +31,7 @@ namespace stream {
 
     int packetsize;  ///< Maximum payload size for network packets.
     int minRequiredFecPackets;  ///< Minimum recovery packets required before FEC is emitted.
+    int fecPercentage;  ///< Percentage of FEC packets added to each video frame: the client's request, or the host's fec_percentage.
     int mlFeatureFlags;  ///< Moonlight feature flags negotiated for this session.
     int controlProtocolType;  ///< GameStream control protocol variant selected by the client.
     int audioQosType;  ///< Audio QoS type.
@@ -40,6 +41,15 @@ namespace stream {
 
     std::optional<int> gcmap;  ///< Optional game-controller mapping override from the launch request.
   };
+
+  /**
+   * @brief Choose the FEC percentage for a session.
+   *
+   * @param requested Percentage the client asked for, or a negative value if it didn't ask.
+   * @param host_default The host's fec_percentage.
+   * @return The client's request when it is from 0 to 255, otherwise the host's.
+   */
+  int session_fec_percentage(int requested, int host_default);
 
   namespace session {
     /**

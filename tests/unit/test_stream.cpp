@@ -22,7 +22,25 @@
 namespace stream {
   std::vector<uint8_t> concat_and_insert(uint64_t insert_size, uint64_t slice_size, const std::string_view &data1, const std::string_view &data2);
   std::optional<std::pair<std::uint16_t, std::string_view>> parse_control_packet(const ENetPacket &packet);
+  int session_fec_percentage(int requested, int host_default);
 }  // namespace stream
+
+TEST(SessionFecPercentageTests, UsesTheHostsWhenTheClientDoesNotAsk) {
+  EXPECT_EQ(stream::session_fec_percentage(-1, 20), 20);
+}
+
+TEST(SessionFecPercentageTests, UsesTheClientsRequest) {
+  EXPECT_EQ(stream::session_fec_percentage(5, 20), 5);
+  EXPECT_EQ(stream::session_fec_percentage(255, 20), 255);
+}
+
+TEST(SessionFecPercentageTests, AllowsTheClientToTurnFecOff) {
+  EXPECT_EQ(stream::session_fec_percentage(0, 20), 0);
+}
+
+TEST(SessionFecPercentageTests, IgnoresRequestsAboveTheHostsRange) {
+  EXPECT_EQ(stream::session_fec_percentage(256, 20), 20);
+}
 
 TEST(ConcatAndInsertTests, ConcatNoInsertionTest) {
   char b1[] = {'a', 'b'};

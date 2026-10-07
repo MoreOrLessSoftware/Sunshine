@@ -2091,6 +2091,8 @@ supported on the current platform.
         <td colspan="2">
             Percentage of error correcting packets per data packet in each video frame.
             0 sends no error correcting packets, so any lost packet loses its frame.
+            @note{A client can ask for its own percentage, from 0 to 255, for its session. That request is used
+            instead of this setting.}
             @warning{Higher values can correct for more network packet loss,
             but at the cost of increasing bandwidth usage.}
         </td>

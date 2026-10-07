@@ -1140,6 +1140,7 @@ namespace rtsp_stream {
     args.try_emplace("x-nv-vqos[0].qosTrafficType"sv, "5"sv);
     args.try_emplace("x-nv-aqos.qosTrafficType"sv, "4"sv);
     args.try_emplace("x-ml-video.configuredBitrateKbps"sv, "0"sv);
+    args.try_emplace("x-ml-video.fecPercent"sv, "-1"sv);
     args.try_emplace("x-ss-general.encryptionEnabled"sv, "0"sv);
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
@@ -1148,6 +1149,7 @@ namespace rtsp_stream {
     stream::config_t config;
 
     std::int64_t configuredBitrateKbps;
+    std::int64_t requestedFecPercentage = -1;
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
@@ -1160,6 +1162,7 @@ namespace rtsp_stream {
       config.controlProtocolType = (int) util::from_view(args.at("x-nv-general.useReliableUdp"sv));
       config.packetsize = (int) util::from_view(args.at("x-nv-video[0].packetSize"sv));
       config.minRequiredFecPackets = (int) util::from_view(args.at("x-nv-vqos[0].fec.minRequiredFecPackets"sv));
+      requestedFecPercentage = util::from_view(args.at("x-ml-video.fecPercent"sv));
       config.mlFeatureFlags = (int) util::from_view(args.at("x-ml-general.featureFlags"sv));
       config.audioQosType = (int) util::from_view(args.at("x-nv-aqos.qosTrafficType"sv));
       config.videoQosType = (int) util::from_view(args.at("x-nv-vqos[0].qosTrafficType"sv));
@@ -1240,6 +1243,16 @@ namespace rtsp_stream {
       }
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
     }
+    // A client may ask for its own FEC percentage, as it knows how lossy its network is
+    config.fecPercentage = stream::session_fec_percentage((int) std::clamp<std::int64_t>(requestedFecPercentage, -1, 256), config::stream.fec_percentage);
+    if (requestedFecPercentage >= 0) {
+      if (config.fecPercentage == requestedFecPercentage) {
+        BOOST_LOG(info) << "Client requested "sv << requestedFecPercentage << "% FEC"sv;
+      } else {
+        BOOST_LOG(warning) << "Client requested "sv << requestedFecPercentage << "% FEC, which is out of range; using "sv << config.fecPercentage << '%';
+      }
+    }
+
     if (session.continuous_audio) {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
@@ -1254,8 +1267,8 @@ namespace rtsp_stream {
 
       // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
       // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
-      if (config::stream.fec_percentage <= 80) {
-        configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
+      if (config.fecPercentage <= 80) {
+        configuredBitrateKbps /= 100.f / (100 - config.fecPercentage);
       }
 
       // Adjust the bitrate to account for audio traffic bandwidth usage (capped at 20% reduction).
