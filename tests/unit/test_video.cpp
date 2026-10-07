@@ -434,6 +434,29 @@ TEST(MaxFrameWaitTest, NeverRepeatsFramesWhenNegative) {
   EXPECT_FALSE(video::max_frame_wait(-1.0, 120).has_value());
 }
 
+TEST(RepeatDueTest, RepeatsOneIntervalAfterTheLastFrameShown) {
+  const auto shown = std::chrono::steady_clock::time_point {} + 1s;
+  // The encoder got to waiting 3 ms after the frame was captured
+  EXPECT_EQ(video::repeat_due(shown, 33ms, shown + 3ms), shown + 33ms);
+}
+
+TEST(RepeatDueTest, KeepsTheScheduleWhenTheEncoderIsSlightlyLate) {
+  const auto shown = std::chrono::steady_clock::time_point {} + 1s;
+  // Due 33 ms after, the encoder only got there at 40 ms: still stamped on the schedule
+  EXPECT_EQ(video::repeat_due(shown, 33ms, shown + 40ms), shown + 33ms);
+}
+
+TEST(RepeatDueTest, StartsAgainFromNowAfterAStall) {
+  const auto shown = std::chrono::steady_clock::time_point {} + 1s;
+  const auto now = shown + 100ms;
+  EXPECT_EQ(video::repeat_due(shown, 33ms, now), now);
+}
+
+TEST(RepeatDueTest, WaitsAnIntervalBeforeTheFirstFrame) {
+  const auto now = std::chrono::steady_clock::time_point {} + 1s;
+  EXPECT_EQ(video::repeat_due(std::nullopt, 33ms, now), now + 33ms);
+}
+
 TEST(PyrowaveMaxFrameSizeTest, SpreadsTheBitrateOverTheFrames) {
   video::config_t config {};
   config.bitrate = 480000;  // 480 Mbps

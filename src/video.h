@@ -861,6 +861,23 @@ namespace video {
   std::optional<std::chrono::duration<double, std::milli>> max_frame_wait(double minimum_fps_target, int framerate);
 
   /**
+   * @brief Work out when the last frame shown is due to be repeated.
+   *
+   * @details A repeat keeps the stream at its minimum frame rate, so it is due one minimum frame
+   *          interval after the last frame shown, whether a captured frame or a repeat, and is
+   *          stamped with that time. The client then shows it on that schedule, rather than when
+   *          the encoder got to it, which put it between the game's frames. After a stall of more
+   *          than an interval, the schedule starts again from now, rather than stamping a burst
+   *          of repeats in the past.
+   *
+   * @param last_shown When the last frame shown was captured or repeated, or nothing before the first.
+   * @param interval The minimum frame rate's frame interval.
+   * @param now The current time.
+   * @return When to repeat the last frame, and the time to stamp the repeat with.
+   */
+  std::chrono::steady_clock::time_point repeat_due(std::optional<std::chrono::steady_clock::time_point> last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now);
+
+  /**
    * @brief Probe encoders and select the preferred encoder.
    * This is called once at startup and each time a stream is launched to
    * ensure the best encoder is selected. Encoder availability can change

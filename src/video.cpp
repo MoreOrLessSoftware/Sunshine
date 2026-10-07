@@ -179,6 +179,15 @@ namespace video {
     return std::chrono::duration<double, std::milli> {1000.0 / fps};
   }
 
+  std::chrono::steady_clock::time_point repeat_due(std::optional<std::chrono::steady_clock::time_point> last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now) {
+    if (!last_shown) {
+      return now + interval;
+    }
+
+    const auto due = *last_shown + interval;
+    return due + interval < now ? now : due;
+  }
+
   /**
    * @brief Resolve a client-requested dynamic range against probed encoder capabilities.
    *
@@ -2805,6 +2814,10 @@ namespace video {
       }
     }
 
+    // When the last frame shown was captured, or repeated. See repeat_due().
+    std::optional<std::chrono::steady_clock::time_point> last_shown;
+    const auto repeat_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(max_frametime);
+
     while (true) {
       bool requested_idr_frame = false;
 
@@ -2831,7 +2844,10 @@ namespace video {
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
-        auto img = images->pop(max_frametime);
+        // A repeat is due one minimum frame interval after the last frame shown
+        const auto now = std::chrono::steady_clock::now();
+        const auto repeat_at = repeat_due(last_shown, repeat_interval, now);
+        auto img = images->pop(repeat_frames ? std::max(repeat_at - now, std::chrono::steady_clock::duration::zero()) : repeat_interval);
 
         // Without repeated frames, keep waiting for a new frame unless a frame is needed to
         // recover from lost ones or the encoder has to stop
@@ -2844,6 +2860,12 @@ namespace video {
 
         if (img) {
           frame_timestamp = img->frame_timestamp;
+
+          // A frame captured just before a repeat was due, that reached the encoder just after,
+          // mustn't be stamped before the repeat sent ahead of it
+          if (frame_timestamp && last_shown && *frame_timestamp < *last_shown) {
+            frame_timestamp = last_shown;
+          }
 
           // Frames captured while the last one was encoding were replaced by this one
           if (img->capture_sequence > last_capture_sequence && last_capture_sequence != 0) {
@@ -2871,6 +2893,9 @@ namespace video {
         } else if (keep_waiting()) {
           // A request to recover from lost frames came in; handle it above first
           continue;
+        } else if (repeat_frames) {
+          // The repeat goes out on the minimum frame rate's schedule
+          frame_timestamp = repeat_at;
         }
       }
 
@@ -2915,6 +2940,9 @@ namespace video {
       if (encode(frame_nr++, *session, packets, channel_data, frame_timestamp, trace ? &*trace : nullptr)) {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
+      }
+      if (frame_timestamp) {
+        last_shown = frame_timestamp;
       }
 
       session->request_normal_frame();

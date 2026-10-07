@@ -1507,6 +1507,7 @@ supported on the current platform.
         <td>Description</td>
         <td colspan="2">
             Sunshine tries to save bandwidth when content on screen is static or a low framerate. Because many clients expect a constant stream of video frames, a certain amount of duplicate frames are sent when this happens. This setting controls the lowest effective framerate a stream can reach.
+            @note{A frame is only repeated once a whole frame interval of this framerate has passed since the last frame shown, and the repeat is timed to that moment. A game running faster than this is never repeated, and the client shows each repeat on the minimum framerate's schedule.}
         </td>
     </tr>
     <tr>
