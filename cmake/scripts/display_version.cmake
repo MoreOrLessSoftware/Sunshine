@@ -2,8 +2,9 @@
 #   cmake -DSOURCE_DIR=<repo> -DOUTPUT=<file.cpp> [-DFIXED_VERSION=<version>] -P display_version.cmake
 #
 # FIXED_VERSION, when set (CI builds), is shown as is. Otherwise the version is the git tag HEAD is
-# exactly on, or else when it was built, as YYYY.MM.DD.hhmm. The output is only rewritten when the
-# version changes, so it only recompiles then.
+# exactly on, or else the branch and when it was built, as <branch>-YYYY.MM.DD.hhmm (just the time
+# when HEAD is detached). The output is only rewritten when the version changes, so it only
+# recompiles then.
 
 if(NOT "${FIXED_VERSION}" STREQUAL "")
     set(DISPLAY_VERSION "${FIXED_VERSION}")
@@ -23,6 +24,20 @@ else()
         set(DISPLAY_VERSION "${GIT_TAG}")
     else()
         string(TIMESTAMP DISPLAY_VERSION "%Y.%m.%d.%H%M")
+
+        if(GIT_EXECUTABLE)
+            execute_process(
+                    COMMAND ${GIT_EXECUTABLE} -C "${SOURCE_DIR}" rev-parse --abbrev-ref HEAD
+                    OUTPUT_VARIABLE GIT_BRANCH
+                    RESULT_VARIABLE GIT_BRANCH_ERROR_CODE
+                    OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET
+            )
+            # A detached HEAD has no branch to name
+            if(NOT GIT_BRANCH_ERROR_CODE AND NOT "${GIT_BRANCH}" STREQUAL "" AND NOT "${GIT_BRANCH}" STREQUAL "HEAD")
+                set(DISPLAY_VERSION "${GIT_BRANCH}-${DISPLAY_VERSION}")
+            endif()
+        endif()
     endif()
 endif()
 

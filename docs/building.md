@@ -236,7 +236,8 @@ ninja -C build
 #### Version and update check
 
 The version shown in the log and the web UI is worked out on every build: the git tag `HEAD` is on, or else
-the time of the build as `YYYY.MM.DD.hhmm`. Installers and file versions keep the numeric project version.
+the branch and the time of the build as `<branch>-YYYY.MM.DD.hhmm`. Installers and file versions keep the
+numeric project version.
 
 A custom fork can leave out the web UI's check for newer upstream releases. Set the
 `SUNSHINE_DISABLE_UPDATE_CHECK` environment variable when configuring (`0` leaves the check on), or pass
