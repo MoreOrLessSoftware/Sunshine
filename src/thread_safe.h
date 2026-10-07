@@ -5,8 +5,10 @@
 #pragma once
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <map>
@@ -17,6 +19,190 @@
 #include "utility.h"
 
 namespace safe {
+#ifdef _WIN32
+  /**
+   * @brief Mutex used with safe::condition_variable: a Windows slim reader/writer lock.
+   */
+  class mutex {
+  public:
+    mutex() = default;
+    mutex(const mutex &) = delete;
+    mutex &operator=(const mutex &) = delete;
+
+    /**
+     * @brief Lock the mutex, waiting for it if another thread holds it.
+     */
+    void lock();
+
+    /**
+     * @brief Lock the mutex if no other thread holds it.
+     *
+     * @return True when the mutex was locked.
+     */
+    bool try_lock();
+
+    /**
+     * @brief Unlock the mutex.
+     */
+    void unlock();
+
+    /**
+     * @brief Get the underlying lock.
+     *
+     * @return The SRWLOCK, as an opaque pointer.
+     */
+    void *native_handle();
+
+  private:
+    void *_srw = nullptr;  ///< Storage for an SRWLOCK, which is one pointer. Zero is SRWLOCK_INIT.
+  };
+
+  /**
+   * @brief Condition variable whose timed waits end on time.
+   *
+   * @details MinGW's std::condition_variable wakes from a timed wait about 15 ms late, whatever
+   *          the timeout and the timer resolution, as it works out the timeout on a coarse clock.
+   *          A wait for the next captured frame meant to end on a schedule then ended up to
+   *          17 ms late. A Windows condition variable ends within about a millisecond of its
+   *          timeout. Notifications wake both immediately.
+   */
+  class condition_variable {
+  public:
+    condition_variable() = default;
+    condition_variable(const condition_variable &) = delete;
+    condition_variable &operator=(const condition_variable &) = delete;
+
+    /**
+     * @brief Wake one waiting thread.
+     */
+    void notify_one() noexcept;
+
+    /**
+     * @brief Wake all waiting threads.
+     */
+    void notify_all() noexcept;
+
+    /**
+     * @brief Wait until notified. Can wake spuriously.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     */
+    void wait(std::unique_lock<mutex> &ul);
+
+    /**
+     * @brief Wait until a condition holds.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     * @param pred Condition to wait for, checked with the lock held.
+     */
+    template<class Predicate>
+    void wait(std::unique_lock<mutex> &ul, Predicate pred) {
+      while (!pred()) {
+        wait(ul);
+      }
+    }
+
+    /**
+     * @brief Wait until notified or a time is reached. Can wake spuriously.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     * @param abs_time When to stop waiting.
+     * @return Whether the time was reached.
+     */
+    template<class Clock, class Duration>
+    std::cv_status wait_until(std::unique_lock<mutex> &ul, const std::chrono::time_point<Clock, Duration> &abs_time) {
+      const auto now = Clock::now();
+      if (now >= abs_time) {
+        return std::cv_status::timeout;
+      }
+
+      // Rounded up to whole milliseconds, so it never ends early on its own
+      const auto ms = std::chrono::ceil<std::chrono::milliseconds>(abs_time - now).count();
+      wait_ms(ul, static_cast<unsigned long>(std::min<long long>(ms, max_wait_ms)));
+      return Clock::now() >= abs_time ? std::cv_status::timeout : std::cv_status::no_timeout;
+    }
+
+    /**
+     * @brief Wait until a condition holds or a time is reached.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     * @param abs_time When to stop waiting.
+     * @param pred Condition to wait for, checked with the lock held.
+     * @return The condition when the wait ended.
+     */
+    template<class Clock, class Duration, class Predicate>
+    bool wait_until(std::unique_lock<mutex> &ul, const std::chrono::time_point<Clock, Duration> &abs_time, Predicate pred) {
+      while (!pred()) {
+        if (wait_until(ul, abs_time) == std::cv_status::timeout) {
+          return pred();
+        }
+      }
+      return true;
+    }
+
+    /**
+     * @brief Wait until notified or for a time. Can wake spuriously.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     * @param rel_time How long to wait at most.
+     * @return Whether the time ran out.
+     */
+    template<class Rep, class Period>
+    std::cv_status wait_for(std::unique_lock<mutex> &ul, const std::chrono::duration<Rep, Period> &rel_time) {
+      return wait_until(ul, deadline(rel_time));
+    }
+
+    /**
+     * @brief Wait until a condition holds or for a time.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     * @param rel_time How long to wait at most.
+     * @param pred Condition to wait for, checked with the lock held.
+     * @return The condition when the wait ended.
+     */
+    template<class Rep, class Period, class Predicate>
+    bool wait_for(std::unique_lock<mutex> &ul, const std::chrono::duration<Rep, Period> &rel_time, Predicate pred) {
+      return wait_until(ul, deadline(rel_time), std::move(pred));
+    }
+
+  private:
+    static constexpr long long max_wait_ms = 0xFFFFFFFE;  ///< Longest single wait: one less than INFINITE.
+
+    /**
+     * @brief Work out when a wait of a given length ends, without overflowing.
+     *
+     * @param rel_time How long to wait.
+     * @return The deadline on the steady clock. Waits of a year or more end after a year.
+     */
+    template<class Rep, class Period>
+    static std::chrono::steady_clock::time_point deadline(const std::chrono::duration<Rep, Period> &rel_time) {
+      constexpr std::chrono::hours longest {24 * 365};
+      const auto wait = rel_time >= longest ? std::chrono::steady_clock::duration {longest} : std::chrono::duration_cast<std::chrono::steady_clock::duration>(rel_time);
+      return std::chrono::steady_clock::now() + wait;
+    }
+
+    /**
+     * @brief Wait until notified or for a number of milliseconds.
+     *
+     * @param ul Lock on the mutex, held again on return.
+     * @param ms How long to wait at most.
+     */
+    void wait_ms(std::unique_lock<mutex> &ul, unsigned long ms);
+
+    void *_cv = nullptr;  ///< Storage for a CONDITION_VARIABLE, which is one pointer. Zero is CONDITION_VARIABLE_INIT.
+  };
+#else
+  /**
+   * @brief Mutex used with safe::condition_variable.
+   */
+  using mutex = std::mutex;
+
+  /**
+   * @brief Condition variable used by the thread-safe containers.
+   */
+  using condition_variable = std::condition_variable;
+#endif
+
   /**
    * @brief Thread-safe event value that blocks readers until a value is raised.
    */
@@ -205,8 +391,8 @@ namespace safe {
     bool _continue {true};
     status_t _status {util::false_v<status_t>};
 
-    std::condition_variable _cv;
-    std::mutex _lock;
+    condition_variable _cv;
+    mutex _lock;
   };
 
   /**
@@ -361,8 +547,8 @@ namespace safe {
     }
 
   private:
-    std::mutex _lock;
-    std::condition_variable _cv;
+    mutex _lock;
+    condition_variable _cv;
 
     status_t _status {util::false_v<status_t>};
     bool _rang {false};
@@ -535,8 +721,8 @@ namespace safe {
     bool _continue {true};
     std::uint32_t _max_elements;
 
-    std::mutex _lock;
-    std::condition_variable _cv;
+    mutex _lock;
+    condition_variable _cv;
 
     std::vector<T> _queue;
     overflow_policy_e _overflow_policy;
