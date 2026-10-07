@@ -6,6 +6,7 @@
 #ifdef _WIN32
 
   // standard includes
+  #include <array>
   #include <chrono>
   #include <cstdint>
   #include <memory>
@@ -44,11 +45,16 @@ namespace pyrowave {
    * @brief COM smart pointer for ID3D11Texture2D.
    */
   using ID3D11Texture2DPtr = ID3D11Texture2D *;
+  /**
+   * @brief COM smart pointer for ID3D11Query.
+   */
+  using ID3D11QueryPtr = ID3D11Query *;
   #else
   _COM_SMARTPTR_TYPEDEF(ID3D11Device5, IID_ID3D11Device5);
   _COM_SMARTPTR_TYPEDEF(ID3D11DeviceContext4, IID_ID3D11DeviceContext4);
   _COM_SMARTPTR_TYPEDEF(ID3D11Fence, IID_ID3D11Fence);
   _COM_SMARTPTR_TYPEDEF(ID3D11Texture2D, IID_ID3D11Texture2D);
+  _COM_SMARTPTR_TYPEDEF(ID3D11Query, IID_ID3D11Query);
   #endif
 
   struct api_t;
@@ -82,6 +88,44 @@ namespace pyrowave {
    * @return Lowercase name, or "unknown".
    */
   std::string_view priority_name(VkQueueGlobalPriority priority);
+
+  /**
+   * @brief Average length of GPU intervals measured with timestamps, for the debug log.
+   */
+  class interval_average_t {
+  public:
+    /**
+     * @brief Add one interval.
+     *
+     * @param start Timestamp at the start, in ticks.
+     * @param end Timestamp at the end, in ticks. Ignored if before start.
+     * @param frequency Ticks per second. Ignored if zero.
+     */
+    void add(std::uint64_t start, std::uint64_t end, std::uint64_t frequency);
+
+    /**
+     * @brief Count the intervals added since the last reset.
+     *
+     * @return Number of intervals.
+     */
+    std::size_t count() const;
+
+    /**
+     * @brief Get the average interval.
+     *
+     * @return Average in milliseconds, or 0 without intervals.
+     */
+    double average_ms() const;
+
+    /**
+     * @brief Forget the intervals added so far.
+     */
+    void reset();
+
+  private:
+    double total_seconds = 0.0;  ///< Sum of the intervals.
+    std::size_t intervals = 0;  ///< Number of intervals.
+  };
 
   /**
    * @brief PyroWave encoder that reads frames from D3D11 textures.
@@ -141,6 +185,28 @@ namespace pyrowave {
     ID3D11Texture2D *uv_texture() const;
 
     /**
+     * @brief Start timing the D3D11 work that draws a frame into the input textures.
+     *
+     * Call before drawing, and end_convert() after. The time is logged at debug level with
+     * PyroWave's own GPU timings.
+     */
+    void begin_convert();
+
+    /**
+     * @brief Mark where the captured frame became ready to read, between begin_convert() and
+     *        end_convert().
+     *
+     * Splits the conversion into waiting for the capture to hand over the frame, and drawing
+     * it. Without this mark, the whole conversion counts as drawing.
+     */
+    void mark_input_acquired();
+
+    /**
+     * @brief Stop timing the D3D11 work started by begin_convert().
+     */
+    void end_convert();
+
+    /**
      * @brief Encode the frame currently in the input textures.
      *
      * Waits for the D3D11 work that drew the frame, encodes it, and makes further D3D11
@@ -159,6 +225,22 @@ namespace pyrowave {
      * @brief Log PyroWave's GPU timings at debug level every few seconds, then start over.
      */
     void report_performance();
+
+    /**
+     * @brief Add the conversion times the GPU has finished measuring, without waiting.
+     */
+    void collect_convert_times();
+
+    /**
+     * @brief Timestamp queries that time one conversion on the D3D11 GPU queue.
+     */
+    struct convert_query_t {
+      ID3D11QueryPtr disjoint;  ///< Says whether the timestamps can be compared, and their frequency.
+      ID3D11QueryPtr start;  ///< Timestamp before the conversion.
+      ID3D11QueryPtr acquired;  ///< Timestamp once the captured frame is ready to read.
+      ID3D11QueryPtr end;  ///< Timestamp after drawing.
+      bool pending = false;  ///< Whether its results haven't been read yet.
+    };
 
     /**
      * @brief Destroy the PyroWave objects, waiting for the GPU to be done with them.
@@ -186,6 +268,16 @@ namespace pyrowave {
     ID3D11Texture2DPtr y_tex;  ///< Shared Y (4:2:0) or YUV (4:4:4) input texture.
     ID3D11Texture2DPtr uv_tex;  ///< Shared UV input texture, 4:2:0 only.
     std::chrono::steady_clock::time_point last_report;  ///< When GPU timings were last logged.
+    std::array<convert_query_t, 4> convert_queries;  ///< Queries for the last few conversions, read once the GPU is done with them.
+    std::size_t convert_query_index = 0;  ///< Queries for the next conversion.
+    bool timing_convert = false;  ///< Whether begin_convert() started timing the current conversion.
+    bool input_acquired = false;  ///< Whether mark_input_acquired() was called for the current conversion.
+    interval_average_t convert_time;  ///< Conversion times since the last report.
+    interval_average_t convert_wait;  ///< Waits for the captured frame since the last report.
+    interval_average_t convert_draw;  ///< Drawing times since the last report.
+    std::size_t convert_busy = 0;  ///< Conversions not timed since the last report, as every set of queries was still in use.
+    std::size_t convert_disjoint = 0;  ///< Conversions whose timestamps D3D11 reported as not comparable since the last report.
+    std::size_t convert_unreadable = 0;  ///< Conversions whose query results couldn't be read since the last report.
 
     struct handles_t;
     std::unique_ptr<handles_t> handles;  ///< PyroWave objects.

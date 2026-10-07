@@ -10,6 +10,7 @@
   #include <algorithm>
   #include <array>
   #include <cstring>
+  #include <iomanip>
   #include <mutex>
 
   // lib includes
@@ -144,6 +145,27 @@ namespace pyrowave {
     }
   }
 
+  void interval_average_t::add(std::uint64_t start, std::uint64_t end, std::uint64_t frequency) {
+    if (end < start || frequency == 0) {
+      return;
+    }
+    total_seconds += static_cast<double>(end - start) / static_cast<double>(frequency);
+    intervals++;
+  }
+
+  std::size_t interval_average_t::count() const {
+    return intervals;
+  }
+
+  double interval_average_t::average_ms() const {
+    return intervals ? total_seconds * 1000.0 / static_cast<double>(intervals) : 0.0;
+  }
+
+  void interval_average_t::reset() {
+    total_seconds = 0.0;
+    intervals = 0;
+  }
+
   /**
    * @brief PyroWave objects owned by the encoder.
    */
@@ -250,6 +272,22 @@ namespace pyrowave {
       BOOST_LOG(info) << "PyroWave: encoding on a compute queue at "sv << priority_name(priority) << " priority"sv;
     }
     last_report = std::chrono::steady_clock::now();
+
+    // Only for the debug log, so the stream works without them
+    for (auto &queries : convert_queries) {
+      D3D11_QUERY_DESC disjoint_desc {D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+      D3D11_QUERY_DESC timestamp_desc {D3D11_QUERY_TIMESTAMP, 0};
+      if (FAILED(device->CreateQuery(&disjoint_desc, &queries.disjoint)) ||
+          FAILED(device->CreateQuery(&timestamp_desc, &queries.start)) ||
+          FAILED(device->CreateQuery(&timestamp_desc, &queries.acquired)) ||
+          FAILED(device->CreateQuery(&timestamp_desc, &queries.end))) {
+        BOOST_LOG(debug) << "PyroWave: couldn't create timestamp queries, so the D3D11 conversion isn't timed"sv;
+        for (auto &created : convert_queries) {
+          created = {};
+        }
+        break;
+      }
+    }
 
     // D3D11 signals this when a frame is drawn, and PyroWave when it has read it
     status = device->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_PPV_ARGS(&fence));
@@ -425,6 +463,91 @@ namespace pyrowave {
     return uv_tex;
   }
 
+  void d3d11_encoder::begin_convert() {
+    collect_convert_times();
+
+    auto &queries = convert_queries[convert_query_index];
+    timing_convert = false;
+    if (!queries.disjoint) {
+      return;
+    }
+    if (queries.pending) {
+      // The GPU hasn't finished with this set yet, so this frame goes untimed
+      convert_busy++;
+      return;
+    }
+
+    device_ctx->Begin(queries.disjoint);
+    device_ctx->End(queries.start);
+    timing_convert = true;
+    input_acquired = false;
+  }
+
+  void d3d11_encoder::mark_input_acquired() {
+    if (!timing_convert || input_acquired) {
+      return;
+    }
+
+    device_ctx->End(convert_queries[convert_query_index].acquired);
+    input_acquired = true;
+  }
+
+  void d3d11_encoder::end_convert() {
+    if (!timing_convert) {
+      return;
+    }
+
+    auto &queries = convert_queries[convert_query_index];
+    if (!input_acquired) {
+      // Nothing to wait for, like a blank frame, so it all counts as drawing
+      device_ctx->End(queries.acquired);
+    }
+    device_ctx->End(queries.end);
+    device_ctx->End(queries.disjoint);
+    queries.pending = true;
+    convert_query_index = (convert_query_index + 1) % convert_queries.size();
+    timing_convert = false;
+  }
+
+  void d3d11_encoder::collect_convert_times() {
+    for (auto &queries : convert_queries) {
+      if (!queries.pending) {
+        continue;
+      }
+
+      // The disjoint query ends last, so once it's ready the timestamps are too
+      D3D11_QUERY_DATA_TIMESTAMP_DISJOINT disjoint {};
+      const auto status = device_ctx->GetData(queries.disjoint, &disjoint, sizeof(disjoint), D3D11_ASYNC_GETDATA_DONOTFLUSH);
+      if (status == S_FALSE) {
+        continue;
+      }
+
+      // An error won't clear up, so the set is freed rather than left waiting forever
+      queries.pending = false;
+      if (FAILED(status)) {
+        convert_unreadable++;
+        continue;
+      }
+      if (disjoint.Disjoint) {
+        convert_disjoint++;
+        continue;
+      }
+
+      UINT64 start = 0;
+      UINT64 acquired = 0;
+      UINT64 end = 0;
+      if (device_ctx->GetData(queries.start, &start, sizeof(start), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+          device_ctx->GetData(queries.acquired, &acquired, sizeof(acquired), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK ||
+          device_ctx->GetData(queries.end, &end, sizeof(end), D3D11_ASYNC_GETDATA_DONOTFLUSH) != S_OK) {
+        convert_unreadable++;
+        continue;
+      }
+      convert_time.add(start, end, disjoint.Frequency);
+      convert_wait.add(start, acquired, disjoint.Frequency);
+      convert_draw.add(acquired, end, disjoint.Frequency);
+    }
+  }
+
   bool d3d11_encoder::encode_frame(std::size_t max_frame_size, std::vector<std::uint8_t> &frame, frame_trace::trace_t *trace) {
     if (!handles->encoder) {
       return false;
@@ -512,7 +635,9 @@ namespace pyrowave {
     }
     last_report = now;
 
-    // Averages per frame since the last report: each PyroWave pass, then GPU memory
+    // Averages per frame since the last report: each PyroWave pass, then GPU memory.
+    // Total spans PyroWave's command buffer, from after it waits for the conversion to
+    // after the encoded frame is copied back for the CPU.
     api->device_report_performance_stats(
       handles->device,
       [](void *, const char *msg) {
@@ -521,6 +646,20 @@ namespace pyrowave {
       nullptr,
       true
     );
+
+    // Says why frames weren't timed too, as that has happened without an obvious cause
+    if (convert_queries[0].disjoint) {
+      BOOST_LOG(debug) << "PyroWave: D3D11 convert: "sv << std::fixed << std::setprecision(3) << convert_time.average_ms() << " ms per frame"sv
+                       << " (waiting for the capture "sv << convert_wait.average_ms() << " ms, drawing "sv << convert_draw.average_ms() << " ms; "sv
+                       << convert_time.count() << " timed, "sv << convert_busy << " skipped while the queries were in use, "sv
+                       << convert_disjoint << " disjoint, "sv << convert_unreadable << " unreadable)"sv;
+    }
+    convert_time.reset();
+    convert_wait.reset();
+    convert_draw.reset();
+    convert_busy = 0;
+    convert_disjoint = 0;
+    convert_unreadable = 0;
   }
 
 }  // namespace pyrowave

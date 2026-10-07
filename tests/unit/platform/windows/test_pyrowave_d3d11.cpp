@@ -68,4 +68,36 @@ TEST(PyrowavePriorityNameTest, NamesEachPriority) {
 TEST(PyrowavePriorityNameTest, CallsAnythingElseUnknown) {
   EXPECT_EQ(pyrowave::priority_name(static_cast<VkQueueGlobalPriority>(0)), "unknown");
 }
+
+TEST(PyrowaveIntervalAverageTest, StartsEmpty) {
+  pyrowave::interval_average_t average;
+  EXPECT_EQ(average.count(), 0u);
+  EXPECT_EQ(average.average_ms(), 0.0);
+}
+
+TEST(PyrowaveIntervalAverageTest, AveragesIntervalsInMilliseconds) {
+  pyrowave::interval_average_t average;
+  // 1 ms and 3 ms at 1 MHz
+  average.add(1000, 2000, 1000000);
+  average.add(5000, 8000, 1000000);
+
+  EXPECT_EQ(average.count(), 2u);
+  EXPECT_DOUBLE_EQ(average.average_ms(), 2.0);
+}
+
+TEST(PyrowaveIntervalAverageTest, IgnoresBackwardIntervalsAndZeroFrequency) {
+  pyrowave::interval_average_t average;
+  average.add(2000, 1000, 1000000);
+  average.add(1000, 2000, 0);
+  EXPECT_EQ(average.count(), 0u);
+}
+
+TEST(PyrowaveIntervalAverageTest, StartsOverAfterAReset) {
+  pyrowave::interval_average_t average;
+  average.add(0, 1000, 1000000);
+  average.reset();
+
+  EXPECT_EQ(average.count(), 0u);
+  EXPECT_EQ(average.average_ms(), 0.0);
+}
 #endif

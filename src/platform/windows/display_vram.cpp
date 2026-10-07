@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <cmath>
+#include <functional>
 
 // platform includes
 #include <d3dcompiler.h>
@@ -505,6 +506,9 @@ namespace platf::dxgi {
         if (status != S_OK) {
           BOOST_LOG(error) << "Failed to acquire encoder mutex [0x"sv << util::hex(status).to_string_view() << ']';
           return -1;
+        }
+        if (on_input_acquired) {
+          on_input_acquired();
         }
 
         auto draw = [&](auto &input, auto &y_or_yuv_viewports, auto &uv_viewport) {
@@ -1121,6 +1125,12 @@ namespace platf::dxgi {
      */
     bool unorm_yuv444 = false;
 
+    /**
+     * @brief Optional. Called during convert() once the captured frame is ready to read,
+     *        after its mutex is acquired and before anything is drawn.
+     */
+    std::function<void()> on_input_acquired;
+
     device_t device;  ///< D3D11 device used for encoder-side texture conversion.
     device_ctx_t device_ctx;  ///< D3D11 device context used to issue conversion commands.
 
@@ -1368,6 +1378,9 @@ namespace platf::dxgi {
 
       // PyroWave reads 4:4:4 as UNORM Y, U and V channels rather than AYUV/Y410 integers
       base.unorm_yuv444 = true;
+      base.on_input_acquired = [this]() {
+        pyrowave.mark_input_acquired();
+      };
       if (base.init(display, adapter_p, pix_fmt)) {
         return false;
       }
@@ -1398,7 +1411,10 @@ namespace platf::dxgi {
      * @return Conversion status.
      */
     int convert(platf::img_t &img_base) override {
-      return base.convert(img_base);
+      pyrowave.begin_convert();
+      const auto status = base.convert(img_base);
+      pyrowave.end_convert();
+      return status;
     }
 
     /**
