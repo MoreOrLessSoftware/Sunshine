@@ -20,6 +20,7 @@
   // clang-format on
 
   // local includes
+  #include "src/config.h"
   #include "src/logging.h"
   #include "src/utility.h"
 
@@ -143,6 +144,10 @@ namespace pyrowave {
       default:
         return "unknown"sv;
     }
+  }
+
+  bool performance_stats_enabled(int min_log_level) {
+    return min_log_level <= 1;
   }
 
   void interval_average_t::add(std::uint64_t start, std::uint64_t end, std::uint64_t frequency) {
@@ -273,19 +278,25 @@ namespace pyrowave {
     }
     last_report = std::chrono::steady_clock::now();
 
+    // Timing the conversion costs CPU time on every frame, so it's only done for the debug log.
+    // PyroWave itself always times its passes.
+    performance_stats = performance_stats_enabled(config::sunshine.min_log_level);
+
     // Only for the debug log, so the stream works without them
-    for (auto &queries : convert_queries) {
-      D3D11_QUERY_DESC disjoint_desc {D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
-      D3D11_QUERY_DESC timestamp_desc {D3D11_QUERY_TIMESTAMP, 0};
-      if (FAILED(device->CreateQuery(&disjoint_desc, &queries.disjoint)) ||
-          FAILED(device->CreateQuery(&timestamp_desc, &queries.start)) ||
-          FAILED(device->CreateQuery(&timestamp_desc, &queries.acquired)) ||
-          FAILED(device->CreateQuery(&timestamp_desc, &queries.end))) {
-        BOOST_LOG(debug) << "PyroWave: couldn't create timestamp queries, so the D3D11 conversion isn't timed"sv;
-        for (auto &created : convert_queries) {
-          created = {};
+    if (performance_stats) {
+      for (auto &queries : convert_queries) {
+        D3D11_QUERY_DESC disjoint_desc {D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
+        D3D11_QUERY_DESC timestamp_desc {D3D11_QUERY_TIMESTAMP, 0};
+        if (FAILED(device->CreateQuery(&disjoint_desc, &queries.disjoint)) ||
+            FAILED(device->CreateQuery(&timestamp_desc, &queries.start)) ||
+            FAILED(device->CreateQuery(&timestamp_desc, &queries.acquired)) ||
+            FAILED(device->CreateQuery(&timestamp_desc, &queries.end))) {
+          BOOST_LOG(debug) << "PyroWave: couldn't create timestamp queries, so the D3D11 conversion isn't timed"sv;
+          for (auto &created : convert_queries) {
+            created = {};
+          }
+          break;
         }
-        break;
       }
     }
 
@@ -629,15 +640,17 @@ namespace pyrowave {
   }
 
   void d3d11_encoder::report_performance() {
+    if (!performance_stats) {
+      return;
+    }
+
     const auto now = std::chrono::steady_clock::now();
     if (now - last_report < 10s) {
       return;
     }
     last_report = now;
 
-    // Averages per frame since the last report: each PyroWave pass, then GPU memory.
-    // Total spans PyroWave's command buffer, from after it waits for the conversion to
-    // after the encoded frame is copied back for the CPU.
+    // Averages per frame since the last report: each PyroWave pass, then GPU memory
     api->device_report_performance_stats(
       handles->device,
       [](void *, const char *msg) {

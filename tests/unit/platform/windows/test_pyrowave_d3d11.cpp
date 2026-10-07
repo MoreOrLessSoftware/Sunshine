@@ -69,6 +69,13 @@ TEST(PyrowavePriorityNameTest, CallsAnythingElseUnknown) {
   EXPECT_EQ(pyrowave::priority_name(static_cast<VkQueueGlobalPriority>(0)), "unknown");
 }
 
+TEST(PyrowavePerformanceStatsTest, OnlyAtDebugLevelOrBelow) {
+  EXPECT_TRUE(pyrowave::performance_stats_enabled(0));  // verbose
+  EXPECT_TRUE(pyrowave::performance_stats_enabled(1));  // debug
+  EXPECT_FALSE(pyrowave::performance_stats_enabled(2));  // info
+  EXPECT_FALSE(pyrowave::performance_stats_enabled(5));  // fatal
+}
+
 TEST(PyrowaveIntervalAverageTest, StartsEmpty) {
   pyrowave::interval_average_t average;
   EXPECT_EQ(average.count(), 0u);

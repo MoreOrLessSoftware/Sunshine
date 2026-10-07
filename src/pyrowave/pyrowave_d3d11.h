@@ -90,6 +90,17 @@ namespace pyrowave {
   std::string_view priority_name(VkQueueGlobalPriority priority);
 
   /**
+   * @brief Decide whether to time the D3D11 conversion and log GPU timings.
+   *
+   * Timing the conversion costs CPU time on every frame, so it's only done when the debug log
+   * will show it.
+   *
+   * @param min_log_level Lowest level written to the log, 0 (verbose) to 5 (fatal).
+   * @return True at the debug level or below.
+   */
+  bool performance_stats_enabled(int min_log_level);
+
+  /**
    * @brief Average length of GPU intervals measured with timestamps, for the debug log.
    */
   class interval_average_t {
@@ -267,6 +278,7 @@ namespace pyrowave {
     std::uint64_t fence_value = 0;  ///< Last value signaled or waited for on the fence.
     ID3D11Texture2DPtr y_tex;  ///< Shared Y (4:2:0) or YUV (4:4:4) input texture.
     ID3D11Texture2DPtr uv_tex;  ///< Shared UV input texture, 4:2:0 only.
+    bool performance_stats = false;  ///< Whether GPU timings are measured and logged.
     std::chrono::steady_clock::time_point last_report;  ///< When GPU timings were last logged.
     std::array<convert_query_t, 4> convert_queries;  ///< Queries for the last few conversions, read once the GPU is done with them.
     std::size_t convert_query_index = 0;  ///< Queries for the next conversion.
