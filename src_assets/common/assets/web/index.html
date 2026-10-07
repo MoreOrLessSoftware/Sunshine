@@ -52,9 +52,9 @@
     <!-- Version -->
     <div class="card my-4">
       <div class="card-body" v-if="version">
-        <h2>Version {{version.version}}</h2>
+        <h2>Version {{displayVersion}}</h2>
 
-        <div v-if="loading" class="my-3">
+        <div v-if="loading && updateCheck" class="my-3">
           {{ $t('index.loading_latest') }}
         </div>
 
@@ -68,7 +68,7 @@
           {{ $t('index.installed_version_not_stable') }}
         </div>
 
-        <div v-else-if="(!preReleaseBuildAvailable || !notifyPreReleases) && !stableBuildAvailable && !buildVersionIsDirty">
+        <div v-else-if="updateCheck && (!preReleaseBuildAvailable || !notifyPreReleases) && !stableBuildAvailable && !buildVersionIsDirty">
           <div class="alert alert-success my-3">
             <check-circle :size="18" class="icon"></check-circle>
             {{ $t('index.version_latest') }}
@@ -170,6 +170,8 @@
     data() {
       return {
         version: null,
+        displayVersion: null,
+        updateCheck: true,
         githubVersion: null,
         notifyPreReleases: false,
         preReleaseVersion: null,
@@ -191,11 +193,17 @@
         this.controllerEnabled = config.controller !== "disabled";
         this.gamepadDriver = config.gamepad_driver || '';
         this.version = new SunshineVersion(null, config.version);
-        console.log("Version: ", this.version.version)
-        this.githubVersion = new SunshineVersion(await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json()), null);
-        console.log("GitHub Version: ", this.githubVersion.version)
-        this.preReleaseVersion = new SunshineVersion((await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases").then((r) => r.json())).find(release => release.prerelease), null);
-        console.log("Pre-Release Version: ", this.preReleaseVersion.version)
+        this.displayVersion = config.display_version || config.version;
+        console.log("Version: ", this.displayVersion, "(" + this.version.version + ")")
+
+        // Builds can leave out the check for newer releases, such as a custom fork's
+        this.updateCheck = config.update_check !== false;
+        if (this.updateCheck) {
+          this.githubVersion = new SunshineVersion(await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json()), null);
+          console.log("GitHub Version: ", this.githubVersion.version)
+          this.preReleaseVersion = new SunshineVersion((await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases").then((r) => r.json())).find(release => release.prerelease), null);
+          console.log("Pre-Release Version: ", this.preReleaseVersion.version)
+        }
 
         // The Virtual HID Driver also backs relative mouse input when controllers are disabled.
         if (this.platform === 'windows') {

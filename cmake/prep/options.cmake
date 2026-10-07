@@ -18,6 +18,22 @@ option(SUNSHINE_CONFIGURE_ONLY "Configure special files only, then exit." OFF)
 
 option(SUNSHINE_ENABLE_TRAY "Enable system tray icon." ON)
 
+# Skip the web UI's check for a newer upstream release, such as in a custom fork. The
+# SUNSHINE_DISABLE_UPDATE_CHECK environment variable sets it when configuring: 0 leaves the
+# check on, anything else turns it off.
+option(SUNSHINE_DISABLE_UPDATE_CHECK "Don't check for newer Sunshine releases in the web UI." OFF)
+if(DEFINED ENV{SUNSHINE_DISABLE_UPDATE_CHECK})
+    if("$ENV{SUNSHINE_DISABLE_UPDATE_CHECK}" STREQUAL "0")
+        set(SUNSHINE_DISABLE_UPDATE_CHECK OFF CACHE BOOL "" FORCE)
+    else()
+        set(SUNSHINE_DISABLE_UPDATE_CHECK ON CACHE BOOL "" FORCE)
+    endif()
+endif()
+if(SUNSHINE_DISABLE_UPDATE_CHECK)
+    message(STATUS "Update check disabled")
+    list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_DISABLE_UPDATE_CHECK)
+endif()
+
 if(WIN32)
     option(SUNSHINE_USE_STATIC_QT
             "Require static Qt libraries and their static third-party dependencies." ON)

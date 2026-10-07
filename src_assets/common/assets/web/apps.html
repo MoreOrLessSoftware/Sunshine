@@ -726,12 +726,15 @@
         .then(r => {
           this.platform = r.platform;
           this.version = new SunshineVersion(null, r.version);
-        });
 
-      fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest")
-        .then((r) => r.json())
-        .then((r) => this.githubVersion = new SunshineVersion(r, null))
-        .catch((e) => console.error(e));
+          // Only used to pick which docs to link, and builds can leave out the check for newer releases
+          if (r.update_check !== false) {
+            fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest")
+              .then((r) => r.json())
+              .then((r) => this.githubVersion = new SunshineVersion(r, null))
+              .catch((e) => console.error(e));
+          }
+        });
     },
     methods: {
       newApp() {

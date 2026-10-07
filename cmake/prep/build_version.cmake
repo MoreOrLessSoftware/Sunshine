@@ -25,6 +25,7 @@ if((DEFINED ENV{BRANCH}) AND (DEFINED ENV{BUILD_VERSION}))  # cmake-lint: disabl
         set(PROJECT_VERSION $ENV{BUILD_VERSION})
         string(REGEX REPLACE "^v" "" PROJECT_VERSION ${PROJECT_VERSION})  # remove the v prefix if it exists
         set(CMAKE_PROJECT_VERSION ${PROJECT_VERSION})  # cpack will use this to set the binary versions
+        set(SUNSHINE_FIXED_DISPLAY_VERSION ${PROJECT_VERSION})  # shown as is, see display_version.cmake
     endif()
 else()
     # Generate Sunshine Version based of the git tag
@@ -150,3 +151,20 @@ list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MAJOR="${PROJECT_VERSION_MAJOR}
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_MINOR="${PROJECT_VERSION_MINOR}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_PATCH="${PROJECT_VERSION_PATCH}")
 list(APPEND SUNSHINE_DEFINITIONS PROJECT_VERSION_COMMIT="${GITHUB_COMMIT}")
+
+# The version shown in the log and the web UI: the git tag HEAD is on, or else the build time.
+# It is worked out on every build rather than here, so it doesn't go stale between configures.
+set(SUNSHINE_DISPLAY_VERSION_SOURCE "${CMAKE_BINARY_DIR}/generated/display_version.cpp")
+set(SUNSHINE_DISPLAY_VERSION_COMMAND
+        ${CMAKE_COMMAND}
+        -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -DOUTPUT=${SUNSHINE_DISPLAY_VERSION_SOURCE}
+        -DFIXED_VERSION=${SUNSHINE_FIXED_DISPLAY_VERSION}
+        -P ${CMAKE_SOURCE_DIR}/cmake/scripts/display_version.cmake)
+execute_process(COMMAND ${SUNSHINE_DISPLAY_VERSION_COMMAND})  # so the source exists before the first build
+add_custom_target(sunshine_display_version
+        COMMAND ${SUNSHINE_DISPLAY_VERSION_COMMAND}
+        BYPRODUCTS ${SUNSHINE_DISPLAY_VERSION_SOURCE}
+        COMMENT "Updating the display version"
+        VERBATIM)
+list(APPEND SUNSHINE_TARGET_DEPENDENCIES sunshine_display_version)

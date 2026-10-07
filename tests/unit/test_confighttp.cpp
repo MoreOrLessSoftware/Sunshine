@@ -29,6 +29,7 @@
 #include <src/config.h>
 #include <src/confighttp.h>
 #include <src/crypto.h>
+#include <src/display_version.h>
 #include <src/httpcommon.h>
 #include <src/network.h>
 #include <src/nvhttp.h>
@@ -1564,6 +1565,21 @@ TEST(ConfigHttpDriverStatusTest, IsDriverVersionSupported_DevelopmentVersionBypa
   ASSERT_TRUE(confighttp::is_driver_version_supported("0.0.0.42", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
   ASSERT_TRUE(confighttp::is_driver_version_supported("0.0.1.0", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
   ASSERT_FALSE(confighttp::is_driver_version_supported("0.0", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
+}
+
+// Test: the config response carries the numeric version, the display version and the update check
+TEST(ConfigHttpVersionTest, AddVersionInfo_IncludesExpectedFields) {
+  nlohmann::json output_tree;
+  confighttp::add_version_info(output_tree);
+
+  ASSERT_EQ(output_tree["version"].get<std::string>(), PROJECT_VERSION);
+  ASSERT_EQ(output_tree["display_version"].get<std::string>(), display_version());
+  ASSERT_FALSE(output_tree["display_version"].get<std::string>().empty());
+#ifdef SUNSHINE_DISABLE_UPDATE_CHECK
+  ASSERT_FALSE(output_tree["update_check"].get<bool>());
+#else
+  ASSERT_TRUE(output_tree["update_check"].get<bool>());
+#endif
 }
 
 // Test: driver status JSON includes compatibility and supported version metadata

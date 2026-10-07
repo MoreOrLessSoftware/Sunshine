@@ -40,6 +40,7 @@
 #include "confighttp.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "display_version.h"
 #include "file_handler.h"
 #include "globals.h"
 #include "httpcommon.h"
@@ -290,6 +291,16 @@ namespace confighttp {
     }
 
     return true;
+  }
+
+  void add_version_info(nlohmann::json &output_tree) {
+    output_tree["version"] = PROJECT_VERSION;
+    output_tree["display_version"] = std::string(display_version());
+#ifdef SUNSHINE_DISABLE_UPDATE_CHECK
+    output_tree["update_check"] = false;
+#else
+    output_tree["update_check"] = true;
+#endif
   }
 
   nlohmann::json build_driver_status(bool installed, const std::string &version, std::string_view minimum_version) {
@@ -1423,7 +1434,7 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["platform"] = SUNSHINE_PLATFORM;
-    output_tree["version"] = PROJECT_VERSION;
+    add_version_info(output_tree);
 
     auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
 

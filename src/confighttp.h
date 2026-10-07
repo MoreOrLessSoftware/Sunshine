@@ -137,6 +137,16 @@ namespace confighttp {
   nlohmann::json build_driver_status(bool installed, const std::string &version, std::string_view minimum_version);
 
   /**
+   * @brief Add Sunshine's version to a config response.
+   *
+   * Sets "version" to the numeric version the web UI compares with releases, "display_version"
+   * to the version it shows, and "update_check" to whether it may look for newer releases.
+   *
+   * @param output_tree Response to add the fields to.
+   */
+  void add_version_info(nlohmann::json &output_tree);
+
+  /**
    * @brief Convert a libvirtualhid license result into a Web UI response.
    *
    * @param result License operation result.
