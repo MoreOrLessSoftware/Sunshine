@@ -579,7 +579,7 @@ using LowFpsBitrateBoostConfigParam = std::tuple<std::string_view, double>;
 struct LowFpsBitrateBoostConfigTest: BaseTest, testing::WithParamInterface<LowFpsBitrateBoostConfigParam> {
   void SetUp() override {
     BaseTest::SetUp();
-    config::video.low_fps_bitrate_boost = 4.0;
+    config::video.low_fps_bitrate_boost = 1.0;
     config::stream.file_apps = SUNSHINE_SOURCE_DIR "/tests/unit/test_video.cpp";
   }
 
@@ -614,12 +614,12 @@ INSTANTIATE_TEST_SUITE_P(
   LowFpsBitrateBoostValues,
   LowFpsBitrateBoostConfigTest,
   testing::Values(
-    LowFpsBitrateBoostConfigParam {""sv, 4.0},
+    LowFpsBitrateBoostConfigParam {""sv, 1.0},
     LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 1\n"sv, 1.0},
     LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 2.5\n"sv, 2.5},
     LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 8\n"sv, 8.0},
-    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 0.5\n"sv, 4.0},
-    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 9\n"sv, 4.0}
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 0.5\n"sv, 1.0},
+    LowFpsBitrateBoostConfigParam {"low_fps_bitrate_boost = 9\n"sv, 1.0}
   )
 );
 

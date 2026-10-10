@@ -796,7 +796,7 @@ namespace config {
 
     0,  // max_bitrate
     0,  // minimum_fps_target (0 = framerate)
-    4.0  // low_fps_bitrate_boost
+    1.0  // low_fps_bitrate_boost
   };
 
   /**

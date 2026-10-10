@@ -28,7 +28,7 @@ const config = ref(props.config)
   <!--low_fps_bitrate_boost-->
   <div class="mb-3">
     <label for="low_fps_bitrate_boost" class="form-label">{{ $t("config.low_fps_bitrate_boost") }}</label>
-    <input type="number" min="1" max="8" step="0.5" class="form-control" id="low_fps_bitrate_boost" placeholder="4" v-model="config.low_fps_bitrate_boost" />
+    <input type="number" min="1" max="8" step="0.5" class="form-control" id="low_fps_bitrate_boost" placeholder="1" v-model="config.low_fps_bitrate_boost" />
     <div class="form-text">{{ $t("config.low_fps_bitrate_boost_desc") }}</div>
   </div>
 </template>

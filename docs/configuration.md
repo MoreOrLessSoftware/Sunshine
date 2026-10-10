@@ -1552,7 +1552,7 @@ supported on the current platform.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            4
+            1
             @endcode</td>
     </tr>
     <tr>
