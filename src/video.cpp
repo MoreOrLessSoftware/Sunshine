@@ -179,13 +179,18 @@ namespace video {
     return std::chrono::duration<double, std::milli> {1000.0 / fps};
   }
 
-  std::chrono::steady_clock::time_point repeat_due(std::optional<std::chrono::steady_clock::time_point> last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now) {
+  repeat_t repeat_due(const std::optional<last_shown_t> &last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now) {
     if (!last_shown) {
-      return now + interval;
+      return {now + interval, now + interval};
     }
 
-    const auto due = *last_shown + interval;
-    return due + interval < now ? now : due;
+    // Room for the game's own jitter after a captured frame
+    const auto wait = last_shown->repeat ? interval : interval + interval / 2;
+    const repeat_t due {last_shown->stamp + last_shown->delay + wait, last_shown->stamp + wait};
+    if (due.at + interval < now) {
+      return {now, now};
+    }
+    return due;
   }
 
   /**
@@ -2822,8 +2827,8 @@ namespace video {
       }
     }
 
-    // When the last frame shown was captured, or repeated. See repeat_due().
-    std::optional<std::chrono::steady_clock::time_point> last_shown;
+    // The last frame shown, captured or repeated. See repeat_due().
+    std::optional<last_shown_t> last_shown;
     const auto repeat_interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(max_frametime);
 
     while (true) {
@@ -2849,13 +2854,15 @@ namespace video {
       std::optional<std::chrono::steady_clock::time_point> frame_timestamp;
       std::size_t frames_since_last_encode = 1;
       std::optional<frame_trace::trace_t> trace;
+      std::optional<std::chrono::steady_clock::time_point> popped_at;
+      bool repeated = false;
 
       // Encode at a minimum FPS to avoid image quality issues with static content
       if (!requested_idr_frame || images->peek()) {
         // A repeat is due one minimum frame interval after the last frame shown
         const auto now = std::chrono::steady_clock::now();
-        const auto repeat_at = repeat_due(last_shown, repeat_interval, now);
-        auto img = images->pop(repeat_frames ? std::max(repeat_at - now, std::chrono::steady_clock::duration::zero()) : repeat_interval);
+        const auto repeat = repeat_due(last_shown, repeat_interval, now);
+        auto img = images->pop(repeat_frames ? std::max(repeat.at - now, std::chrono::steady_clock::duration::zero()) : repeat_interval);
 
         // Without repeated frames, keep waiting for a new frame unless a frame is needed to
         // recover from lost ones or the encoder has to stop
@@ -2867,12 +2874,13 @@ namespace video {
         }
 
         if (img) {
+          popped_at = std::chrono::steady_clock::now();
           frame_timestamp = img->frame_timestamp;
 
           // A frame captured just before a repeat was due, that reached the encoder just after,
           // mustn't be stamped before the repeat sent ahead of it
-          if (frame_timestamp && last_shown && *frame_timestamp < *last_shown) {
-            frame_timestamp = last_shown;
+          if (frame_timestamp && last_shown && *frame_timestamp < last_shown->stamp) {
+            frame_timestamp = last_shown->stamp;
           }
 
           // Frames captured while the last one was encoding were replaced by this one
@@ -2903,7 +2911,9 @@ namespace video {
           continue;
         } else if (repeat_frames) {
           // The repeat goes out on the minimum frame rate's schedule
-          frame_timestamp = repeat_at;
+          frame_timestamp = repeat.stamp;
+          popped_at = repeat.at;
+          repeated = true;
         }
       }
 
@@ -2949,8 +2959,8 @@ namespace video {
         BOOST_LOG(error) << "Could not encode video packet"sv;
         return;
       }
-      if (frame_timestamp) {
-        last_shown = frame_timestamp;
+      if (frame_timestamp && popped_at) {
+        last_shown = last_shown_t {*frame_timestamp, std::max(*popped_at - *frame_timestamp, std::chrono::steady_clock::duration::zero()), repeated};
       }
 
       session->request_normal_frame();

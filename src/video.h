@@ -861,21 +861,45 @@ namespace video {
   std::optional<std::chrono::duration<double, std::milli>> max_frame_wait(double minimum_fps_target, int framerate);
 
   /**
+   * @brief The last frame the encoder showed, a captured frame or a repeat. See repeat_due().
+   */
+  struct last_shown_t {
+    std::chrono::steady_clock::time_point stamp;  ///< When the frame was presented, or the time a repeat was stamped with.
+    std::chrono::steady_clock::duration delay {};  ///< How long after its stamp the encoder took the frame, or sent the repeat.
+    bool repeat = false;  ///< Whether the frame was a repeat.
+  };
+
+  /**
+   * @brief When to repeat the last frame shown, and the time to stamp the repeat with.
+   */
+  struct repeat_t {
+    std::chrono::steady_clock::time_point at;  ///< When the encoder stops waiting for a captured frame and repeats the last one.
+    std::chrono::steady_clock::time_point stamp;  ///< The time to stamp the repeat with.
+  };
+
+  /**
    * @brief Work out when the last frame shown is due to be repeated.
    *
-   * @details A repeat keeps the stream at its minimum frame rate, so it is due one minimum frame
-   *          interval after the last frame shown, whether a captured frame or a repeat, and is
-   *          stamped with that time. The client then shows it on that schedule, rather than when
-   *          the encoder got to it, which put it between the game's frames. After a stall of more
-   *          than an interval, the schedule starts again from now, rather than stamping a burst
-   *          of repeats in the past.
+   * @details A repeat keeps the stream at its minimum frame rate. After a repeat, the next one is
+   *          stamped one minimum frame interval later. After a captured frame, it waits half an
+   *          interval more. A game at the minimum frame rate presents a frame about an interval
+   *          after the last, give or take its own jitter, so a repeat due exactly an interval later
+   *          often went out just before the game's next frame, as an extra frame. The client
+   *          shows each repeat at its stamp, on the game's timeline.
    *
-   * @param last_shown When the last frame shown was captured or repeated, or nothing before the first.
+   *          A frame reaches the encoder some time after it is presented, so the encoder waits
+   *          for the repeat until its stamp plus that same delay. Counted from the stamp alone,
+   *          the wait ended before the game's next frame could reach the encoder.
+   *
+   *          After a stall of more than an interval, the schedule starts again from now, rather
+   *          than stamping a burst of repeats in the past.
+   *
+   * @param last_shown The last frame shown, or nothing before the first.
    * @param interval The minimum frame rate's frame interval.
    * @param now The current time.
    * @return When to repeat the last frame, and the time to stamp the repeat with.
    */
-  std::chrono::steady_clock::time_point repeat_due(std::optional<std::chrono::steady_clock::time_point> last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now);
+  repeat_t repeat_due(const std::optional<last_shown_t> &last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now);
 
   /**
    * @brief Probe encoders and select the preferred encoder.

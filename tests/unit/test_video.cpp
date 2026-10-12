@@ -434,27 +434,51 @@ TEST(MaxFrameWaitTest, NeverRepeatsFramesWhenNegative) {
   EXPECT_FALSE(video::max_frame_wait(-1.0, 120).has_value());
 }
 
-TEST(RepeatDueTest, RepeatsOneIntervalAfterTheLastFrameShown) {
+TEST(RepeatDueTest, WaitsHalfAnIntervalMoreAfterACapturedFrame) {
   const auto shown = std::chrono::steady_clock::time_point {} + 1s;
-  // The encoder got to waiting 3 ms after the frame was captured
-  EXPECT_EQ(video::repeat_due(shown, 33ms, shown + 3ms), shown + 33ms);
+  // The frame reached the encoder 3 ms after it was presented
+  const auto due = video::repeat_due(video::last_shown_t {shown, 3ms, false}, 40ms, shown + 3ms);
+  EXPECT_EQ(due.stamp, shown + 60ms);
+  EXPECT_EQ(due.at, shown + 63ms);
+}
+
+TEST(RepeatDueTest, DoesNotRepeatAGameAtTheMinimumFrameRate) {
+  const auto shown = std::chrono::steady_clock::time_point {} + 1s;
+  // A game at the minimum frame rate presents its next frame an interval later, give or take
+  // its jitter, and it reaches the encoder as long after as the last one did
+  const auto next_frame_reaches_encoder = shown + 40ms + 2ms + 3ms;
+  const auto due = video::repeat_due(video::last_shown_t {shown, 3ms, false}, 40ms, shown + 3ms);
+  EXPECT_GT(due.at, next_frame_reaches_encoder);
+}
+
+TEST(RepeatDueTest, RepeatsOneIntervalAfterARepeat) {
+  const auto shown = std::chrono::steady_clock::time_point {} + 1s;
+  const auto due = video::repeat_due(video::last_shown_t {shown, 3ms, true}, 40ms, shown + 3ms);
+  EXPECT_EQ(due.stamp, shown + 40ms);
+  EXPECT_EQ(due.at, shown + 43ms);
 }
 
 TEST(RepeatDueTest, KeepsTheScheduleWhenTheEncoderIsSlightlyLate) {
   const auto shown = std::chrono::steady_clock::time_point {} + 1s;
-  // Due 33 ms after, the encoder only got there at 40 ms: still stamped on the schedule
-  EXPECT_EQ(video::repeat_due(shown, 33ms, shown + 40ms), shown + 33ms);
+  // Due 40 ms after, the encoder only got there at 50 ms: still stamped on the schedule
+  const auto due = video::repeat_due(video::last_shown_t {shown, 0ms, true}, 40ms, shown + 50ms);
+  EXPECT_EQ(due.stamp, shown + 40ms);
+  EXPECT_EQ(due.at, shown + 40ms);
 }
 
 TEST(RepeatDueTest, StartsAgainFromNowAfterAStall) {
   const auto shown = std::chrono::steady_clock::time_point {} + 1s;
-  const auto now = shown + 100ms;
-  EXPECT_EQ(video::repeat_due(shown, 33ms, now), now);
+  const auto now = shown + 200ms;
+  const auto due = video::repeat_due(video::last_shown_t {shown, 3ms, false}, 40ms, now);
+  EXPECT_EQ(due.stamp, now);
+  EXPECT_EQ(due.at, now);
 }
 
 TEST(RepeatDueTest, WaitsAnIntervalBeforeTheFirstFrame) {
   const auto now = std::chrono::steady_clock::time_point {} + 1s;
-  EXPECT_EQ(video::repeat_due(std::nullopt, 33ms, now), now + 33ms);
+  const auto due = video::repeat_due(std::nullopt, 33ms, now);
+  EXPECT_EQ(due.stamp, now + 33ms);
+  EXPECT_EQ(due.at, now + 33ms);
 }
 
 TEST(PyrowaveMaxFrameSizeTest, SpreadsTheBitrateOverTheFrames) {
