@@ -9,7 +9,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // local includes
@@ -44,6 +46,7 @@ namespace amf_direct {
     bool preanalysis = false;  ///< Whether AMF's pre-analysis runs.
     bool enforce_hrd = false;  ///< Whether AMF enforces the HRD.
     int tiles = 1;  ///< Tiles per frame. Above 1, AMF hands each tile over as it finishes.
+    int ltr_frames = 0;  ///< Long-term reference frames kept to recover from lost frames without a key frame. 0 turns them off.
   };
 
   /**
@@ -86,6 +89,15 @@ namespace amf_direct {
    * @return Frame duration in 100 ns units.
    */
   std::int64_t frame_duration(int fps_num, int fps_den);
+
+  /**
+   * @brief Work out how many frames apart long-term references are kept.
+   *
+   * @param fps_num Frame rate numerator.
+   * @param fps_den Frame rate denominator.
+   * @return Frames in an eighth of a second, at least 1.
+   */
+  std::int64_t ltr_interval(int fps_num, int fps_den);
 
   /**
    * @brief Measure the OBUs at the start of an AMF output buffer.
@@ -165,11 +177,112 @@ namespace amf_direct {
   };
 
   /**
+   * @brief What to do with long-term references for one frame.
+   */
+  struct ltr_plan_t {
+    bool key = false;  ///< Whether the frame must be a key frame.
+    int mark = -1;  ///< Slot to keep the frame in as a long-term reference, or -1.
+    int reference = -1;  ///< Slot whose frame alone the frame references, to recover from lost frames, or -1.
+  };
+
+  /**
+   * @brief Decides which frames become long-term references, and which one to recover from
+   *        when the client loses frames.
+   *
+   * @details A frame is kept as a long-term reference at regular intervals. The client confirms
+   *          each one it receives whole. When the client reports lost frames, the next frame
+   *          references only the newest confirmed one from before the loss, so the client can
+   *          decode it without the lost frames, instead of waiting for a key frame. The newest
+   *          confirmed reference is never replaced by one not yet confirmed.
+   */
+  class ltr_tracker_t {
+  public:
+    /**
+     * @brief Create a tracker.
+     *
+     * @param slots Long-term references the encoder keeps. 0 recovers with key frames only.
+     * @param interval Frames between long-term references. At least 1.
+     */
+    ltr_tracker_t(int slots = 0, std::int64_t interval = 1);
+
+    /**
+     * @brief Get the number of long-term references kept.
+     *
+     * @return Slots.
+     */
+    int slots() const;
+
+    /**
+     * @brief Decide what the next frame does with long-term references.
+     *
+     * @param frame_index The frame's index, as the client sees it.
+     * @param key_requested Whether a key frame was asked for.
+     * @return The plan for the frame. A key frame is planned when one was asked for, or when the
+     *         client lost frames and no confirmed reference from before the loss is left.
+     */
+    ltr_plan_t plan(std::int64_t frame_index, bool key_requested);
+
+    /**
+     * @brief Record that the client received a long-term reference whole.
+     *
+     * @param frame_index The frame's index.
+     */
+    void acknowledge(std::int64_t frame_index);
+
+    /**
+     * @brief Record that the client lost frames, to recover from with the next plan().
+     *
+     * @details Requests that come before the next plan() are merged. A request only for frames
+     *          before the last recovery or key frame is ignored, as that frame already recovered.
+     *
+     * @param first_frame First frame lost.
+     * @param last_frame Last frame lost.
+     */
+    void invalidate(std::int64_t first_frame, std::int64_t last_frame);
+
+    /**
+     * @brief Stop using a slot, as when the encoder didn't keep the frame planned for it.
+     *
+     * @param slot The slot.
+     */
+    void forget(int slot);
+
+    /**
+     * @brief Get the frame kept in a slot.
+     *
+     * @param slot The slot.
+     * @return The frame's index, or -1 if the slot is empty.
+     */
+    std::int64_t frame_in(int slot) const;
+
+  private:
+    /**
+     * @brief A long-term reference.
+     */
+    struct slot_t {
+      std::int64_t frame = -1;  ///< Index of the frame kept, or -1.
+      bool acknowledged = false;  ///< Whether the client received the frame whole.
+    };
+
+    int newest_acknowledged() const;
+    int slot_to_mark() const;
+    void clear();
+
+    std::vector<slot_t> slot_list;
+    std::int64_t interval;
+    std::int64_t last_mark = -1;
+    std::int64_t recovered_at = -1;
+    std::optional<std::pair<std::int64_t, std::int64_t>> lost;
+  };
+
+  /**
    * @brief One encoded frame.
    */
   struct encoded_frame_t {
     std::vector<std::uint8_t> data;  ///< The frame's bitstream, all tiles in order.
     bool idr = false;  ///< Whether the frame is a key frame.
+    bool after_ref_frame_invalidation = false;  ///< Whether the frame recovers from lost frames by referencing a long-term reference.
+    bool ltr = false;  ///< Whether the frame is kept as a long-term reference, for the client to confirm.
     std::vector<tile_t> tiles;  ///< When each tile came out of the encoder.
   };
 
@@ -231,6 +344,21 @@ namespace amf_direct {
      * @return True on success.
      */
     bool encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace, const tile_callback_t &on_tile = {});
+
+    /**
+     * @brief Recover from frames the client lost with the next frame.
+     *
+     * @param first_frame First frame lost.
+     * @param last_frame Last frame lost.
+     */
+    void invalidate_ref_frames(std::int64_t first_frame, std::int64_t last_frame);
+
+    /**
+     * @brief Record that the client received a long-term reference whole.
+     *
+     * @param frame_index The frame's index.
+     */
+    void acknowledge_ltr(std::int64_t frame_index);
 
   private:
     struct impl_t;

@@ -695,6 +695,21 @@ namespace platf {
      * @return True on success.
      */
     virtual bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const std::function<void(const amf_direct::encoded_frame_t &, int)> &on_tile) = 0;
+
+    /**
+     * @brief Recover from frames the client lost with the next frame.
+     *
+     * @param first_frame First frame lost.
+     * @param last_frame Last frame lost.
+     */
+    virtual void invalidate_ref_frames(std::int64_t first_frame, std::int64_t last_frame) = 0;
+
+    /**
+     * @brief Record that the client received a long-term reference frame whole.
+     *
+     * @param frame_index The frame's index.
+     */
+    virtual void acknowledge_ltr(std::int64_t frame_index) = 0;
   };
 
   /**

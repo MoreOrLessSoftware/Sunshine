@@ -70,6 +70,11 @@ namespace amf_direct {
     return second * std::max(fps_den, 1) / std::max(fps_num, 1);
   }
 
+  std::int64_t ltr_interval(int fps_num, int fps_den) {
+    // An eighth of a second
+    return std::max<std::int64_t>(std::max(fps_num, 1) / (std::int64_t {8} * std::max(fps_den, 1)), 1);
+  }
+
   std::size_t obu_bytes(const std::uint8_t *data, std::size_t size, bool through_first_tile) {
     std::size_t end = 0;
     while (end < size) {
@@ -186,6 +191,109 @@ namespace amf_direct {
     *this = {};
   }
 
+  ltr_tracker_t::ltr_tracker_t(int slots, std::int64_t interval):
+      slot_list(static_cast<std::size_t>(std::max(slots, 0))),
+      interval {std::max<std::int64_t>(interval, 1)} {
+  }
+
+  int ltr_tracker_t::slots() const {
+    return static_cast<int>(slot_list.size());
+  }
+
+  ltr_plan_t ltr_tracker_t::plan(std::int64_t frame_index, bool key_requested) {
+    ltr_plan_t plan;
+
+    if (lost && !key_requested) {
+      const auto [first, last] = *lost;
+      if (last >= recovered_at) {
+        // Frames from the first lost one on may depend on it, so the client can't use them
+        for (auto &slot : slot_list) {
+          if (slot.frame >= first) {
+            slot = {};
+          }
+        }
+
+        plan.reference = newest_acknowledged();
+        if (plan.reference < 0) {
+          key_requested = true;
+        }
+        recovered_at = frame_index;
+      }
+    }
+    lost.reset();
+
+    if (key_requested) {
+      clear();
+      plan.key = true;
+      recovered_at = frame_index;
+    }
+
+    // A recovering frame is left unmarked, as it references only an older reference
+    if (!slot_list.empty() && plan.reference < 0 && (plan.key || last_mark < 0 || frame_index - last_mark >= interval)) {
+      plan.mark = slot_to_mark();
+      slot_list[plan.mark] = {frame_index, false};
+      last_mark = frame_index;
+    }
+    return plan;
+  }
+
+  void ltr_tracker_t::acknowledge(std::int64_t frame_index) {
+    for (auto &slot : slot_list) {
+      if (slot.frame == frame_index) {
+        slot.acknowledged = true;
+      }
+    }
+  }
+
+  void ltr_tracker_t::invalidate(std::int64_t first_frame, std::int64_t last_frame) {
+    if (lost) {
+      first_frame = std::min(first_frame, lost->first);
+      last_frame = std::max(last_frame, lost->second);
+    }
+    lost = std::make_pair(first_frame, last_frame);
+  }
+
+  void ltr_tracker_t::forget(int slot) {
+    if (slot >= 0 && slot < slots()) {
+      slot_list[slot] = {};
+    }
+  }
+
+  std::int64_t ltr_tracker_t::frame_in(int slot) const {
+    return slot >= 0 && slot < slots() ? slot_list[slot].frame : -1;
+  }
+
+  int ltr_tracker_t::newest_acknowledged() const {
+    int newest = -1;
+    for (int i = 0; i < slots(); ++i) {
+      if (slot_list[i].acknowledged && (newest < 0 || slot_list[i].frame > slot_list[newest].frame)) {
+        newest = i;
+      }
+    }
+    return newest;
+  }
+
+  int ltr_tracker_t::slot_to_mark() const {
+    // An empty slot, or else the oldest one that isn't the newest the client has
+    const auto keep = slots() > 1 ? newest_acknowledged() : -1;
+    int oldest = -1;
+    for (int i = 0; i < slots(); ++i) {
+      if (slot_list[i].frame < 0) {
+        return i;
+      }
+      if (i != keep && (oldest < 0 || slot_list[i].frame < slot_list[oldest].frame)) {
+        oldest = i;
+      }
+    }
+    return oldest;
+  }
+
+  void ltr_tracker_t::clear() {
+    for (auto &slot : slot_list) {
+      slot = {};
+    }
+  }
+
 #ifdef _WIN32
   namespace {
     /**
@@ -250,6 +358,13 @@ namespace amf_direct {
     amf::AMFContextPtr context;  ///< AMF context on the encode device.
     amf::AMFComponentPtr encoder;  ///< AV1 encoder component.
     ID3D11Texture2D *texture = nullptr;  ///< Texture frames are drawn into.
+    amf::AMFSurfacePtr surface;  ///< The texture wrapped for AMF once, submitted for every frame.
+    ltr_tracker_t ltr;  ///< Long-term references, to recover from lost frames.
+    std::size_t recoveries = 0;  ///< Frames that recovered from lost frames with a long-term reference, since the last timing line.
+    std::size_t recovery_keys = 0;  ///< Key frames sent for lost frames, with no long-term reference to recover from, since the last timing line.
+    std::size_t ltr_misses = 0;  ///< Frames where AMF didn't mark or reference the long-term reference planned, since the last timing line.
+    std::chrono::steady_clock::duration prepare_time {};  ///< Time spent setting up frames before SubmitInput(), since the last timing line.
+    std::chrono::steady_clock::duration submit_time {};  ///< Time spent in SubmitInput(), since the last timing line.
     bool tile_output = false;  ///< Whether AMF hands over each tile on its own.
     int tiles = 1;  ///< Tiles in each frame.
     bool first_frame = true;  ///< Whether no frame has been encoded yet, as the first is a key frame.
@@ -260,6 +375,7 @@ namespace amf_direct {
     std::size_t leftover_obus = 0;  ///< Tile buffers whose leftover bytes looked like OBUs, since the last timing line.
 
     ~impl_t() {
+      surface = nullptr;
       if (encoder) {
         encoder->Terminate();
         encoder = nullptr;
@@ -334,6 +450,12 @@ namespace amf_direct {
       encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_MAX_NUM_REFRAMES, (amf_int64) config.numRefFrames);
     }
 
+    // Long-term references are kept until replaced, not only while frames reference them
+    if (settings.ltr_frames > 0) {
+      encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_MAX_LTR_FRAMES, (amf_int64) settings.ltr_frames);
+      encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_LTR_MODE, (amf_int64) AMF_VIDEO_ENCODER_AV1_LTR_MODE_KEEP_UNUSED);
+    }
+
     encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_RATE_CONTROL_METHOD, settings.rate_control);
     encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_TARGET_BITRATE, bitrate);
     encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_PEAK_BITRATE, bitrate);
@@ -348,6 +470,12 @@ namespace amf_direct {
     if (settings.tiles > 1) {
       encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_TILES_PER_FRAME, (amf_int64) settings.tiles);
       encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_TILE_GROUP_OBU, true);
+
+      // With several tiles, the entropy context AMF saves at the end of a frame isn't the one
+      // the frame header says (context_update_tile_id), so decoders that check, such as
+      // dav1d, reject every frame after a key frame. Frames start from their reference's
+      // context instead.
+      encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_CDF_FRAME_END_UPDATE_MODE, (amf_int64) AMF_VIDEO_ENCODER_AV1_CDF_FRAME_END_UPDATE_MODE_DISABLE);
       if (encoder->SetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_MODE, (amf_int64) AMF_VIDEO_ENCODER_AV1_OUTPUT_MODE_TILE) == AMF_OK) {
         state->tile_output = true;
       } else {
@@ -377,12 +505,23 @@ namespace amf_direct {
       BOOST_LOG(error) << "AMF direct: couldn't create the input texture"sv;
       return false;
     }
+    if (auto res = state->context->CreateSurfaceFromDX11Native(state->texture, &state->surface, nullptr); res != AMF_OK) {
+      BOOST_LOG(error) << "AMF direct: couldn't wrap the input texture: "sv << res;
+      return false;
+    }
+
+    amf_int64 ltr_frames = 0;
+    if (settings.ltr_frames > 0) {
+      encoder->GetProperty(AMF_VIDEO_ENCODER_AV1_MAX_LTR_FRAMES, &ltr_frames);
+    }
+    state->ltr = ltr_tracker_t {static_cast<int>(std::max<amf_int64>(ltr_frames, 0)), ltr_interval(fps.num, fps.den)};
 
     amf_int64 tiles = 1;
     encoder->GetProperty(AMF_VIDEO_ENCODER_AV1_TILES_PER_FRAME, &tiles);
     state->tiles = static_cast<int>(std::max<amf_int64>(tiles, 1));
     BOOST_LOG(info) << "AMF direct: encoding AV1 "sv << config.width << 'x' << config.height << ' ' << colorspace.bit_depth << "-bit at "sv << bitrate_kbps << " kbps, "sv
-                    << tiles << (tiles == 1 ? " tile"sv : " tiles"sv) << (state->tile_output ? ", each handed over as it finishes"sv : ", frames handed over whole"sv);
+                    << tiles << (tiles == 1 ? " tile"sv : " tiles"sv) << (state->tile_output ? ", each handed over as it finishes"sv : ", frames handed over whole"sv) << ", "sv
+                    << ltr_frames << " long-term references"sv;
 
     state->duration = frame_duration(fps.num, fps.den);
     impl = std::move(state);
@@ -401,27 +540,50 @@ namespace amf_direct {
       return false;
     }
 
-    amf::AMFSurfacePtr surface;
-    if (auto res = impl->context->CreateSurfaceFromDX11Native(impl->texture, &surface, nullptr); res != AMF_OK) {
-      BOOST_LOG(error) << "AMF direct: couldn't wrap the input texture: "sv << res;
-      return false;
+    const auto preparing = std::chrono::steady_clock::now();
+
+    // AMF makes key frames only when asked and for the first frame (the GOP size is 0)
+    const bool first = impl->first_frame;
+    impl->first_frame = false;
+    const auto plan = impl->ltr.plan(static_cast<std::int64_t>(frame_index), force_idr || first);
+    const bool idr_expected = plan.key;
+    if (plan.reference >= 0) {
+      ++impl->recoveries;
+      BOOST_LOG(info) << "AMF direct: frame "sv << frame_index << " recovers from lost frames with the long-term reference to frame "sv << impl->ltr.frame_in(plan.reference);
+    } else if (plan.key && !force_idr && !first) {
+      ++impl->recovery_keys;
+      BOOST_LOG(info) << "AMF direct: frame "sv << frame_index << " is a key frame, with no long-term reference left to recover from lost frames"sv;
     }
+    frame.after_ref_frame_invalidation = plan.reference >= 0;
+    frame.ltr = plan.mark >= 0;
+
+    // The surface is reused, so last frame's settings go first
+    auto &surface = impl->surface;
+    surface->Clear();
     surface->SetPts(static_cast<amf_pts>(frame_index) * impl->duration);
     surface->SetDuration(impl->duration);
-    if (force_idr) {
+    if (plan.key) {
       surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_FRAME_TYPE, (amf_int64) AMF_VIDEO_ENCODER_AV1_FORCE_FRAME_TYPE_KEY);
       surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_INSERT_SEQUENCE_HEADER, true);
     }
-
-    // AMF makes key frames only when asked and for the first frame (the GOP size is 0)
-    const bool idr_expected = force_idr || impl->first_frame;
-    impl->first_frame = false;
+    if (plan.mark >= 0) {
+      surface->SetProperty(AMF_VIDEO_ENCODER_AV1_MARK_CURRENT_WITH_LTR_INDEX, (amf_int64) plan.mark);
+    }
+    if (plan.reference >= 0) {
+      surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_LTR_REFERENCE_BITFIELD, (amf_int64) (1 << plan.reference));
+    }
 
     const auto submitted = std::chrono::steady_clock::now();
     if (auto res = impl->encoder->SubmitInput(surface); res != AMF_OK) {
       BOOST_LOG(error) << "AMF direct: SubmitInput() failed: "sv << res;
       return false;
     }
+    impl->prepare_time += submitted - preparing;
+    impl->submit_time += std::chrono::steady_clock::now() - submitted;
+
+    // What AMF did with the long-term references, as it may say with any of the frame's buffers
+    amf_int64 marked = -1;
+    amf_int64 referenced = -1;
     if (trace) {
       trace->mark(frame_trace::point_e::encode_submitted);
     }
@@ -459,6 +621,8 @@ namespace amf_direct {
       if (data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE, &frame_type) == AMF_OK && frame_type == AMF_VIDEO_ENCODER_AV1_OUTPUT_FRAME_TYPE_KEY) {
         frame.idr = true;
       }
+      data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_MARKED_LTR_INDEX, &marked);
+      data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_REFERENCED_LTR_INDEX_BITFIELD, &referenced);
 
       amf_int64 buffer_type = AMF_VIDEO_ENCODER_AV1_OUTPUT_BUFFER_TYPE_FRAME;
       data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_BUFFER_TYPE, &buffer_type);
@@ -474,6 +638,16 @@ namespace amf_direct {
         if (frame.idr != idr_expected) {
           ++impl->idr_mismatches;
         }
+        if (plan.mark >= 0 && marked != plan.mark) {
+          // Not a reference to recover from after all
+          ++impl->ltr_misses;
+          impl->ltr.forget(plan.mark);
+          frame.ltr = false;
+        }
+        if (plan.reference >= 0 && referenced != (amf_int64) (1 << plan.reference)) {
+          ++impl->ltr_misses;
+          BOOST_LOG(warning) << "AMF direct: frame "sv << frame_index << " was to reference only long-term reference "sv << plan.reference << ", but references "sv << referenced;
+        }
         if (trace) {
           trace->mark(frame_trace::point_e::encode_finished);
         }
@@ -485,9 +659,17 @@ namespace amf_direct {
 
         impl->timing.add(frame.tiles);
         if (impl->timing.frames() >= timing_log_frames) {
-          BOOST_LOG(info) << "AMF direct: "sv << impl->timing.summary() << ", "sv << impl->leftover_obus << " tiles followed by bytes that looked like OBUs, "sv << impl->idr_mismatches << " key frame flags not as asked"sv;
+          const auto frames = static_cast<double>(impl->timing.frames());
+          BOOST_LOG(info) << "AMF direct: "sv << impl->timing.summary() << ", "sv << impl->leftover_obus << " tiles followed by bytes that looked like OBUs, "sv << impl->idr_mismatches << " key frame flags not as asked, "sv
+                          << std::format("{:.3f} ms preparing and {:.3f} ms submitting each frame, ", std::chrono::duration<double, std::milli>(impl->prepare_time).count() / frames, std::chrono::duration<double, std::milli>(impl->submit_time).count() / frames)
+                          << impl->recoveries << " recoveries from long-term references, "sv << impl->recovery_keys << " key frames for lost frames, "sv << impl->ltr_misses << " long-term references not as asked"sv;
           impl->leftover_obus = 0;
           impl->idr_mismatches = 0;
+          impl->recoveries = 0;
+          impl->recovery_keys = 0;
+          impl->ltr_misses = 0;
+          impl->prepare_time = {};
+          impl->submit_time = {};
           impl->timing.reset();
         }
         return true;
@@ -496,6 +678,18 @@ namespace amf_direct {
 
     BOOST_LOG(error) << "AMF direct: the encoder didn't finish frame "sv << frame_index;
     return false;
+  }
+
+  void av1_encoder_t::invalidate_ref_frames(std::int64_t first_frame, std::int64_t last_frame) {
+    if (impl) {
+      impl->ltr.invalidate(first_frame, last_frame);
+    }
+  }
+
+  void av1_encoder_t::acknowledge_ltr(std::int64_t frame_index) {
+    if (impl) {
+      impl->ltr.acknowledge(frame_index);
+    }
   }
 #endif
 

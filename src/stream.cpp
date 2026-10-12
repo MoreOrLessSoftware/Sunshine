@@ -54,6 +54,7 @@ constexpr int IDX_SET_MOTION_EVENT = 13;  ///< Control-stream message index for 
 constexpr int IDX_SET_RGB_LED = 14;  ///< Control-stream message index for set rgb led.
 constexpr int IDX_SET_ADAPTIVE_TRIGGERS = 15;  ///< Control-stream message index for set adaptive triggers.
 constexpr int IDX_SET_PLAYER_LEDS = 16;  ///< Control-stream message index for set player indicator LEDs.
+constexpr int IDX_LTR_FRAME_ACK = 17;  ///< Control-stream message index for a long-term reference frame the client received.
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -73,6 +74,7 @@ static const short packetTypes[] = {
   0x5502,  // Set RGB LED (Sunshine protocol extension)
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
   0x5504,  // Set player indicator LEDs (Sunshine protocol extension)
+  0x0350,  // LTR frame ACK (Sunshine protocol extension)
 };
 
 namespace asio = boost::asio;
@@ -514,6 +516,7 @@ namespace stream {
 
       safe::mail_raw_t::event_t<bool> idr_events;  ///< Event requesting an instantaneous decoder refresh frame.
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;  ///< Event carrying the reference-frame range to invalidate.
+      safe::mail_raw_t::event_t<int64_t> ltr_frame_ack_events;  ///< Event carrying a long-term reference frame the client received whole.
 
       std::unique_ptr<platf::deinit_t> qos;  ///< Lifetime guard for video-socket QoS configuration.
 
@@ -1230,6 +1233,19 @@ namespace stream {
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
     });
 
+    server->map(packetTypes[IDX_LTR_FRAME_ACK], [&](session_t *session, const std::string_view &payload) {
+      if (payload.size() < sizeof(SS_LTR_FRAME_ACK)) {
+        BOOST_LOG(warning) << "LTR frame ACK too short: "sv << payload.size() << " bytes"sv;
+        return;
+      }
+
+      boost::endian::little_uint32_at frame_index;
+      std::memcpy(&frame_index, payload.data() + offsetof(SS_LTR_FRAME_ACK, frameIndex), sizeof(frame_index));
+      BOOST_LOG(verbose) << "type [IDX_LTR_FRAME_ACK] frame ["sv << frame_index << ']';
+
+      session->video.ltr_frame_ack_events->raise(static_cast<int64_t>(frame_index));
+    });
+
     server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
@@ -1684,6 +1700,7 @@ namespace stream {
         inspect->packet.multiFecFlags = 0x10;
         inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
 
+        inspect->packet.extraFlags = packet.ltr_frame ? NV_VIDEO_PACKET_EXTRA_FLAG_LTR_FRAME : 0;
         inspect->packet.flags = FLAG_CONTAINS_PIC_DATA;
         if (x == 0) {
           inspect->packet.flags |= FLAG_SOF;
@@ -2618,6 +2635,7 @@ namespace stream {
 
       session->video.idr_events = mail->event<bool>(mail::idr);
       session->video.invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+      session->video.ltr_frame_ack_events = mail->event<int64_t>(mail::ltr_frame_ack);
       session->video.lowseq = 0;
       session->video.ping_payload = launch_session.av_ping_payload;
       if (config.encryptionFlagsEnabled & SS_ENC_VIDEO) {

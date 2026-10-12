@@ -488,6 +488,17 @@ namespace video {
     virtual void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) = 0;
 
     /**
+     * @brief Record that the client received a long-term reference frame whole.
+     *
+     * @details Only encoders that recover from lost frames with long-term references they mark
+     *          themselves use this. See packet_raw_t::ltr_frame.
+     *
+     * @param frame_index The frame's index.
+     */
+    virtual void confirm_ltr_frame(int64_t frame_index) {
+    }
+
+    /**
      * @brief Change the bitrate while streaming, keeping the stream's frame rate.
      *
      * @details Each frame's share of the bitrate is still worked out from the stream's frame
@@ -585,6 +596,7 @@ namespace video {
     std::vector<replace_t> *replacements = nullptr;  ///< Optional encoded-byte substitutions applied before packetization.
     void *channel_data = nullptr;  ///< Platform or protocol state carried with this packet.
     bool after_ref_frame_invalidation = false;  ///< Whether the frame follows reference-frame invalidation.
+    bool ltr_frame = false;  ///< Whether the frame is a long-term reference, which the client confirms once it has the frame whole.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
     int subframe_part = -1;  ///< Which part of a frame sent while it is encoded this is, from 0, or -1 for a whole frame. See video_subframe.h.
     bool subframe_final = false;  ///< Whether this is the last part of a frame sent in parts.

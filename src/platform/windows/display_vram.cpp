@@ -1375,6 +1375,7 @@ namespace platf::dxgi {
       settings.preanalysis = amd.amd_preanalysis.value_or(0) != 0;
       settings.enforce_hrd = amd.amd_enforce_hrd.value_or(0) != 0;
       settings.tiles = amd.amd_av1_tiles;
+      settings.ltr_frames = ltr_frames;
 
       if (!encoder.create(base.device.get(), client_config, colorspace, settings)) {
         return false;
@@ -1409,7 +1410,28 @@ namespace platf::dxgi {
       return encoder.encode_frame(frame_index, force_idr, frame, trace, on_tile);
     }
 
+    /**
+     * @brief Recover from frames the client lost with the next frame.
+     *
+     * @param first_frame First frame lost.
+     * @param last_frame Last frame lost.
+     */
+    void invalidate_ref_frames(std::int64_t first_frame, std::int64_t last_frame) override {
+      encoder.invalidate_ref_frames(first_frame, last_frame);
+    }
+
+    /**
+     * @brief Record that the client received a long-term reference frame whole.
+     *
+     * @param frame_index The frame's index.
+     */
+    void acknowledge_ltr(std::int64_t frame_index) override {
+      encoder.acknowledge_ltr(frame_index);
+    }
+
   private:
+    static constexpr int ltr_frames = 4;  ///< Long-term references kept to recover from lost frames.
+
     d3d_base_encode_device base;
     amf_direct::av1_encoder_t encoder;
   };

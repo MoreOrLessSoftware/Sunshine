@@ -3132,8 +3132,11 @@ supported on the current platform.
             [amd_quality](#amd_quality), [amd_preanalysis](#amd_preanalysis) and
             [amd_enforce_hrd](#amd_enforce_hrd), and can encode each frame in tiles, see
             [amd_av1_tiles](#amd_av1_tiles). If the AMF runtime can't be used, AV1 is encoded through FFmpeg.
-            @note{This option only applies when using AV1 with 4:2:0 chroma and the amdvce [encoder](#encoder).
-            Lost frames are recovered from with a key frame.}
+            Lost frames are recovered from without a key frame where possible: every eighth of a second a
+            frame is kept as a long-term reference, and after a loss the next frame references only the
+            newest one the client confirmed receiving. While this option is enabled, clients are told that
+            Sunshine can invalidate reference frames; H.264 and HEVC still recover with a key frame.
+            @note{This option only applies when using AV1 with 4:2:0 chroma and the amdvce [encoder](#encoder).}
         </td>
     </tr>
     <tr>

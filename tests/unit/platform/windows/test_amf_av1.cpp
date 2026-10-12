@@ -310,4 +310,249 @@ INSTANTIATE_TEST_SUITE_P(
     AmfDirectConfigParam {"amd_av1_tiles = 65\n"sv, false, 1}
   )
 );
+
+TEST(AmfLtrIntervalTest, KeepsAReferenceEveryEighthOfASecond) {
+  EXPECT_EQ(amf_direct::ltr_interval(60, 1), 7);
+  EXPECT_EQ(amf_direct::ltr_interval(120, 1), 15);
+  EXPECT_EQ(amf_direct::ltr_interval(60000, 1001), 7);
+}
+
+TEST(AmfLtrIntervalTest, KeepsAReferenceEveryFrameAtLowFrameRates) {
+  EXPECT_EQ(amf_direct::ltr_interval(4, 1), 1);
+  EXPECT_EQ(amf_direct::ltr_interval(0, 0), 1);
+}
+
+namespace {
+  /**
+   * @brief Plan frames from first to last, acknowledging every one marked.
+   *
+   * @param ltr The tracker.
+   * @param first First frame index.
+   * @param last Last frame index.
+   */
+  void plan_acknowledged(amf_direct::ltr_tracker_t &ltr, std::int64_t first, std::int64_t last) {
+    for (auto frame = first; frame <= last; ++frame) {
+      if (ltr.plan(frame, false).mark >= 0) {
+        ltr.acknowledge(frame);
+      }
+    }
+  }
+}  // namespace
+
+TEST(AmfLtrTrackerTest, MarksTheFirstKeyFrame) {
+  amf_direct::ltr_tracker_t ltr {4, 8};
+  const auto plan = ltr.plan(1, true);
+  EXPECT_TRUE(plan.key);
+  EXPECT_EQ(plan.mark, 0);
+  EXPECT_EQ(plan.reference, -1);
+  EXPECT_EQ(ltr.frame_in(0), 1);
+}
+
+TEST(AmfLtrTrackerTest, MarksAFrameEachInterval) {
+  amf_direct::ltr_tracker_t ltr {4, 8};
+  ltr.plan(1, true);
+  for (std::int64_t frame = 2; frame < 9; ++frame) {
+    EXPECT_EQ(ltr.plan(frame, false).mark, -1) << frame;
+  }
+  const auto plan = ltr.plan(9, false);
+  EXPECT_FALSE(plan.key);
+  EXPECT_EQ(plan.mark, 1);
+  EXPECT_EQ(ltr.frame_in(1), 9);
+}
+
+TEST(AmfLtrTrackerTest, ReplacesTheOldestReferenceOnceAllAreUsed) {
+  amf_direct::ltr_tracker_t ltr {2, 1};
+  EXPECT_EQ(ltr.plan(1, false).mark, 0);
+  EXPECT_EQ(ltr.plan(2, false).mark, 1);
+  EXPECT_EQ(ltr.plan(3, false).mark, 0);
+  EXPECT_EQ(ltr.plan(4, false).mark, 1);
+  EXPECT_EQ(ltr.frame_in(0), 3);
+  EXPECT_EQ(ltr.frame_in(1), 4);
+}
+
+TEST(AmfLtrTrackerTest, KeepsTheNewestReferenceTheClientHas) {
+  amf_direct::ltr_tracker_t ltr {2, 1};
+  ltr.plan(1, false);
+  ltr.acknowledge(1);
+  ltr.plan(2, false);
+
+  // Frame 1 is the only one the client confirmed, so slot 1 is replaced although it is newer
+  EXPECT_EQ(ltr.plan(3, false).mark, 1);
+  EXPECT_EQ(ltr.plan(4, false).mark, 1);
+  EXPECT_EQ(ltr.frame_in(0), 1);
+}
+
+TEST(AmfLtrTrackerTest, ReplacesASingleReferenceEvenOnceConfirmed) {
+  amf_direct::ltr_tracker_t ltr {1, 1};
+  ltr.plan(1, false);
+  ltr.acknowledge(1);
+  EXPECT_EQ(ltr.plan(2, false).mark, 0);
+  EXPECT_EQ(ltr.frame_in(0), 2);
+}
+
+TEST(AmfLtrTrackerTest, RecoversFromTheNewestConfirmedReferenceBeforeTheLoss) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  plan_acknowledged(ltr, 2, 12);  // Frames 5 and 9 marked and confirmed
+
+  ltr.invalidate(10, 12);
+  const auto plan = ltr.plan(13, false);
+  EXPECT_FALSE(plan.key);
+  EXPECT_EQ(plan.mark, -1);
+  ASSERT_GE(plan.reference, 0);
+  EXPECT_EQ(ltr.frame_in(plan.reference), 9);
+}
+
+TEST(AmfLtrTrackerTest, DropsReferencesFromTheLossOn) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  plan_acknowledged(ltr, 2, 12);  // Frames 5 and 9 marked and confirmed
+
+  // Frame 9 came after the first lost frame, so it may depend on it
+  ltr.invalidate(7, 12);
+  const auto plan = ltr.plan(13, false);
+  ASSERT_GE(plan.reference, 0);
+  EXPECT_EQ(ltr.frame_in(plan.reference), 5);
+  for (int slot = 0; slot < ltr.slots(); ++slot) {
+    EXPECT_LT(ltr.frame_in(slot), 7) << slot;
+  }
+}
+
+TEST(AmfLtrTrackerTest, SkipsReferencesNotConfirmed) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  for (std::int64_t frame = 2; frame <= 12; ++frame) {
+    ltr.plan(frame, false);  // Frames 5 and 9 marked, never confirmed
+  }
+
+  ltr.invalidate(11, 12);
+  const auto plan = ltr.plan(13, false);
+  ASSERT_GE(plan.reference, 0);
+  EXPECT_EQ(ltr.frame_in(plan.reference), 1);
+}
+
+TEST(AmfLtrTrackerTest, FallsBackToAKeyFrameWithNoConfirmedReference) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.plan(2, false);
+
+  ltr.invalidate(2, 2);
+  const auto plan = ltr.plan(3, false);
+  EXPECT_TRUE(plan.key);
+  EXPECT_EQ(plan.reference, -1);
+  EXPECT_EQ(plan.mark, 0);
+  EXPECT_EQ(ltr.frame_in(0), 3);
+  for (int slot = 1; slot < ltr.slots(); ++slot) {
+    EXPECT_EQ(ltr.frame_in(slot), -1) << slot;
+  }
+}
+
+TEST(AmfLtrTrackerTest, MergesLossesReportedBeforeTheNextFrame) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  plan_acknowledged(ltr, 2, 12);  // Frames 5 and 9 marked and confirmed
+
+  ltr.invalidate(10, 11);
+  ltr.invalidate(6, 12);
+  const auto plan = ltr.plan(13, false);
+  ASSERT_GE(plan.reference, 0);
+  EXPECT_EQ(ltr.frame_in(plan.reference), 5);
+}
+
+TEST(AmfLtrTrackerTest, IgnoresLossesTheLastRecoveryCovered) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  plan_acknowledged(ltr, 2, 12);
+
+  ltr.invalidate(10, 12);
+  ASSERT_GE(ltr.plan(13, false).reference, 0);
+
+  // The client hadn't seen frame 13 yet when it reported frames up to 12 again
+  ltr.invalidate(10, 12);
+  const auto plan = ltr.plan(14, false);
+  EXPECT_FALSE(plan.key);
+  EXPECT_EQ(plan.reference, -1);
+
+  // A loss including the recovering frame needs another recovery
+  ltr.invalidate(13, 14);
+  EXPECT_GE(ltr.plan(15, false).reference, 0);
+}
+
+TEST(AmfLtrTrackerTest, IgnoresLossesBeforeTheLastKeyFrame) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  ltr.plan(2, true);
+
+  ltr.invalidate(1, 1);
+  const auto plan = ltr.plan(3, false);
+  EXPECT_FALSE(plan.key);
+  EXPECT_EQ(plan.reference, -1);
+}
+
+TEST(AmfLtrTrackerTest, LetsAKeyFrameRequestWinOverALoss) {
+  amf_direct::ltr_tracker_t ltr {4, 4};
+  ltr.plan(1, true);
+  ltr.acknowledge(1);
+  ltr.plan(2, false);
+
+  ltr.invalidate(2, 2);
+  const auto plan = ltr.plan(3, true);
+  EXPECT_TRUE(plan.key);
+  EXPECT_EQ(plan.reference, -1);
+
+  // The loss went with the key frame
+  EXPECT_EQ(ltr.plan(4, false).reference, -1);
+}
+
+TEST(AmfLtrTrackerTest, RecoversWithKeyFramesWithoutReferences) {
+  amf_direct::ltr_tracker_t ltr;
+  EXPECT_EQ(ltr.slots(), 0);
+  const auto first = ltr.plan(1, true);
+  EXPECT_TRUE(first.key);
+  EXPECT_EQ(first.mark, -1);
+  EXPECT_EQ(ltr.plan(2, false).mark, -1);
+
+  ltr.invalidate(2, 2);
+  const auto plan = ltr.plan(3, false);
+  EXPECT_TRUE(plan.key);
+  EXPECT_EQ(plan.reference, -1);
+}
+
+TEST(AmfLtrTrackerTest, ForgetsASlot) {
+  amf_direct::ltr_tracker_t ltr {2, 1};
+  ltr.plan(1, false);
+  ltr.acknowledge(1);
+  ltr.forget(0);
+  EXPECT_EQ(ltr.frame_in(0), -1);
+
+  // Nothing left to recover from
+  ltr.invalidate(2, 2);
+  EXPECT_TRUE(ltr.plan(3, false).key);
+}
+
+TEST(AmfLtrTrackerTest, IgnoresSlotsOutOfRange) {
+  amf_direct::ltr_tracker_t ltr {2, 1};
+  ltr.plan(1, false);
+  ltr.forget(-1);
+  ltr.forget(2);
+  EXPECT_EQ(ltr.frame_in(0), 1);
+  EXPECT_EQ(ltr.frame_in(-1), -1);
+  EXPECT_EQ(ltr.frame_in(2), -1);
+}
+
+TEST(AmfLtrTrackerTest, IgnoresAcknowledgementsForOtherFrames) {
+  amf_direct::ltr_tracker_t ltr {2, 4};
+  ltr.plan(1, false);
+  ltr.plan(2, false);
+  ltr.acknowledge(2);
+
+  ltr.invalidate(3, 3);
+  EXPECT_TRUE(ltr.plan(4, false).key);
+}
 #endif

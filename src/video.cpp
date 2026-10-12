@@ -713,13 +713,27 @@ namespace video {
     }
 
     /**
-     * @brief Recover from lost frames with a key frame, until reference frames are invalidated directly.
+     * @brief Recover from lost frames with the next frame, by referencing a long-term reference
+     *        from before the loss, or with a key frame when there is none.
      *
      * @param first_frame First frame.
      * @param last_frame Last frame.
      */
     void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
-      force_idr = true;
+      if (device) {
+        device->invalidate_ref_frames(first_frame, last_frame);
+      }
+    }
+
+    /**
+     * @brief Record that the client received a long-term reference frame whole.
+     *
+     * @param frame_index The frame's index.
+     */
+    void confirm_ltr_frame(int64_t frame_index) override {
+      if (device) {
+        device->acknowledge_ltr(frame_index);
+      }
     }
 
     /**
@@ -2333,12 +2347,15 @@ namespace video {
     int parts_sent = 0;
     std::uint32_t groups_sent = 0;
     bool parts_idr = false;
-    auto send_part = [&](const std::vector<std::uint8_t> &data, bool final, bool idr) {
+    auto send_part = [&](const amf_direct::encoded_frame_t &frame, bool final, bool idr) {
+      const auto &data = frame.data;
       std::vector<std::uint8_t> part(std::begin(data) + bytes_sent, std::end(data));
       bytes_sent = data.size();
 
       auto packet = std::make_unique<packet_raw_generic>(std::move(part), frame_nr, idr);
       packet->channel_data = channel_data;
+      packet->after_ref_frame_invalidation = frame.after_ref_frame_invalidation;
+      packet->ltr_frame = frame.ltr;
       packet->frame_timestamp = frame_timestamp;
       packet->subframe_part = parts_sent++;
       packet->subframe_final = final;
@@ -2363,7 +2380,7 @@ namespace video {
       const auto groups_done = subframe::parts_ready(static_cast<std::uint32_t>(so_far.tiles.size()), static_cast<std::uint32_t>(tiles_total));
       if (groups_done > groups_sent) {
         groups_sent = groups_done;
-        send_part(so_far.data, false, so_far.idr);
+        send_part(so_far, false, so_far.idr);
       }
     };
 
@@ -2375,7 +2392,7 @@ namespace video {
 
     if (parts_sent > 0) {
       // The type the first part went out with
-      send_part(frame.data, true, parts_idr);
+      send_part(frame, true, parts_idr);
       return 0;
     }
 
@@ -2383,6 +2400,8 @@ namespace video {
     auto packet = std::make_unique<packet_raw_generic>(std::move(frame.data), frame_nr, idr);
     packet->channel_data = channel_data;
     packet->frame_timestamp = frame_timestamp;
+    packet->after_ref_frame_invalidation = frame.after_ref_frame_invalidation;
+    packet->ltr_frame = frame.ltr;
     if (trace) {
       trace->bytes = packet->data_size();
       trace->idr = idr;
@@ -2983,6 +3002,7 @@ namespace video {
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+    auto ltr_frame_ack_events = mail->event<int64_t>(mail::ltr_frame_ack);
 
     {
       // Load a dummy image into the AVFrame to ensure we have something to encode
@@ -3001,6 +3021,12 @@ namespace video {
 
     while (true) {
       bool requested_idr_frame = false;
+
+      while (ltr_frame_ack_events->peek()) {
+        if (auto frame = ltr_frame_ack_events->pop(0ms)) {
+          session->confirm_ltr_frame(*frame);
+        }
+      }
 
       bool refs_invalidated = false;
       while (invalidate_ref_frames_events->peek()) {
@@ -4134,7 +4160,10 @@ namespace video {
 
     auto &encoder = *chosen_encoder;
 
-    last_encoder_probe_supported_ref_frames_invalidation = (encoder.flags & REF_FRAMES_INVALIDATION);
+    // AV1 through AMF directly recovers from lost frames with long-term references. Other codecs
+    // on the same encoder answer the client's requests with key frames, as they would anyway.
+    last_encoder_probe_supported_ref_frames_invalidation = (encoder.flags & REF_FRAMES_INVALIDATION) ||
+                                                           (config::video.amd.amd_direct && encoder.name == "amdvce"sv && encoder.av1[encoder_t::PASSED]);
     last_encoder_probe_supported_yuv444_for_codec[0] = encoder.h264[encoder_t::PASSED] &&
                                                        encoder.h264[encoder_t::YUV444];
     last_encoder_probe_supported_yuv444_for_codec[1] = encoder.hevc[encoder_t::PASSED] &&
