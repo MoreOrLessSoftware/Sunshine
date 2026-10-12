@@ -25,6 +25,7 @@ extern "C" {
 }
 
 // local includes
+#include "amf/amf_av1.h"
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
@@ -177,6 +178,10 @@ namespace video {
 
     const double fps = minimum_fps_target > 0.0 ? minimum_fps_target : framerate / 2.0;
     return std::chrono::duration<double, std::milli> {1000.0 / fps};
+  }
+
+  bool uses_amf_direct(const encoder_t &encoder, const config_t &config) {
+    return config::video.amd.amd_direct && encoder.name == "amdvce"sv && config.videoFormat == 2 && config.chromaSamplingType == 0;
   }
 
   repeat_t repeat_due(const std::optional<last_shown_t> &last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now) {
@@ -663,6 +668,80 @@ namespace video {
 
   private:
     std::unique_ptr<platf::nvenc_encode_device_t> device;
+    bool force_idr = false;
+  };
+
+  /**
+   * @brief Encode session for AV1 through AMF directly. See amf_av1.h.
+   */
+  class amf_encode_session_t: public encode_session_t {
+  public:
+    /**
+     * @brief Initialize an AMF encode session and take ownership of its device.
+     *
+     * @param encode_device Encode device.
+     */
+    explicit amf_encode_session_t(std::unique_ptr<platf::amf_encode_device_t> encode_device):
+        device {std::move(encode_device)} {
+    }
+
+    /**
+     * @brief Convert a captured frame into the encoder input texture.
+     *
+     * @param img Image or frame object to read from or populate.
+     * @return Conversion status.
+     */
+    int convert(platf::img_t &img) override {
+      if (!device) {
+        return -1;
+      }
+      return device->convert(img);
+    }
+
+    /**
+     * @brief Mark the next frame as a request for a key frame.
+     */
+    void request_idr_frame() override {
+      force_idr = true;
+    }
+
+    /**
+     * @brief Mark the next frame as a normal inter frame.
+     */
+    void request_normal_frame() override {
+      force_idr = false;
+    }
+
+    /**
+     * @brief Recover from lost frames with a key frame, until reference frames are invalidated directly.
+     *
+     * @param first_frame First frame.
+     * @param last_frame Last frame.
+     */
+    void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {
+      force_idr = true;
+    }
+
+    /**
+     * @brief Encode the last converted frame.
+     *
+     * @param frame_index Frame index, used as the frame's timestamp.
+     * @param frame Receives the encoded frame.
+     * @param trace Optional. Marked as the encode passes each step.
+     * @return True on success.
+     */
+    bool encode_frame(int64_t frame_index, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace) {
+      if (!device) {
+        return false;
+      }
+
+      const bool ok = device->encode_frame(static_cast<std::uint64_t>(frame_index), force_idr, frame, trace);
+      force_idr = false;
+      return ok;
+    }
+
+  private:
+    std::unique_ptr<platf::amf_encode_device_t> device;
     bool force_idr = false;
   };
 
@@ -2234,6 +2313,39 @@ namespace video {
     return 0;
   }
 
+  /**
+   * @brief Encode one frame through AMF directly and queue the resulting packet.
+   *
+   * @param frame_nr Frame nr.
+   * @param session Active AMF encode session.
+   * @param packets Packets queued or emitted by the stream.
+   * @param channel_data Channel data.
+   * @param frame_timestamp Frame timestamp.
+   * @param trace Optional. The frame's trace, passed on with the frame.
+   * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
+   */
+  int encode_amf(int64_t frame_nr, amf_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
+    amf_direct::encoded_frame_t frame;
+    if (!session.encode_frame(frame_nr, frame, trace) || frame.data.empty()) {
+      BOOST_LOG(error) << "AMF direct: couldn't encode frame "sv << frame_nr;
+      return -1;
+    }
+
+    const bool idr = frame.idr;
+    auto packet = std::make_unique<packet_raw_generic>(std::move(frame.data), frame_nr, idr);
+    packet->channel_data = channel_data;
+    packet->frame_timestamp = frame_timestamp;
+    if (trace) {
+      trace->bytes = packet->data_size();
+      trace->idr = idr;
+      trace->mark(frame_trace::point_e::encoded);
+      packet->trace = *trace;
+    }
+    packets->raise(std::move(packet));
+
+    return 0;
+  }
+
   frame_buffer_pool_t::frame_buffer_pool_t(std::size_t max_buffers):
       max_buffers {max_buffers} {
   }
@@ -2289,6 +2401,8 @@ namespace video {
       return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp, trace);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, trace);
+    } else if (auto amf_session = dynamic_cast<amf_encode_session_t *>(&session)) {
+      return encode_amf(frame_nr, *amf_session, packets, channel_data, frame_timestamp, trace);
     } else if (auto pyrowave_session = dynamic_cast<pyrowave_encode_session_t *>(&session)) {
       return encode_pyrowave(frame_nr, *pyrowave_session, packets, channel_data, frame_timestamp, trace);
     }
@@ -2728,6 +2842,12 @@ namespace video {
     } else if (dynamic_cast<platf::nvenc_encode_device_t *>(encode_device.get())) {
       auto nvenc_encode_device = boost::dynamic_pointer_cast<platf::nvenc_encode_device_t>(std::move(encode_device));
       return make_nvenc_encode_session(config, std::move(nvenc_encode_device));
+    } else if (dynamic_cast<platf::amf_encode_device_t *>(encode_device.get())) {
+      auto amf_encode_device = boost::dynamic_pointer_cast<platf::amf_encode_device_t>(std::move(encode_device));
+      if (!amf_encode_device->init_encoder(config, amf_encode_device->colorspace)) {
+        return nullptr;
+      }
+      return std::make_unique<amf_encode_session_t>(std::move(amf_encode_device));
     } else if (dynamic_cast<platf::pyrowave_encode_device_t *>(encode_device.get())) {
       auto pyrowave_encode_device = boost::dynamic_pointer_cast<platf::pyrowave_encode_device_t>(std::move(encode_device));
       if (!pyrowave_encode_device->init_encoder(config, pyrowave_encode_device->colorspace)) {
@@ -3074,7 +3194,16 @@ namespace video {
       BOOST_LOG(info) << "Color range: " << (colorspace.full_range ? "JPEG" : "MPEG");
     }
 
-    if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
+    if (uses_amf_direct(encoder, config)) {
+      result = disp.make_amf_encode_device(pix_fmt);
+      if (!result) {
+        BOOST_LOG(warning) << "AMF direct: not available, encoding through FFmpeg instead"sv;
+      }
+    }
+
+    if (result) {
+      // Encoding through AMF directly
+    } else if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
       result = disp.make_avcodec_encode_device(pix_fmt);
     } else if (dynamic_cast<const encoder_platform_formats_nvenc *>(encoder.platform_formats.get())) {
       result = disp.make_nvenc_encode_device(pix_fmt);

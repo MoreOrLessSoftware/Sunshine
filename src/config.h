@@ -111,6 +111,8 @@ namespace config {
       std::optional<int> amd_vbaq;  ///< AMF variance-based adaptive-quantization setting; unset uses the encoder default.
       std::optional<int> amd_max_au_size;  ///< Maximum AMF H.264/HEVC access unit size in bits; unset uses the encoder default.
       int amd_coder;  ///< AMF entropy-coding mode.
+      bool amd_direct;  ///< Whether AV1 is encoded through AMF directly rather than through FFmpeg.
+      int amd_av1_tiles;  ///< Tiles each AV1 frame is encoded in through AMF directly. Above 1, AMF hands each tile over as it finishes.
     } amd;  ///< AMD AMF encoder options.
 
     struct {

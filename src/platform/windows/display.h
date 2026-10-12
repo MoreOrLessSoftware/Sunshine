@@ -589,6 +589,14 @@ namespace platf::dxgi {
      */
     std::unique_ptr<pyrowave_encode_device_t> make_pyrowave_encode_device(pix_fmt_e pix_fmt) override;
 
+    /**
+     * @brief Create an encode device that encodes AV1 through AMF directly.
+     *
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return Constructed AMF encode device object, or nullptr if AMF can't be used.
+     */
+    std::unique_ptr<amf_encode_device_t> make_amf_encode_device(pix_fmt_e pix_fmt) override;
+
     std::atomic<uint32_t> next_image_id;  ///< Next image ID.
   };
 

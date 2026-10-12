@@ -118,6 +118,22 @@ const config = ref(props.config)
               </select>
               <div class="form-text">{{ $t('config.amd_coder_desc') }}</div>
             </div>
+
+            <!-- AMF direct (AV1) -->
+            <Checkbox class="mb-3"
+                      id="amd_direct"
+                      locale-prefix="config"
+                      v-model="config.amd_direct"
+                      default="false"
+            ></Checkbox>
+
+            <!-- AMF direct AV1 tiles -->
+            <div class="mb-3">
+              <label for="amd_av1_tiles" class="form-label">{{ $t('config.amd_av1_tiles') }}</label>
+              <input type="number" class="form-control" id="amd_av1_tiles"
+                     placeholder="1" min="1" max="64" v-model="config.amd_av1_tiles" />
+              <div class="form-text">{{ $t('config.amd_av1_tiles_desc') }}</div>
+            </div>
           </div>
         </div>
       </div>

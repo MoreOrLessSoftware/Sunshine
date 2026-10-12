@@ -74,6 +74,10 @@ namespace nvenc {
   class nvenc_encoder;
 }
 
+namespace amf_direct {
+  struct encoded_frame_t;
+}  // namespace amf_direct
+
 namespace platf {
   // Limited by bits in activeGamepadMask
   constexpr auto MAX_GAMEPADS = 16;  ///< Maximum number of simultaneously tracked gamepads.
@@ -667,6 +671,31 @@ namespace platf {
   };
 
   /**
+   * @brief Encode device that encodes AV1 through AMD's AMF runtime directly.
+   */
+  struct amf_encode_device_t: encode_device_t {
+    /**
+     * @brief Initialize the platform encoder for the client stream configuration.
+     *
+     * @param client_config Client stream configuration negotiated for this session.
+     * @param colorspace Colorimetry information used for conversion or encoding.
+     * @return True when the backend successfully completes the requested action.
+     */
+    virtual bool init_encoder(const video::config_t &client_config, const video::sunshine_colorspace_t &colorspace) = 0;
+
+    /**
+     * @brief Encode the frame converted by the last convert() call.
+     *
+     * @param frame_index Frame index, used as the frame's timestamp.
+     * @param force_idr Whether to encode a key frame.
+     * @param frame Receives the encoded frame.
+     * @param trace Optional. Marked as the encode passes each step.
+     * @return True on success.
+     */
+    virtual bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace) = 0;
+  };
+
+  /**
    * @brief PyroWave-backed encode device state.
    */
   struct pyrowave_encode_device_t: encode_device_t {
@@ -783,6 +812,16 @@ namespace platf {
      * @return Constructed PyroWave encode device object.
      */
     virtual std::unique_ptr<pyrowave_encode_device_t> make_pyrowave_encode_device(pix_fmt_e pix_fmt) {
+      return nullptr;
+    }
+
+    /**
+     * @brief Create an encode device that encodes AV1 through AMF directly.
+     *
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return Constructed AMF encode device object, or nullptr if AMF can't be used.
+     */
+    virtual std::unique_ptr<amf_encode_device_t> make_amf_encode_device(pix_fmt_e pix_fmt) {
       return nullptr;
     }
 

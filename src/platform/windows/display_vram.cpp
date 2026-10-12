@@ -22,6 +22,7 @@ extern "C" {
 // local includes
 #include "display.h"
 #include "misc.h"
+#include "src/amf/amf_av1.h"
 #include "src/config.h"
 #include "src/frame_rate_limiter.h"
 #include "src/logging.h"
@@ -1341,6 +1342,77 @@ namespace platf::dxgi {
   };
 
   /**
+   * @brief D3D11 encode device that draws captured textures into the input of an AV1 encoder
+   *        driven through AMF directly.
+   */
+  class d3d_amf_encode_device_t: public amf_encode_device_t {
+  public:
+    /**
+     * @brief Create the D3D11 resources for conversion.
+     *
+     * @param display Display object or identifier associated with the operation.
+     * @param adapter_p Adapter p.
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return True when the AMF runtime is available and the D3D11 device resources are initialized.
+     */
+    bool init_device(std::shared_ptr<platf::display_t> display, adapter_t::pointer adapter_p, pix_fmt_e pix_fmt) {
+      return amf_direct::runtime_available() && base.init(display, adapter_p, pix_fmt) == 0;
+    }
+
+    /**
+     * @brief Initialize the platform encoder for the client stream configuration.
+     *
+     * @param client_config Client stream configuration negotiated for this session.
+     * @param colorspace Colorimetry information used for conversion or encoding.
+     * @return True when the AMF encoder initializes for the client configuration.
+     */
+    bool init_encoder(const ::video::config_t &client_config, const ::video::sunshine_colorspace_t &colorspace) override {
+      const auto &amd = config::video.amd;
+      amf_direct::settings_t settings;
+      settings.usage = amd.amd_usage_av1.value_or(settings.usage);
+      settings.quality_preset = amd.amd_quality_av1.value_or(settings.quality_preset);
+      settings.rate_control = amd.amd_rc_av1.value_or(settings.rate_control);
+      settings.preanalysis = amd.amd_preanalysis.value_or(0) != 0;
+      settings.enforce_hrd = amd.amd_enforce_hrd.value_or(0) != 0;
+      settings.tiles = amd.amd_av1_tiles;
+
+      if (!encoder.create(base.device.get(), client_config, colorspace, settings)) {
+        return false;
+      }
+
+      base.apply_colorspace(colorspace);
+      return base.init_output(encoder.input_texture(), client_config.width, client_config.height) == 0;
+    }
+
+    /**
+     * @brief Convert a captured D3D texture into the encoder's input texture.
+     *
+     * @param img_base D3D image supplied by the capture backend.
+     * @return Conversion status.
+     */
+    int convert(platf::img_t &img_base) override {
+      return base.convert(img_base);
+    }
+
+    /**
+     * @brief Encode the frame converted by the last convert() call.
+     *
+     * @param frame_index Frame index, used as the frame's timestamp.
+     * @param force_idr Whether to encode a key frame.
+     * @param frame Receives the encoded frame.
+     * @param trace Optional. Marked as the encode passes each step.
+     * @return True on success.
+     */
+    bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace) override {
+      return encoder.encode_frame(frame_index, force_idr, frame, trace);
+    }
+
+  private:
+    d3d_base_encode_device base;
+    amf_direct::av1_encoder_t encoder;
+  };
+
+  /**
    * @brief D3D11 encode device that converts captured textures for PyroWave.
    *
    * The usual D3D11 conversion (scaling, cursor, colorspace) draws each frame into Y and
@@ -2307,6 +2379,14 @@ namespace platf::dxgi {
 
   std::unique_ptr<nvenc_encode_device_t> display_vram_t::make_nvenc_encode_device(pix_fmt_e pix_fmt) {
     auto device = std::make_unique<d3d_nvenc_encode_device_t>();
+    if (!device->init_device(shared_from_this(), adapter.get(), pix_fmt)) {
+      return nullptr;
+    }
+    return device;
+  }
+
+  std::unique_ptr<amf_encode_device_t> display_vram_t::make_amf_encode_device(pix_fmt_e pix_fmt) {
+    auto device = std::make_unique<d3d_amf_encode_device_t>();
     if (!device->init_device(shared_from_this(), adapter.get(), pix_fmt)) {
       return nullptr;
     }

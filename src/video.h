@@ -861,6 +861,17 @@ namespace video {
   std::optional<std::chrono::duration<double, std::milli>> max_frame_wait(double minimum_fps_target, int framerate);
 
   /**
+   * @brief Check whether a stream is encoded through AMF directly rather than through FFmpeg.
+   *
+   * @details Only AV1 4:2:0 from the amdvce encoder, with amd_direct enabled. See amf_av1.h.
+   *
+   * @param encoder The stream's encoder.
+   * @param config Client stream configuration.
+   * @return True to encode through AMF directly.
+   */
+  bool uses_amf_direct(const encoder_t &encoder, const config_t &config);
+
+  /**
    * @brief The last frame the encoder showed, a captured frame or a repeat. See repeat_due().
    */
   struct last_shown_t {

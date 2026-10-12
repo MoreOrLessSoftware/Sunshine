@@ -754,6 +754,8 @@ namespace config {
       1,  // vbaq
       {},  // max_au_size (disabled by default)
       (int) amd::coder_e::_auto,  // coder
+      false,  // direct
+      1,  // av1_tiles
     },  // amd
 
     {
@@ -1670,6 +1672,8 @@ namespace config {
 
     bool_f(vars, "amd_preanalysis", (bool &) video.amd.amd_preanalysis);
     bool_f(vars, "amd_vbaq", (bool &) video.amd.amd_vbaq);
+    bool_f(vars, "amd_direct", video.amd.amd_direct);
+    int_between_f(vars, "amd_av1_tiles", video.amd.amd_av1_tiles, {1, 64});
     bool_f(vars, "amd_enforce_hrd", (bool &) video.amd.amd_enforce_hrd);
     {
       auto max_au_size = video.amd.amd_max_au_size;

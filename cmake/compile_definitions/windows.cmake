@@ -82,6 +82,8 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
+        "${CMAKE_SOURCE_DIR}/src/amf/amf_av1.cpp"
+        "${CMAKE_SOURCE_DIR}/src/amf/amf_av1.h"
         "${CMAKE_SOURCE_DIR}/src/pyrowave/pyrowave_d3d11.cpp"
         "${CMAKE_SOURCE_DIR}/src/pyrowave/pyrowave_d3d11.h"
         "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"

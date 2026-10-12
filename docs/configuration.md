@@ -3121,6 +3121,65 @@ supported on the current platform.
     </tr>
 </table>
 
+### amd_direct
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Encode AV1 through AMD's AMF runtime directly instead of through FFmpeg. This is experimental.
+            It uses the AV1 settings of [amd_usage](#amd_usage), [amd_rc](#amd_rc),
+            [amd_quality](#amd_quality), [amd_preanalysis](#amd_preanalysis) and
+            [amd_enforce_hrd](#amd_enforce_hrd), and can encode each frame in tiles, see
+            [amd_av1_tiles](#amd_av1_tiles). If the AMF runtime can't be used, AV1 is encoded through FFmpeg.
+            @note{This option only applies when using AV1 with 4:2:0 chroma and the amdvce [encoder](#encoder).
+            Lost frames are recovered from with a key frame.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            amd_direct = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### amd_av1_tiles
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The number of tiles each AV1 frame is encoded in when [amd_direct](#amd_direct) is enabled.
+            Above 1, AMF hands over each tile as it finishes. The log shows when tiles come out of the
+            encoder about every 600 frames. AMF treats the number as a suggestion.
+            @note{This option only applies when [amd_direct](#amd_direct) is enabled.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            amd_av1_tiles = 4
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Choices</td>
+        <td colspan="2">1-64</td>
+    </tr>
+</table>
+
 ## VideoToolbox Encoder
 
 ### vt_coder
