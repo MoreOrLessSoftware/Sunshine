@@ -2027,9 +2027,10 @@ namespace video {
    * @param packets Output queue that receives encoded packets.
    * @param channel_data Platform or protocol state attached to each packet.
    * @param frame_timestamp Capture timestamp associated with the encoded frame.
+   * @param trace Optional. The frame's trace, passed on with the frame's packet.
    * @return 0 when packets are queued; nonzero when encoding or packetization fails.
    */
-  int encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+  int encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
     auto &frame = session.device->frame;
     frame->pts = frame_nr;
 
@@ -2093,6 +2094,13 @@ namespace video {
 
       if (av_packet && av_packet->pts == frame_nr) {
         packet->frame_timestamp = frame_timestamp;
+
+        if (trace) {
+          trace->bytes = av_packet->size;
+          trace->idr = (av_packet->flags & AV_PKT_FLAG_KEY) != 0;
+          trace->mark(frame_trace::point_e::encoded);
+          packet->trace = *trace;
+        }
       }
 
       packet->replacements = &session.replacements;
@@ -2268,12 +2276,12 @@ namespace video {
    * @param packets Packets queued or emitted by the stream.
    * @param channel_data Channel data.
    * @param frame_timestamp Frame timestamp.
-   * @param trace Optional. The frame's trace, for encoders that pass it on to the network thread.
+   * @param trace Optional. The frame's trace, passed on to the network thread with the frame.
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
   int encode(int64_t frame_nr, encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace = nullptr) {
     if (auto avcodec_session = dynamic_cast<avcodec_encode_session_t *>(&session)) {
-      return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp);
+      return encode_avcodec(frame_nr, *avcodec_session, packets, channel_data, frame_timestamp, trace);
     } else if (auto nvenc_session = dynamic_cast<nvenc_encode_session_t *>(&session)) {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp, trace);
     } else if (auto pyrowave_session = dynamic_cast<pyrowave_encode_session_t *>(&session)) {
