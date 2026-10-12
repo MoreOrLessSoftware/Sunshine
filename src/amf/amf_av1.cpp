@@ -251,6 +251,9 @@ namespace amf_direct {
     amf::AMFComponentPtr encoder;  ///< AV1 encoder component.
     ID3D11Texture2D *texture = nullptr;  ///< Texture frames are drawn into.
     bool tile_output = false;  ///< Whether AMF hands over each tile on its own.
+    int tiles = 1;  ///< Tiles in each frame.
+    bool first_frame = true;  ///< Whether no frame has been encoded yet, as the first is a key frame.
+    std::size_t idr_mismatches = 0;  ///< Frames whose key frame flag differed from what was asked for, since the last timing line.
     tile_timing_t timing;  ///< When tiles came out, for the log.
     std::int64_t duration = 0;  ///< Frame duration in AMF's 100 ns units.
     int frames_described = 0;  ///< Frames whose OBUs were written to the log.
@@ -377,6 +380,7 @@ namespace amf_direct {
 
     amf_int64 tiles = 1;
     encoder->GetProperty(AMF_VIDEO_ENCODER_AV1_TILES_PER_FRAME, &tiles);
+    state->tiles = static_cast<int>(std::max<amf_int64>(tiles, 1));
     BOOST_LOG(info) << "AMF direct: encoding AV1 "sv << config.width << 'x' << config.height << ' ' << colorspace.bit_depth << "-bit at "sv << bitrate_kbps << " kbps, "sv
                     << tiles << (tiles == 1 ? " tile"sv : " tiles"sv) << (state->tile_output ? ", each handed over as it finishes"sv : ", frames handed over whole"sv);
 
@@ -389,7 +393,7 @@ namespace amf_direct {
     return impl ? impl->texture : nullptr;
   }
 
-  bool av1_encoder_t::encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace) {
+  bool av1_encoder_t::encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace, const tile_callback_t &on_tile) {
     frame.data.clear();
     frame.tiles.clear();
     frame.idr = false;
@@ -408,6 +412,10 @@ namespace amf_direct {
       surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_FRAME_TYPE, (amf_int64) AMF_VIDEO_ENCODER_AV1_FORCE_FRAME_TYPE_KEY);
       surface->SetProperty(AMF_VIDEO_ENCODER_AV1_FORCE_INSERT_SEQUENCE_HEADER, true);
     }
+
+    // AMF makes key frames only when asked and for the first frame (the GOP size is 0)
+    const bool idr_expected = force_idr || impl->first_frame;
+    impl->first_frame = false;
 
     const auto submitted = std::chrono::steady_clock::now();
     if (auto res = impl->encoder->SubmitInput(surface); res != AMF_OK) {
@@ -454,7 +462,18 @@ namespace amf_direct {
 
       amf_int64 buffer_type = AMF_VIDEO_ENCODER_AV1_OUTPUT_BUFFER_TYPE_FRAME;
       data->GetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_BUFFER_TYPE, &buffer_type);
-      if (!impl->tile_output || buffer_type != AMF_VIDEO_ENCODER_AV1_OUTPUT_BUFFER_TYPE_TILE) {
+      const bool last = !impl->tile_output || buffer_type != AMF_VIDEO_ENCODER_AV1_OUTPUT_BUFFER_TYPE_TILE;
+      if (!last && on_tile) {
+        // Earlier tiles are sent with the key frame flag that was asked for
+        const bool idr = frame.idr;
+        frame.idr = idr_expected;
+        on_tile(frame, impl->tiles);
+        frame.idr = idr;
+      }
+      if (last) {
+        if (frame.idr != idr_expected) {
+          ++impl->idr_mismatches;
+        }
         if (trace) {
           trace->mark(frame_trace::point_e::encode_finished);
         }
@@ -466,8 +485,9 @@ namespace amf_direct {
 
         impl->timing.add(frame.tiles);
         if (impl->timing.frames() >= timing_log_frames) {
-          BOOST_LOG(info) << "AMF direct: "sv << impl->timing.summary() << ", "sv << impl->leftover_obus << " tiles followed by bytes that looked like OBUs"sv;
+          BOOST_LOG(info) << "AMF direct: "sv << impl->timing.summary() << ", "sv << impl->leftover_obus << " tiles followed by bytes that looked like OBUs, "sv << impl->idr_mismatches << " key frame flags not as asked"sv;
           impl->leftover_obus = 0;
+          impl->idr_mismatches = 0;
           impl->timing.reset();
         }
         return true;

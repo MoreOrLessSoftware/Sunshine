@@ -7,6 +7,7 @@
 // standard includes
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -172,6 +173,15 @@ namespace amf_direct {
     std::vector<tile_t> tiles;  ///< When each tile came out of the encoder.
   };
 
+  /**
+   * @brief Called as each tile but the last comes out of the encoder.
+   *
+   * @details Receives the frame so far, all tiles out so far in order, and the number of tiles
+   *          in the frame. Its `idr` is whether a key frame was asked for, as AMF may only say
+   *          so with the last tile.
+   */
+  using tile_callback_t = std::function<void(const encoded_frame_t &frame, int tiles_total)>;
+
 #ifdef _WIN32
   /**
    * @brief Check whether AMD's AMF runtime can be loaded.
@@ -216,9 +226,11 @@ namespace amf_direct {
      * @param force_idr Whether to encode a key frame.
      * @param frame Receives the encoded frame.
      * @param trace Optional. Marked when the frame is submitted and when its last tile comes out.
+     * @param on_tile Optional. Called as each tile but the last comes out, when tiles are handed
+     *                over on their own.
      * @return True on success.
      */
-    bool encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace);
+    bool encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace, const tile_callback_t &on_tile = {});
 
   private:
     struct impl_t;

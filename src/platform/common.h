@@ -690,9 +690,11 @@ namespace platf {
      * @param force_idr Whether to encode a key frame.
      * @param frame Receives the encoded frame.
      * @param trace Optional. Marked as the encode passes each step.
+     * @param on_tile Optional. Called with the frame so far and the number of tiles in it, as
+     *                each tile but the last comes out of the encoder.
      * @return True on success.
      */
-    virtual bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace) = 0;
+    virtual bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const std::function<void(const amf_direct::encoded_frame_t &, int)> &on_tile) = 0;
   };
 
   /**

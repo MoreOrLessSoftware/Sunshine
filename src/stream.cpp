@@ -1914,14 +1914,24 @@ namespace stream {
           state.announced = true;
           BOOST_LOG(info) << "Sending video frames in parts while they encode"sv;
         }
-      } else if (state.blocks_sent == 0) {
-        // Nothing went out early, so the frame takes as many blocks as it needs like any other
-        auto max_data_per_fec_block = max_data_shards_per_fec_block * payload_blocksize;
-        fec_blocks_needed = std::clamp<int>((state.pending.size() + max_data_per_fec_block - 1) / max_data_per_fec_block, 1, MAX_FEC_BLOCKS);
-        block_sizes = video::subframe::final_block_bytes(state.pending.size(), payload_blocksize, fec_blocks_needed);
       } else {
-        fec_blocks_needed = video::subframe::blocks;
-        block_sizes = video::subframe::final_block_bytes(state.pending.size(), payload_blocksize, fec_blocks_needed - state.blocks_sent);
+        if (state.blocks_sent == 0) {
+          // Nothing went out early, so the frame takes as many blocks as it needs like any other
+          auto max_data_per_fec_block = max_data_shards_per_fec_block * payload_blocksize;
+          fec_blocks_needed = std::clamp<int>((state.pending.size() + max_data_per_fec_block - 1) / max_data_per_fec_block, 1, MAX_FEC_BLOCKS);
+        } else {
+          fec_blocks_needed = video::subframe::blocks;
+        }
+        const auto blocks_left = static_cast<std::size_t>(fec_blocks_needed - state.blocks_sent);
+
+        if (session->config.monitor.videoFormat == 2) {
+          // AV1 decoders don't skip the zeros after the frame, so it ends with a padding OBU
+          const auto padding = video::subframe::av1_padding_obu(video::subframe::av1_padding_bytes(state.pending.size(), payload_blocksize, blocks_left));
+          state.pending.insert(std::end(state.pending), std::begin(padding), std::end(padding));
+          block_sizes = video::subframe::spread_block_bytes(state.pending.size(), payload_blocksize, blocks_left);
+        } else {
+          block_sizes = video::subframe::final_block_bytes(state.pending.size(), payload_blocksize, blocks_left);
+        }
       }
 
       try {

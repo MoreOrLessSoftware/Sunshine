@@ -7,6 +7,7 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <numeric>
@@ -171,4 +172,99 @@ TEST(VideoSubframeTest, EstimatesLatencyWithoutAPreviousFrame) {
 
   EXPECT_EQ(video::subframe::estimated_latency(2ms, 0ms), std::chrono::steady_clock::duration {2ms});
   EXPECT_EQ(video::subframe::estimated_latency(2ms, -1ms), std::chrono::steady_clock::duration {2ms});
+}
+
+TEST(VideoSubframeTest, PadsAnAv1FrameToTheEndOfItsLastPacket) {
+  EXPECT_EQ(video::subframe::av1_padding_bytes(2500, packet_payload, 1), 500u);
+}
+
+TEST(VideoSubframeTest, AddsNoAv1PaddingToAFrameEndingOnAPacket) {
+  EXPECT_EQ(video::subframe::av1_padding_bytes(3000, packet_payload, 2), 0u);
+}
+
+TEST(VideoSubframeTest, GivesEveryAv1BlockAPacket) {
+  // 1.5 packets of frame for 3 blocks: padding fills the rest of 3 packets
+  EXPECT_EQ(video::subframe::av1_padding_bytes(1500, packet_payload, 3), 1500u);
+  EXPECT_EQ(video::subframe::av1_padding_bytes(0, packet_payload, 2), 2000u);
+}
+
+TEST(VideoSubframeTest, FillsOneMorePacketWhenOneByteIsLeft) {
+  // A padding OBU takes at least 2 bytes
+  EXPECT_EQ(video::subframe::av1_padding_bytes(2999, packet_payload, 1), 1001u);
+}
+
+TEST(VideoSubframeTest, AddsNoAv1PaddingWithoutBlocksOrPackets) {
+  EXPECT_EQ(video::subframe::av1_padding_bytes(2500, packet_payload, 0), 0u);
+  EXPECT_EQ(video::subframe::av1_padding_bytes(2500, 0, 1), 0u);
+}
+
+TEST(VideoSubframeTest, BuildsTheSmallestAv1PaddingObu) {
+  EXPECT_EQ(video::subframe::av1_padding_obu(2), (std::vector<std::uint8_t> {0x7A, 0x00}));
+}
+
+TEST(VideoSubframeTest, BuildsAnAv1PaddingObuWithAOneByteSize) {
+  const auto obu = video::subframe::av1_padding_obu(129);
+  ASSERT_EQ(obu.size(), 129u);
+  EXPECT_EQ(obu[0], 0x7A);
+  EXPECT_EQ(obu[1], 127);
+  EXPECT_TRUE(std::all_of(obu.begin() + 2, obu.end() - 1, [](auto byte) {
+    return byte == 0;
+  }));
+  EXPECT_EQ(obu.back(), 0x80);
+}
+
+TEST(VideoSubframeTest, BuildsAnAv1PaddingObuWithATwoByteSize) {
+  // 127 bytes of payload no longer fit with a 2 byte size, so the size is written in 2 bytes
+  const auto at_the_edge = video::subframe::av1_padding_obu(130);
+  ASSERT_EQ(at_the_edge.size(), 130u);
+  EXPECT_EQ(at_the_edge[1], 0xFF);
+  EXPECT_EQ(at_the_edge[2], 0x00);
+  EXPECT_EQ(at_the_edge.back(), 0x80);
+
+  // 1000 - 3 = 997 = 0x3E5: 0xE5, 0x07
+  const auto packet = video::subframe::av1_padding_obu(1000);
+  ASSERT_EQ(packet.size(), 1000u);
+  EXPECT_EQ(packet[1], 0xE5);
+  EXPECT_EQ(packet[2], 0x07);
+}
+
+TEST(VideoSubframeTest, EndsAnAv1PaddingObuWithTrailingBits) {
+  // The smallest payload is only the trailing bits
+  EXPECT_EQ(video::subframe::av1_padding_obu(3), (std::vector<std::uint8_t> {0x7A, 0x01, 0x80}));
+}
+
+TEST(VideoSubframeTest, BuildsNoAv1PaddingObuSmallerThanTwoBytes) {
+  EXPECT_TRUE(video::subframe::av1_padding_obu(0).empty());
+  EXPECT_TRUE(video::subframe::av1_padding_obu(1).empty());
+}
+
+TEST(VideoSubframeTest, SpreadsPacketsSoNoBlockIsEmpty) {
+  // final_block_bytes() would give 2, 2 and 0 packets
+  EXPECT_EQ(video::subframe::spread_block_bytes(4000, packet_payload, 3), (std::vector<std::size_t> {2000, 1000, 1000}));
+}
+
+TEST(VideoSubframeTest, SpreadsAPartialLastPacket) {
+  EXPECT_EQ(video::subframe::spread_block_bytes(2500, packet_payload, 2), (std::vector<std::size_t> {2000, 500}));
+}
+
+TEST(VideoSubframeTest, LeavesBlocksEmptyOnlyWithFewerPacketsThanBlocks) {
+  EXPECT_EQ(video::subframe::spread_block_bytes(1000, packet_payload, 2), (std::vector<std::size_t> {1000, 0}));
+  EXPECT_TRUE(video::subframe::spread_block_bytes(1000, packet_payload, 0).empty());
+  EXPECT_EQ(video::subframe::spread_block_bytes(1000, 0, 2), (std::vector<std::size_t> {0, 0}));
+}
+
+TEST(VideoSubframeTest, EndsAPaddedAv1FrameOnWholePacketsInEveryBlock) {
+  for (std::size_t pending = 0; pending <= 5000; pending += 37) {
+    for (std::size_t blocks_left = 1; blocks_left <= video::subframe::blocks; ++blocks_left) {
+      const auto padding = video::subframe::av1_padding_bytes(pending, packet_payload, blocks_left);
+      ASSERT_NE(padding, 1u);
+      ASSERT_EQ(video::subframe::av1_padding_obu(padding).size(), padding);
+
+      const auto total = pending + padding;
+      EXPECT_EQ(total % packet_payload, 0u) << pending << " bytes in " << blocks_left << " blocks";
+      for (auto bytes : video::subframe::spread_block_bytes(total, packet_payload, blocks_left)) {
+        EXPECT_GE(bytes, packet_payload) << pending << " bytes in " << blocks_left << " blocks";
+      }
+    }
+  }
 }

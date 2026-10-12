@@ -728,14 +728,16 @@ namespace video {
      * @param frame_index Frame index, used as the frame's timestamp.
      * @param frame Receives the encoded frame.
      * @param trace Optional. Marked as the encode passes each step.
+     * @param on_tile Optional. Called with the frame so far and the number of tiles in it, as
+     *                each tile but the last comes out of the encoder.
      * @return True on success.
      */
-    bool encode_frame(int64_t frame_index, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace) {
+    bool encode_frame(int64_t frame_index, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const amf_direct::tile_callback_t &on_tile = {}) {
       if (!device) {
         return false;
       }
 
-      const bool ok = device->encode_frame(static_cast<std::uint64_t>(frame_index), force_idr, frame, trace);
+      const bool ok = device->encode_frame(static_cast<std::uint64_t>(frame_index), force_idr, frame, trace, on_tile);
       force_idr = false;
       return ok;
     }
@@ -2325,10 +2327,56 @@ namespace video {
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
   int encode_amf(int64_t frame_nr, amf_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
+    // Groups of tiles are sent as they finish, while the rest is still encoding, as NVENC sends
+    // groups of slices. See video_subframe.h.
+    std::size_t bytes_sent = 0;
+    int parts_sent = 0;
+    std::uint32_t groups_sent = 0;
+    bool parts_idr = false;
+    auto send_part = [&](const std::vector<std::uint8_t> &data, bool final, bool idr) {
+      std::vector<std::uint8_t> part(std::begin(data) + bytes_sent, std::end(data));
+      bytes_sent = data.size();
+
+      auto packet = std::make_unique<packet_raw_generic>(std::move(part), frame_nr, idr);
+      packet->channel_data = channel_data;
+      packet->frame_timestamp = frame_timestamp;
+      packet->subframe_part = parts_sent++;
+      packet->subframe_final = final;
+      packet->subframe_ready = std::chrono::steady_clock::now();
+
+      // The first part carries the trace to the network thread, and the last part what is
+      // only known once the whole frame is encoded
+      if (trace && (packet->subframe_part == 0 || final)) {
+        if (final) {
+          trace->bytes = data.size();
+          trace->idr = idr;
+          trace->mark(frame_trace::point_e::encoded);
+        }
+        packet->trace = *trace;
+      }
+      packets->raise(std::move(packet));
+    };
+
+    auto on_tile = [&](const amf_direct::encoded_frame_t &so_far, int tiles_total) {
+      parts_idr = so_far.idr;
+      // Groups that finished between tiles go out together
+      const auto groups_done = subframe::parts_ready(static_cast<std::uint32_t>(so_far.tiles.size()), static_cast<std::uint32_t>(tiles_total));
+      if (groups_done > groups_sent) {
+        groups_sent = groups_done;
+        send_part(so_far.data, false, so_far.idr);
+      }
+    };
+
     amf_direct::encoded_frame_t frame;
-    if (!session.encode_frame(frame_nr, frame, trace) || frame.data.empty()) {
+    if (!session.encode_frame(frame_nr, frame, trace, on_tile) || frame.data.empty()) {
       BOOST_LOG(error) << "AMF direct: couldn't encode frame "sv << frame_nr;
       return -1;
+    }
+
+    if (parts_sent > 0) {
+      // The type the first part went out with
+      send_part(frame.data, true, parts_idr);
+      return 0;
     }
 
     const bool idr = frame.idr;

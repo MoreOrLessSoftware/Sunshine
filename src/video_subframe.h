@@ -26,6 +26,7 @@
  *          remainder for the next block, so zero padding never lands inside the bitstream; the
  *          final block pads the frame's last packet as usual, and any block left with no data
  *          is a single packet of zeros, which H.264 and HEVC decoders ignore after the frame.
+ *          An AV1 frame is filled with a padding OBU instead, see av1_padding_bytes().
  */
 namespace video::subframe {
   constexpr std::uint32_t blocks = 4;  ///< FEC blocks a frame sent in parts is split into, the protocol's maximum.
@@ -136,5 +137,104 @@ namespace video::subframe {
    */
   inline std::chrono::steady_clock::duration estimated_latency(std::chrono::steady_clock::duration since_capture, std::chrono::steady_clock::duration last_remaining) {
     return since_capture + std::max(last_remaining, std::chrono::steady_clock::duration::zero());
+  }
+
+  /**
+   * @brief Work out how many bytes of AV1 padding finish a frame sent in parts.
+   *
+   * @details The frame header goes out with the first part, before the frame's size is known,
+   *          so it can't tell the client where the frame ends in its last packet. H.264 and HEVC
+   *          decoders skip the zeros that fill the rest of that packet, and any block left with
+   *          nothing to carry, but AV1 decoders don't. An AV1 frame is instead filled to the end
+   *          of its last packet, and given at least one packet for each block left, with a
+   *          padding OBU that decoders discard. See av1_padding_obu().
+   *
+   * @param pending Bytes left to send, starting at a packet boundary.
+   * @param packet_payload Bytes of data each packet carries.
+   * @param blocks_left FEC blocks left to send.
+   * @return Bytes of padding to add: 0, or at least the 2 bytes the smallest padding OBU takes.
+   */
+  inline std::size_t av1_padding_bytes(std::size_t pending, std::size_t packet_payload, std::size_t blocks_left) {
+    if (packet_payload == 0 || blocks_left == 0) {
+      return 0;
+    }
+
+    const auto packets = std::max((pending + packet_payload - 1) / packet_payload, blocks_left);
+    auto padding = packets * packet_payload - pending;
+    if (padding == 1) {
+      // Too small for a padding OBU, so it fills one more packet
+      padding += packet_payload;
+    }
+    return padding;
+  }
+
+  /**
+   * @brief Build an AV1 padding OBU of an exact size.
+   *
+   * @details Like every OBU but tile data, a padding OBU with a payload ends with trailing bits:
+   *          a 1 bit, then zeros to the end of the byte. Decoders may reject one without.
+   *
+   * @param bytes Size of the whole OBU, header and size field included. At least 2.
+   * @return The OBU: its header, its size as leb128, and a payload of zeros ending with the
+   *         trailing bits byte 0x80. Empty if `bytes` is less than 2.
+   */
+  inline std::vector<std::uint8_t> av1_padding_obu(std::size_t bytes) {
+    if (bytes < 2) {
+      return {};
+    }
+
+    // The payload takes what the header and its own size field leave
+    std::size_t size_bytes = 1;
+    while (bytes - 1 - size_bytes >= (std::size_t {1} << (7 * size_bytes))) {
+      ++size_bytes;
+    }
+    auto payload = bytes - 1 - size_bytes;
+
+    std::vector<std::uint8_t> obu;
+    obu.reserve(bytes);
+    obu.push_back(0x7A);  // OBU_PADDING (15) with a size field
+    for (std::size_t i = 0; i < size_bytes; ++i) {
+      auto byte = static_cast<std::uint8_t>(payload & 0x7F);
+      payload >>= 7;
+      if (i + 1 < size_bytes) {
+        byte |= 0x80;
+      }
+      obu.push_back(byte);
+    }
+    obu.resize(bytes, 0);
+    if (obu.size() > 1 + size_bytes) {
+      obu.back() = 0x80;  // Trailing bits
+    }
+    return obu;
+  }
+
+  /**
+   * @brief Split the rest of a frame into the FEC blocks it has left, with no block left empty.
+   *
+   * @details Unlike final_block_bytes(), the packets are spread so that every block gets at
+   *          least one as long as there are enough, as an AV1 frame padded by av1_padding_bytes()
+   *          has. Earlier blocks get the extra packets.
+   *
+   * @param pending Bytes left to send.
+   * @param packet_payload Bytes of data each packet carries.
+   * @param blocks_left FEC blocks left to send.
+   * @return Bytes for each block, in order. A block is given 0 bytes only when there are
+   *         fewer packets than blocks.
+   */
+  inline std::vector<std::size_t> spread_block_bytes(std::size_t pending, std::size_t packet_payload, std::size_t blocks_left) {
+    std::vector<std::size_t> sizes(blocks_left, 0);
+    if (blocks_left == 0 || packet_payload == 0) {
+      return sizes;
+    }
+
+    const auto packets = (pending + packet_payload - 1) / packet_payload;
+    const auto base = packets / blocks_left;
+    const auto extra = packets % blocks_left;
+    for (std::size_t i = 0; i < blocks_left; ++i) {
+      const auto block_packets = base + (i < extra ? 1 : 0);
+      sizes[i] = std::min(pending, block_packets * packet_payload);
+      pending -= sizes[i];
+    }
+    return sizes;
   }
 }  // namespace video::subframe
