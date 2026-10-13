@@ -216,3 +216,45 @@ TEST(PyroWaveRecordsTest, FindsNoRecordStartsInWhatIsNotAFrame) {
   EXPECT_TRUE(records::record_start_packets(zeros, payload).empty());
   EXPECT_TRUE(records::record_start_packets({}, payload).empty());
 }
+
+namespace {
+  /**
+   * @brief Describe FEC blocks for comparing them.
+   *
+   * @param blocks The blocks.
+   * @return Each block's packets and percentage.
+   */
+  std::vector<std::pair<std::size_t, std::size_t>> describe(const std::vector<records::fec_block_t> &blocks) {
+    std::vector<std::pair<std::size_t, std::size_t>> out;
+    for (const auto &block : blocks) {
+      out.emplace_back(block.packets, block.fec_percentage);
+    }
+    return out;
+  }
+}  // namespace
+
+TEST(PyroWaveRecordsTest, LeavesFecAsItIsWhenItIsOffOrNothingIsCritical) {
+  EXPECT_TRUE(records::critical_fec_blocks(250, 15, 0, 2).empty());
+  EXPECT_TRUE(records::critical_fec_blocks(250, 0, 20, 2).empty());
+  EXPECT_TRUE(records::critical_fec_blocks(10, 15, 20, 2).empty());
+}
+
+TEST(PyroWaveRecordsTest, GivesTheCriticalPacketsAllTheParity) {
+  using blocks_t = std::vector<std::pair<std::size_t, std::size_t>>;
+  EXPECT_EQ(describe(records::critical_fec_blocks(250, 15, 20, 2)), (blocks_t {{15, 20}, {235, 0}}));
+  EXPECT_EQ(describe(records::critical_fec_blocks(15, 15, 20, 2)), (blocks_t {{15, 20}}));
+
+  // The rest is split into blocks of a Reed-Solomon block's size where it can be
+  EXPECT_EQ(describe(records::critical_fec_blocks(15 + 700, 15, 20, 2)), (blocks_t {{15, 20}, {234, 0}, {234, 0}, {232, 0}}));
+  EXPECT_EQ(describe(records::critical_fec_blocks(15 + 2000, 15, 20, 2)), (blocks_t {{15, 20}, {667, 0}, {667, 0}, {666, 0}}));
+}
+
+TEST(PyroWaveRecordsTest, LeavesFecAsItIsWhenTheCriticalBlockDoesNotFit) {
+  // 240 packets need 48 parity packets at 20%, over a Reed-Solomon block's 255
+  EXPECT_TRUE(records::critical_fec_blocks(400, 240, 20, 2).empty());
+  // The client's minimum of parity packets counts too
+  EXPECT_EQ(records::critical_fec_blocks(400, 250, 1, 2).size(), 2u);
+  EXPECT_TRUE(records::critical_fec_blocks(400, 250, 1, 6).empty());
+  // The rest must fit three blocks
+  EXPECT_TRUE(records::critical_fec_blocks(15 + 3 * 1023 + 1, 15, 20, 2).empty());
+}

@@ -2201,42 +2201,64 @@ namespace stream {
 
       // Compute the number of FEC blocks needed for this frame using the block size and max shards
       auto max_data_per_fec_block = max_data_shards_per_fec_block * blocksize;
-      auto fec_blocks_needed = (payload.size() + (max_data_per_fec_block - 1)) / max_data_per_fec_block;
 
-      // If the number of FEC blocks needed exceeds the protocol limit, turn off FEC for this frame.
-      // For normal FEC percentages, this should only happen for enormous frames (over 800 packets at 20%).
-      if (fec_blocks_needed > MAX_FEC_BLOCKS) {
-        BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame (needed "sv << fec_blocks_needed << " FEC blocks)"sv;
-        fecPercentage = 0;
-        fec_blocks_needed = MAX_FEC_BLOCKS;
+      // A PyroWave frame in record framing spends the FEC on its critical packets alone. See
+      // pyrowave_records.h. Otherwise, or if that doesn't fit, FEC covers the whole frame.
+      std::vector<::pyrowave::records::fec_block_t> critical_fec;
+      if (frame_header.pyrowave_critical_packets != 0) {
+        critical_fec = ::pyrowave::records::critical_fec_blocks((payload.size() + blocksize - 1) / blocksize, frame_header.pyrowave_critical_packets, fecPercentage, session->config.minRequiredFecPackets);
       }
 
       std::array<std::string_view, MAX_FEC_BLOCKS> fec_blocks;
+      std::array<size_t, MAX_FEC_BLOCKS> fec_block_percentages;
+      size_t fec_blocks_needed;
+      if (!critical_fec.empty()) {
+        fec_blocks_needed = critical_fec.size();
+        size_t offset = 0;
+        for (size_t x = 0; x < fec_blocks_needed; ++x) {
+          const auto bytes = std::min(critical_fec[x].packets * blocksize, payload.size() - offset);
+          fec_blocks[x] = payload.substr(offset, bytes);
+          fec_block_percentages[x] = critical_fec[x].fec_percentage;
+          offset += bytes;
+        }
+      } else {
+        fec_blocks_needed = (payload.size() + (max_data_per_fec_block - 1)) / max_data_per_fec_block;
+
+        // If the number of FEC blocks needed exceeds the protocol limit, turn off FEC for this frame.
+        // For normal FEC percentages, this should only happen for enormous frames (over 800 packets at 20%).
+        if (fec_blocks_needed > MAX_FEC_BLOCKS) {
+          BOOST_LOG(warning) << "Skipping FEC for abnormally large encoded frame (needed "sv << fec_blocks_needed << " FEC blocks)"sv;
+          fecPercentage = 0;
+          fec_blocks_needed = MAX_FEC_BLOCKS;
+        }
+
+        // Align individual FEC blocks to blocksize
+        auto unaligned_size = payload.size() / fec_blocks_needed;
+        auto aligned_size = ((unaligned_size + (blocksize - 1)) / blocksize) * blocksize;
+
+        // If we exceed the 10-bit FEC packet index (which means our frame exceeded 4096 packets),
+        // the frame will be unrecoverable. Log an error for this case.
+        if (aligned_size / blocksize >= 1024) {
+          BOOST_LOG(error) << "Encoder produced a frame too large to send! Is the encoder broken? (needed "sv << (aligned_size / blocksize) << " packets)"sv;
+        }
+
+        // Split the data into aligned FEC blocks
+        for (size_t x = 0; x < fec_blocks_needed; ++x) {
+          if (x == fec_blocks_needed - 1) {
+            // The last block must extend to the end of the payload
+            fec_blocks[x] = payload.substr(x * aligned_size);
+          } else {
+            // Earlier blocks just extend to the next block offset
+            fec_blocks[x] = payload.substr(x * aligned_size, aligned_size);
+          }
+          fec_block_percentages[x] = fecPercentage;
+        }
+      }
+
       auto fec_blocks_begin = std::begin(fec_blocks);
       auto fec_blocks_end = std::begin(fec_blocks) + fec_blocks_needed;
 
       BOOST_LOG(verbose) << "Generating "sv << fec_blocks_needed << " FEC blocks"sv;
-
-      // Align individual FEC blocks to blocksize
-      auto unaligned_size = payload.size() / fec_blocks_needed;
-      auto aligned_size = ((unaligned_size + (blocksize - 1)) / blocksize) * blocksize;
-
-      // If we exceed the 10-bit FEC packet index (which means our frame exceeded 4096 packets),
-      // the frame will be unrecoverable. Log an error for this case.
-      if (aligned_size / blocksize >= 1024) {
-        BOOST_LOG(error) << "Encoder produced a frame too large to send! Is the encoder broken? (needed "sv << (aligned_size / blocksize) << " packets)"sv;
-      }
-
-      // Split the data into aligned FEC blocks
-      for (int x = 0; x < fec_blocks_needed; ++x) {
-        if (x == fec_blocks_needed - 1) {
-          // The last block must extend to the end of the payload
-          fec_blocks[x] = payload.substr(x * aligned_size);
-        } else {
-          // Earlier blocks just extend to the next block offset
-          fec_blocks[x] = payload.substr(x * aligned_size, aligned_size);
-        }
-      }
 
       try {
         // Don't ignore the last ratecontrol group of the previous frame
@@ -2251,7 +2273,7 @@ namespace stream {
         auto blockIndex = 0;
         size_t block_first_packet = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
-          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fecPercentage, timestamp, frame_is_dupe, burst, packet->trace, record_starts, block_first_packet);
+          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fec_block_percentages[blockIndex], timestamp, frame_is_dupe, burst, packet->trace, record_starts, block_first_packet);
           block_first_packet += current_payload.size() / blocksize;
           ++blockIndex;
         });

@@ -23,7 +23,8 @@
  *
  *          1. The sequence header, then the coarsest wavelet level, without which nothing can be
  *             decoded. The packets holding them are the frame's critical packets, whose count
- *             goes in the frame header.
+ *             goes in the frame header, and which get all of the session's FEC
+ *             (critical_fec_blocks()).
  *          2. Every other record. Records too large to share a packet with a padding record
  *             come first and span packets; the rest are packed first-fit so that none crosses a
  *             packet boundary, and padding fills a packet only when no record fits.
@@ -322,6 +323,64 @@ namespace pyrowave::records {
       }
     }
     return true;
+  }
+
+  constexpr std::size_t max_fec_blocks = 4;  ///< FEC blocks a frame can be sent in (2 bits in the video packet header).
+  constexpr std::size_t max_block_packets = 1023;  ///< Data packets a FEC block can have (10 bits in the video packet header).
+  constexpr std::size_t max_reed_solomon_shards = 255;  ///< Data and parity packets a FEC block with parity can have.
+
+  /**
+   * @brief One FEC block of a frame.
+   */
+  struct fec_block_t {
+    std::size_t packets;  ///< Data packets.
+    std::size_t fec_percentage;  ///< Parity, as a percentage of them.
+  };
+
+  /**
+   * @brief Plan a frame's FEC blocks so only its critical packets get parity.
+   *
+   * @details Losing a critical packet costs the whole frame, while losing a later one only blurs
+   *          part of it for that frame, so the session's FEC goes to the critical packets alone:
+   *          they are the first block, with parity at the session's percentage and at least the
+   *          client's minimum of parity packets. The rest of the frame follows in up to three blocks
+   *          without parity, each kept to a Reed-Solomon block's size where it can be, so a client
+   *          that lost packets of one can give up on it without waiting for a huge one.
+   *
+   * @param packets Data packets of the frame.
+   * @param critical_packets Its critical packets, from the start.
+   * @param fec_percentage The session's FEC percentage.
+   * @param min_parity_packets The fewest parity packets the client wants in a block with parity.
+   * @return The blocks in order, or empty if the frame should be sent with FEC as for other
+   *         codecs: FEC is off, nothing is critical, the critical packets and their parity don't fit
+   *         one Reed-Solomon block, or the rest of the frame doesn't fit three blocks.
+   */
+  inline std::vector<fec_block_t> critical_fec_blocks(std::size_t packets, std::size_t critical_packets, std::size_t fec_percentage, std::size_t min_parity_packets) {
+    if (critical_packets == 0 || fec_percentage == 0 || critical_packets > packets) {
+      return {};
+    }
+    // As stream.cpp's FEC encoder works it out
+    const auto parity = std::max((critical_packets * fec_percentage + 99) / 100, min_parity_packets);
+    if (critical_packets + parity > max_reed_solomon_shards) {
+      return {};
+    }
+
+    std::vector<fec_block_t> blocks {{critical_packets, fec_percentage}};
+    const auto rest = packets - critical_packets;
+    if (rest == 0) {
+      return blocks;
+    }
+    const auto count = std::clamp<std::size_t>((rest + max_reed_solomon_shards - 1) / max_reed_solomon_shards, 1, max_fec_blocks - 1);
+    const auto per_block = (rest + count - 1) / count;
+    if (per_block > max_block_packets) {
+      return {};
+    }
+    for (auto left = rest; left != 0;) {
+      const auto block = std::min(per_block, left);
+      blocks.push_back({block, 0});
+      left -= block;
+    }
+    return blocks;
   }
 
   /**
