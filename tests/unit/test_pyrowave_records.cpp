@@ -249,12 +249,27 @@ TEST(PyroWaveRecordsTest, GivesTheCriticalPacketsAllTheParity) {
   EXPECT_EQ(describe(records::critical_fec_blocks(15 + 2000, 15, 20, 2)), (blocks_t {{15, 20}, {667, 0}, {667, 0}, {666, 0}}));
 }
 
-TEST(PyroWaveRecordsTest, LeavesFecAsItIsWhenTheCriticalBlockDoesNotFit) {
-  // 240 packets need 48 parity packets at 20%, over a Reed-Solomon block's 255
-  EXPECT_TRUE(records::critical_fec_blocks(400, 240, 20, 2).empty());
-  // The client's minimum of parity packets counts too
-  EXPECT_EQ(records::critical_fec_blocks(400, 250, 1, 2).size(), 2u);
-  EXPECT_TRUE(records::critical_fec_blocks(400, 250, 1, 6).empty());
-  // The rest must fit three blocks
+TEST(PyroWaveRecordsTest, GivesTheCriticalPacketsWhatParityFits) {
+  using blocks_t = std::vector<std::pair<std::size_t, std::size_t>>;
+  // 240 packets would need 48 parity packets at 20%, but only 15 fit a Reed-Solomon block: 6% of
+  // them, rounded up
+  EXPECT_EQ(describe(records::critical_fec_blocks(400, 240, 20, 2)), (blocks_t {{240, 6}, {160, 0}}));
+  EXPECT_EQ(describe(records::critical_fec_blocks(400, 250, 1, 2)), (blocks_t {{250, 1}, {150, 0}}));
+}
+
+TEST(PyroWaveRecordsTest, SendsWithoutParityWhenTheClientsMinimumDoesNotFit) {
+  using blocks_t = std::vector<std::pair<std::size_t, std::size_t>>;
+  // 5 parity packets fit with 250 critical packets, fewer than the client's minimum of 6
+  EXPECT_EQ(describe(records::critical_fec_blocks(400, 250, 1, 6)), (blocks_t {{200, 0}, {200, 0}}));
+  EXPECT_EQ(describe(records::critical_fec_blocks(300, 260, 20, 2)), (blocks_t {{150, 0}, {150, 0}}));
+}
+
+TEST(PyroWaveRecordsTest, LeavesFecAsItIsForFramesTooLargeForFourBlocks) {
   EXPECT_TRUE(records::critical_fec_blocks(15 + 3 * 1023 + 1, 15, 20, 2).empty());
+  EXPECT_TRUE(records::critical_fec_blocks(4 * 1023 + 1, 260, 20, 2).empty());
+}
+
+TEST(PyroWaveRecordsTest, KeepsBackLessBitrateThanFecOverTheWholeFrame) {
+  EXPECT_EQ(records::bitrate_overhead_percentage(0), 1);
+  EXPECT_EQ(records::bitrate_overhead_percentage(20), 2);
 }

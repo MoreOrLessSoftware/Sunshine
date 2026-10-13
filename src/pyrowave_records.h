@@ -330,6 +330,21 @@ namespace pyrowave::records {
   constexpr std::size_t max_reed_solomon_shards = 255;  ///< Data and parity packets a FEC block with parity can have.
 
   /**
+   * @brief Share of the bitrate kept back for what record framing adds to the encoded frames.
+   *
+   * @details Padding records are about 1% of a frame, and the critical packets' parity under 1%
+   *          (4 packets of a 500 packet frame at 20%), where FEC over the whole frame would take
+   *          its full percentage. Kept back from the encoder's bitrate in its place, so the
+   *          frames sent stay within the client's bitrate.
+   *
+   * @param fec_percentage The session's FEC percentage.
+   * @return Percent of the bitrate.
+   */
+  constexpr int bitrate_overhead_percentage(int fec_percentage) {
+    return fec_percentage > 0 ? 2 : 1;
+  }
+
+  /**
    * @brief One FEC block of a frame.
    */
   struct fec_block_t {
@@ -347,38 +362,56 @@ namespace pyrowave::records {
    *          without parity, each kept to a Reed-Solomon block's size where it can be, so a client
    *          that lost packets of one can give up on it without waiting for a huge one.
    *
+   *          A Reed-Solomon block holds 255 packets with its parity, so critical packets with too
+   *          much parity for that get as much as fits. If not even the client's minimum fits, the
+   *          frame is sent without parity. FEC over the whole frame would cost far more than the
+   *          bitrate keeps back for it (bitrate_overhead_percentage()).
+   *
    * @param packets Data packets of the frame.
    * @param critical_packets Its critical packets, from the start.
    * @param fec_percentage The session's FEC percentage.
    * @param min_parity_packets The fewest parity packets the client wants in a block with parity.
    * @return The blocks in order, or empty if the frame should be sent with FEC as for other
-   *         codecs: FEC is off, nothing is critical, the critical packets and their parity don't fit
-   *         one Reed-Solomon block, or the rest of the frame doesn't fit three blocks.
+   *         codecs: FEC is off, nothing is critical, or the frame is too large for four blocks.
    */
   inline std::vector<fec_block_t> critical_fec_blocks(std::size_t packets, std::size_t critical_packets, std::size_t fec_percentage, std::size_t min_parity_packets) {
     if (critical_packets == 0 || fec_percentage == 0 || critical_packets > packets) {
       return {};
     }
-    // As stream.cpp's FEC encoder works it out
-    const auto parity = std::max((critical_packets * fec_percentage + 99) / 100, min_parity_packets);
-    if (critical_packets + parity > max_reed_solomon_shards) {
-      return {};
-    }
+    // Splits total packets into up to max_blocks blocks without parity, each kept to a Reed-Solomon
+    // block's size where it can be. False if they don't fit.
+    std::vector<fec_block_t> blocks;
+    const auto split = [&](std::size_t total, std::size_t max_blocks) {
+      const auto count = std::clamp<std::size_t>((total + max_reed_solomon_shards - 1) / max_reed_solomon_shards, 1, max_blocks);
+      const auto per_block = (total + count - 1) / count;
+      if (per_block > max_block_packets) {
+        return false;
+      }
+      for (auto left = total; left != 0;) {
+        const auto block = std::min(per_block, left);
+        blocks.push_back({block, 0});
+        left -= block;
+      }
+      return true;
+    };
 
-    std::vector<fec_block_t> blocks {{critical_packets, fec_percentage}};
-    const auto rest = packets - critical_packets;
-    if (rest == 0) {
+    // The parity stream.cpp's FEC encoder adds, at least the client's minimum
+    const auto room = critical_packets < max_reed_solomon_shards ? max_reed_solomon_shards - critical_packets : 0;
+    if (room < min_parity_packets) {
+      if (!split(packets, max_fec_blocks)) {
+        return {};
+      }
       return blocks;
     }
-    const auto count = std::clamp<std::size_t>((rest + max_reed_solomon_shards - 1) / max_reed_solomon_shards, 1, max_fec_blocks - 1);
-    const auto per_block = (rest + count - 1) / count;
-    if (per_block > max_block_packets) {
-      return {};
+    if ((critical_packets * fec_percentage + 99) / 100 > room) {
+      // As much as fits. Rounded up, this percentage of the critical packets is at most room.
+      fec_percentage = room * 100 / critical_packets;
     }
-    for (auto left = rest; left != 0;) {
-      const auto block = std::min(per_block, left);
-      blocks.push_back({block, 0});
-      left -= block;
+
+    blocks.push_back({critical_packets, fec_percentage});
+    const auto rest = packets - critical_packets;
+    if (rest != 0 && !split(rest, max_fec_blocks - 1)) {
+      return {};
     }
     return blocks;
   }

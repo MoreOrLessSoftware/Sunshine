@@ -1283,7 +1283,11 @@ namespace rtsp_stream {
 
       // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
       // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
-      if (config.fecPercentage <= 80) {
+      // PyroWave in record framing only protects a frame's critical packets, and keeps back
+      // what that and its padding records add instead (see pyrowave_records.h).
+      if (config.monitor.pyrowavePacketPayload) {
+        configuredBitrateKbps -= configuredBitrateKbps * ::pyrowave::records::bitrate_overhead_percentage(config.fecPercentage) / 100;
+      } else if (config.fecPercentage <= 80) {
         configuredBitrateKbps /= 100.f / (100 - config.fecPercentage);
       }
 
