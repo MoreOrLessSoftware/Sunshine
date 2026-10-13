@@ -28,6 +28,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "network.h"
+#include "pyrowave_records.h"
 #include "rtsp.h"
 #include "stream.h"
 #include "sync.h"
@@ -1145,6 +1146,7 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
+    args.try_emplace("x-ss-video[0].pyrowaveFeatures"sv, "0"sv);
 
     stream::config_t config;
 
@@ -1202,6 +1204,20 @@ namespace rtsp_stream {
       config.monitor.dynamicRange = (int) util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
       config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
+
+      // PyroWave clients that parse record framing ask for it with a feature bit, or Aurora's
+      // adaptive FEC attribute. Its records are laid out on the packets the frame is sent in,
+      // which needs a packet size they line up with. See pyrowave_records.h.
+      const auto pyrowave_features = (std::uint32_t) util::from_view(args.at("x-ss-video[0].pyrowaveFeatures"sv));
+      const bool pyrowave_record_framing = (pyrowave_features & ::pyrowave::records::feature_record_framing) ||
+                                           args.contains("x-ss-video[0].pyrowaveAdaptiveFec"sv);
+      config.monitor.pyrowavePacketPayload = config.monitor.videoFormat == 3 && pyrowave_record_framing ?
+                                               (int) ::pyrowave::records::packet_payload_bytes(config.packetsize) :
+                                               0;
+      if (config.monitor.videoFormat == 3) {
+        BOOST_LOG(info) << "PyroWave framing: "sv << (pyrowave_record_framing ? "records"sv : "as encoded"sv)
+                        << (pyrowave_record_framing && !config.monitor.pyrowavePacketPayload ? " without packet alignment"sv : ""sv);
+      }
 
       configuredBitrateKbps = util::from_view(args.at("x-ml-video.configuredBitrateKbps"sv));
     } catch (std::out_of_range &) {

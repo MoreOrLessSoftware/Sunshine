@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <iomanip>
 #include <list>
 #include <thread>
 #include <utility>
@@ -34,6 +35,7 @@ extern "C" {
 #include "logging.h"
 #include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
+#include "pyrowave_records.h"
 #include "sync.h"
 #include "video.h"
 #include "video_bitrate.h"
@@ -766,6 +768,10 @@ namespace video {
    *
    * PyroWave is intra-only: every frame decodes on its own, so there are no IDR frames
    * to request and no reference frames to invalidate.
+   *
+   * For clients that asked for record framing, frames are laid out on the packets they are
+   * sent in, so the client can decode what arrived of a frame that lost some. See
+   * pyrowave_records.h.
    */
   class pyrowave_encode_session_t: public encode_session_t {
   public:
@@ -779,6 +785,7 @@ namespace video {
         device {std::move(encode_device)},
         fps {framerate_to_rational(config)},
         max_frame_size {pyrowave_max_frame_size(config.bitrate, fps)},
+        packet_payload {(std::size_t) std::max(config.pyrowavePacketPayload, 0)},
         frame_buffers {std::make_shared<frame_buffer_pool_t>()} {
     }
 
@@ -834,19 +841,59 @@ namespace video {
      * @brief Encode the last converted frame into a buffer from the session's pool.
      *
      * @param trace Optional. Marked as the encode passes each step.
+     * @param critical_bytes Receives, for a frame laid out on packets, its bytes through the
+     *                       coarsest wavelet level, otherwise 0.
      * @return Encoded frame, or an empty vector on failure.
      */
-    std::vector<std::uint8_t> encode_frame(frame_trace::trace_t *trace = nullptr) {
+    std::vector<std::uint8_t> encode_frame(frame_trace::trace_t *trace, std::size_t &critical_bytes) {
+      critical_bytes = 0;
       if (!device) {
         return {};
       }
 
       auto frame = frame_buffers->take();
-      if (!device->encode_frame(max_frame_size, frame, trace)) {
+      if (!packet_payload) {
+        if (!device->encode_frame(max_frame_size, frame, trace)) {
+          frame_buffers->give(std::move(frame));
+          return {};
+        }
+        return frame;
+      }
+
+      if (!device->encode_frame(max_frame_size, encoded, trace)) {
         frame_buffers->give(std::move(frame));
         return {};
       }
+      ::pyrowave::records::layout_t layout;
+      if (!::pyrowave::records::write_record_frame(encoded, packet_payload, frame, layout)) {
+        // Not what PyroWave should have made. Sent as it is, the client drops it.
+        if (!logged_layout_failure) {
+          BOOST_LOG(error) << "PyroWave: couldn't lay out an encoded frame in records"sv;
+          logged_layout_failure = true;
+        }
+        frame.assign(encoded.begin(), encoded.end());
+        return frame;
+      }
+      critical_bytes = layout.critical_bytes;
+      padding_bytes += layout.padding_bytes;
+      frame_bytes += frame.size();
+      if (++frames_laid_out == 600) {
+        BOOST_LOG(debug) << "PyroWave: padding records are "sv << std::fixed << std::setprecision(2)
+                         << 100.0 * (double) padding_bytes / (double) std::max<std::size_t>(frame_bytes, 1) << "% of the last 600 frames"sv;
+        frames_laid_out = 0;
+        padding_bytes = 0;
+        frame_bytes = 0;
+      }
       return frame;
+    }
+
+    /**
+     * @brief Get the frame bytes per packet frames are laid out on.
+     *
+     * @return Bytes, or 0 if frames are sent as encoded.
+     */
+    std::size_t record_packet_payload() const {
+      return packet_payload;
     }
 
     /**
@@ -862,6 +909,12 @@ namespace video {
     std::unique_ptr<platf::pyrowave_encode_device_t> device;  ///< Device that converts and encodes frames.
     AVRational fps;  ///< The stream's frame rate.
     std::size_t max_frame_size;  ///< Largest encoded frame in bytes.
+    std::size_t packet_payload;  ///< Frame bytes per packet that records are laid out on, or 0 to send frames as encoded.
+    std::vector<std::uint8_t> encoded;  ///< The last frame as encoded, before its records were laid out.
+    bool logged_layout_failure = false;  ///< Whether a frame that couldn't be laid out was logged.
+    std::size_t frames_laid_out = 0;  ///< Frames laid out since padding was last logged.
+    std::size_t padding_bytes = 0;  ///< Bytes of padding records in those frames.
+    std::size_t frame_bytes = 0;  ///< Bytes of those frames.
     std::shared_ptr<frame_buffer_pool_t> frame_buffers;  ///< Buffers of sent frames, reused for the next ones.
   };
 
@@ -2307,7 +2360,8 @@ namespace video {
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
   int encode_pyrowave(int64_t frame_nr, pyrowave_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
-    auto frame = session.encode_frame(trace);
+    std::size_t critical_bytes;
+    auto frame = session.encode_frame(trace, critical_bytes);
     if (frame.empty()) {
       BOOST_LOG(error) << "PyroWave returned empty packet";
       return -1;
@@ -2319,6 +2373,10 @@ namespace video {
     auto packet = std::make_unique<packet_raw_generic>(std::move(frame), frame_nr, true, session.buffers());
     packet->channel_data = channel_data;
     packet->frame_timestamp = frame_timestamp;
+    if (critical_bytes) {
+      packet->pyrowave_packet_payload = session.record_packet_payload();
+      packet->pyrowave_critical_bytes = critical_bytes;
+    }
     if (trace) {
       trace->bytes = packet->data_size();
       trace->mark(frame_trace::point_e::encoded);
@@ -3751,8 +3809,8 @@ namespace video {
     encoder.av1.capabilities.set();
 
     // First, test encoder viability
-    config_t config_max_ref_frames {1920, 1080, 60, 6000, 1000, 1, 1, 1, 0, 0, 0, 0};
-    config_t config_autoselect {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 0, 0};
+    config_t config_max_ref_frames {1920, 1080, 60, 6000, 1000, 1, 1, 1, 0, 0, 0, 0, 0};
+    config_t config_autoselect {1920, 1080, 60, 6000, 1000, 1, 0, 1, 0, 0, 0, 0, 0};
 
     // If the encoder isn't supported at all (not even H.264), bail early
     reset_display(disp, encoder.platform_formats->dev_type, output_name, config_autoselect);
@@ -3951,7 +4009,7 @@ namespace video {
     std::shared_ptr<platf::display_t> disp;
 
     // PyroWave targets bitrates of a few hundred Mbps
-    config_t config {1920, 1080, 60, 6000, 300000, 1, 1, 1, 3, 0, 0, 0};
+    config_t config {1920, 1080, 60, 6000, 300000, 1, 1, 1, 3, 0, 0, 0, 0};
 
     reset_display(disp, encoder.platform_formats->dev_type, output_name, config);
     if (!disp) {

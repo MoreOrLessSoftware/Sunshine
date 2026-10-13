@@ -31,6 +31,7 @@ extern "C" {
 #include "network.h"
 #include "platform/common.h"
 #include "process.h"
+#include "pyrowave_records.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"
@@ -128,7 +129,10 @@ namespace stream {
     // zero padding, such as AV1 (Sunshine extension).
     boost::endian::little_uint16_at lastPayloadLen;  ///< Last payload len.
 
-    std::uint8_t unknown[2];  ///< Reserved bytes with no known client-visible meaning.
+    // PyroWave in record framing (nonary host extension): how many of the frame's first packets
+    // hold its sequence header and coarsest wavelet level, without which it can't be decoded.
+    // Zero when unknown, as for other codecs.
+    boost::endian::little_uint16_at pyrowave_critical_packets;  ///< Critical packets of a PyroWave frame.
   };
 
   static_assert(
@@ -1770,7 +1774,9 @@ namespace stream {
 
     // Sends one FEC block of a frame, laid out as concat_and_insert() produces it, with room for each packet's header.
     // What sending it costs is added to trace, the frame's trace if it has one.
-    auto send_fec_block = [&](session_t *session, video::packet_raw_t &packet, std::string_view current_payload, int blockIndex, int fec_blocks_needed, size_t fecPercentage, uint32_t timestamp, bool frame_is_dupe, send_burst_t &burst, std::optional<frame_trace::trace_t> &trace) {
+    // For a PyroWave frame in record framing, record_starts says which of the frame's packets
+    // start with a record, the block's first being the frame's first_packet.
+    auto send_fec_block = [&](session_t *session, video::packet_raw_t &packet, std::string_view current_payload, int blockIndex, int fec_blocks_needed, size_t fecPercentage, uint32_t timestamp, bool frame_is_dupe, send_burst_t &burst, std::optional<frame_trace::trace_t> &trace, const std::vector<bool> &record_starts = {}, size_t first_packet = 0) {
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto lowseq = session->video.lowseq;
 
@@ -1801,6 +1807,9 @@ namespace stream {
         inspect->packet.multiFecBlocks = (blockIndex << 4) | ((fec_blocks_needed - 1) << 6);
 
         inspect->packet.extraFlags = packet.ltr_frame ? NV_VIDEO_PACKET_EXTRA_FLAG_LTR_FRAME : 0;
+        if (first_packet + x < record_starts.size() && record_starts[first_packet + x]) {
+          inspect->packet.extraFlags |= ::pyrowave::records::extra_flag_record_start;
+        }
         inspect->packet.flags = FLAG_CONTAINS_PIC_DATA;
         if (x == 0) {
           inspect->packet.flags |= FLAG_SOF;
@@ -2165,6 +2174,18 @@ namespace stream {
       // Insert space for packet headers
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto payload_blocksize = blocksize - sizeof(video_packet_raw_t);
+
+      // A PyroWave frame in record framing is laid out on these packets. Its critical packets
+      // go in the frame header, and the packets that start with a record are flagged, where a
+      // client that lost a record's header picks up again. See pyrowave_records.h.
+      std::vector<bool> record_starts;
+      if (packet->pyrowave_packet_payload && packet->pyrowave_packet_payload == payload_blocksize) {
+        frame_header.pyrowave_critical_packets = (std::uint16_t) std::min<std::size_t>(
+          ::pyrowave::records::packets_for(packet->pyrowave_critical_bytes, payload_blocksize),
+          std::numeric_limits<std::uint16_t>::max()
+        );
+        record_starts = ::pyrowave::records::record_start_packets({(const std::uint8_t *) payload.data(), payload.size()}, payload_blocksize);
+      }
       auto payload_new = concat_and_insert(sizeof(video_packet_raw_t), payload_blocksize, std::string_view {(char *) &frame_header, sizeof(frame_header)}, payload);
 
       payload = std::string_view {(char *) payload_new.data(), payload_new.size()};
@@ -2228,8 +2249,10 @@ namespace stream {
         }
 
         auto blockIndex = 0;
+        size_t block_first_packet = 0;
         std::for_each(fec_blocks_begin, fec_blocks_end, [&](std::string_view &current_payload) {
-          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fecPercentage, timestamp, frame_is_dupe, burst, packet->trace);
+          send_fec_block(session, *packet, current_payload, blockIndex, fec_blocks_needed, fecPercentage, timestamp, frame_is_dupe, burst, packet->trace, record_starts, block_first_packet);
+          block_first_packet += current_payload.size() / blocksize;
           ++blockIndex;
         });
 

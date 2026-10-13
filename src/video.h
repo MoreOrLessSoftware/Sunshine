@@ -44,6 +44,7 @@ namespace video {
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
+    int pyrowavePacketPayload;  ///< PyroWave in record framing: frame bytes per packet, which records are laid out on (see pyrowave_records.h). 0 sends frames as encoded.
   };
 
   namespace amf {
@@ -602,6 +603,8 @@ namespace video {
     bool subframe_final = false;  ///< Whether this is the last part of a frame sent in parts.
     std::chrono::steady_clock::time_point subframe_ready {};  ///< When the encoder handed over this part of a frame sent in parts.
     std::optional<frame_trace::trace_t> trace;  ///< Where a whole frame spent its time so far, when it was traced. See frame_trace.h.
+    std::size_t pyrowave_packet_payload = 0;  ///< PyroWave in record framing: frame bytes per packet the frame was laid out on, or 0. See pyrowave_records.h.
+    std::size_t pyrowave_critical_bytes = 0;  ///< PyroWave in record framing: frame bytes through the coarsest wavelet level.
   };
 
   /**
