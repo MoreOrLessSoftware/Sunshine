@@ -1276,6 +1276,9 @@ namespace nvhttp {
 
     const uint32_t codec_mode_flags = get_codec_mode_flags();
     tree.put("root.ServerCodecModeSupport", codec_mode_flags);
+    // Some PyroWave clients (Nightjar) only trust the PyroWave codec bits from a host that sends a
+    // PyroWave field. 0 means the host's link speed is unknown.
+    tree.put("root.PyroWaveHostLinkMbps", 0);
 
     if (!config::nvhttp.external_ip.empty()) {
       tree.put("root.ExternalIP", config::nvhttp.external_ip);
