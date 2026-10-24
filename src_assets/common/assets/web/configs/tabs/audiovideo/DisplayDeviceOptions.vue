@@ -75,6 +75,10 @@ function addRemappingEntry() {
                   <option value="ensure_primary">{{ $t('config.dd_config_ensure_primary') }}</option>
                   <option value="ensure_only_display">{{ $t('config.dd_config_ensure_only_display') }}</option>
                 </select>
+                <div class="alert alert-info mt-2 mb-0" v-if="config.dd_configuration_option === 'disabled'">
+                  {{ $t('config.dd_virtual_display_hint') }}
+                  <a href="./plugins" class="alert-link">{{ $t('config.dd_virtual_display_hint_link') }}</a>
+                </div>
               </div>
 
               <!-- Resolution option -->

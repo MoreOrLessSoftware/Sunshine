@@ -417,9 +417,9 @@ client is streaming, and restores it whenever none is.
 
 <div class="section_buttons">
 
-| Previous                          |                                    Next |
-|:----------------------------------|----------------------------------------:|
-| [Configuration](configuration.md) | [Awesome-Sunshine](awesome_sunshine.md) |
+| Previous                          |                  Next |
+|:----------------------------------|----------------------:|
+| [Configuration](configuration.md) | [Plugins](plugins.md) |
 
 </div>
 

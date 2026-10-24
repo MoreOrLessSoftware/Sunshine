@@ -103,6 +103,62 @@ namespace confighttp {
   void savePin(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Add or replace an application in the applications file.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void saveApp(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief List plugins with their state and options.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPlugins(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Activate or deactivate a plugin and set its options.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void savePluginConfig(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Start installing a plugin, optionally activating it once the install succeeds.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void installPlugin(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Deactivate a plugin and start uninstalling it.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void uninstallPlugin(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Return the output of the last install or uninstall of a plugin.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPluginLog(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Rescan the plugin directories.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void rescanPlugins(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Check whether a detected driver version identifies a development build.
    *
    * Numeric versions beginning with `0.0` and containing at least three

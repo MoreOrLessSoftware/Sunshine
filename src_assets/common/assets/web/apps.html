@@ -77,6 +77,7 @@
                 <span v-if="app.detached && app.detached.length" class="badge app-flag-badge">{{ $t('apps.badge_detached') }}</span>
                 <span v-if="app['prep-cmd'] && app['prep-cmd'].length" class="badge app-flag-badge">{{ $t('apps.badge_app_prep') }}</span>
                 <span v-if="app['exclude-global-prep-cmd']" class="badge app-flag-badge">{{ $t('apps.badge_no_global_prep') }}</span>
+                <span v-if="app['exclude-plugins'] && app['exclude-plugins'].length" class="badge app-flag-badge">{{ $t('apps.badge_plugins_excluded') }}</span>
                 <span v-if="app['auto-detach']" class="badge app-flag-badge">{{ $t('apps.badge_auto_detach') }}</span>
               </div>
             </div>
@@ -152,6 +153,17 @@
                       default="true"
                       inverse-values
             ></Checkbox>
+            <!-- plugins -->
+            <div class="mb-3" v-if="activePlugins.length > 0">
+              <label class="form-label">{{ $t('apps.plugins_name') }}</label>
+              <div class="form-text mb-2">{{ $t('apps.plugins_desc') }}</div>
+              <div class="form-check" v-for="plugin in activePlugins" :key="plugin.id">
+                <input class="form-check-input" type="checkbox" :id="'app-plugin-' + plugin.id"
+                       :checked="!editForm['exclude-plugins'].includes(plugin.id)"
+                       @change="setPluginExcluded(plugin.id, !$event.target.checked)">
+                <label class="form-check-label" :for="'app-plugin-' + plugin.id">{{ plugin.name }}</label>
+              </div>
+            </div>
             <div class="mb-3">
               <label for="appName" class="form-label">{{ $t('apps.cmd_prep_name') }}</label>
               <div class="form-text">{{ $t('apps.cmd_prep_desc') }}</div>
@@ -644,6 +656,7 @@
     },
     data() {
       return {
+        activePlugins: [],
         apps: [],
         editForm: null,
         detachedCmd: "",
@@ -738,6 +751,11 @@
     created() {
       this.loadApps();
 
+      fetch("./api/plugins")
+        .then(r => r.json())
+        .then(r => this.activePlugins = (r.plugins || []).filter(plugin => plugin.active))
+        .catch((e) => console.error(e));
+
       fetch("./api/config")
         .then(r => r.json())
         .then(r => {
@@ -761,6 +779,7 @@
           cmd: "",
           index: -1,
           "exclude-global-prep-cmd": false,
+          "exclude-plugins": [],
           elevated: false,
           "auto-detach": true,
           "wait-all": true,
@@ -770,6 +789,13 @@
           "image-path": ""
         };
         this.openEditModal();
+      },
+      setPluginExcluded(pluginId, excluded) {
+        const list = this.editForm["exclude-plugins"].filter(id => id !== pluginId);
+        if (excluded) {
+          list.push(pluginId);
+        }
+        this.editForm["exclude-plugins"] = list;
       },
       editApp(id) {
         this.editForm = JSON.parse(JSON.stringify(this.apps[id]));
@@ -784,6 +810,8 @@
           this.editForm["detached"] = [];
         if (this.editForm["exclude-global-prep-cmd"] === undefined)
           this.editForm["exclude-global-prep-cmd"] = false;
+        if (this.editForm["exclude-plugins"] === undefined)
+          this.editForm["exclude-plugins"] = [];
         if (this.editForm["elevated"] === undefined && this.platform === 'windows') {
           this.editForm["elevated"] = false;
         }

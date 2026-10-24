@@ -50,6 +50,7 @@
 #include "network.h"
 #include "nvhttp.h"
 #include "platform/common.h"
+#include "plugins.h"
 #include "process.h"
 #include "rtsp.h"
 #include "system_tray.h"
@@ -1089,8 +1090,6 @@ namespace confighttp {
 
   /**
    * @brief Save an application. To save a new application, the index must be `-1`. To update an existing application, you must provide the current index of the application.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
    * The body for the post request should be JSON serialized in the following format:
    * @code{.json}
    * {
@@ -1099,6 +1098,9 @@ namespace confighttp {
    *   "cmd": "Command to run the application",
    *   "index": -1,
    *   "exclude-global-prep-cmd": false,
+   *   "exclude-plugins": [
+   *     "plugin-id"
+   *   ],
    *   "elevated": false,
    *   "auto-detach": true,
    *   "wait-all": true,
@@ -1151,6 +1153,10 @@ namespace confighttp {
 
       if (input_tree["detached"].empty()) {
         input_tree.erase("detached");
+      }
+
+      if (input_tree.contains("exclude-plugins") && input_tree["exclude-plugins"].empty()) {
+        input_tree.erase("exclude-plugins");
       }
 
       auto &apps_node = file_tree["apps"];
@@ -2337,6 +2343,268 @@ namespace confighttp {
   }
 
   /**
+   * @brief Send the response for a rejected plugin request.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param result Outcome returned by the plugin registry.
+   * @param error Reason for the rejection.
+   */
+  void send_plugin_error(const resp_https_t &response, const req_https_t &request, plugins::result_e result, const std::string &error) {
+    if (result == plugins::result_e::not_found) {
+      not_found(response, request, error);
+    } else {
+      bad_request(response, request, error);
+    }
+  }
+
+  /**
+   * @brief Read the plugin ID from a JSON request body.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param body Receives the parsed body.
+   * @return The plugin ID, or `std::nullopt` after sending an error response.
+   */
+  std::optional<std::string> read_plugin_request(const resp_https_t &response, const req_https_t &request, nlohmann::json &body) {
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      body = nlohmann::json::parse(ss);
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid plugin request");
+      return std::nullopt;
+    }
+    if (!body.is_object() || !body.contains("id") || !body["id"].is_string()) {
+      bad_request(response, request, "Plugin id is required");
+      return std::nullopt;
+    }
+    return body["id"].get<std::string>();
+  }
+
+  /**
+   * @brief Get the list of plugins with their state and options.
+   *
+   * @api_examples{/api/plugins| GET| null}
+   */
+  void getPlugins(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["plugins"] = plugins::list();
+    output_tree["custom_dir"] = fs::path(plugins::current_paths().custom_dir).make_preferred().string();
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Activate or deactivate a plugin and set its options.
+   * The body for the post request should be JSON serialized in the following format,
+   * where `active` and `options` are each optional:
+   * @code{.json}
+   * {
+   *   "id": "virtual-display",
+   *   "active": true,
+   *   "options": {
+   *     "fps_multiplier": 2
+   *   }
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/config| POST| {"id":"virtual-display","active":true}}
+   */
+  void savePluginConfig(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json body;
+    const auto id = read_plugin_request(response, request, body);
+    if (!id) {
+      return;
+    }
+
+    std::optional<bool> active;
+    if (body.contains("active")) {
+      if (!body["active"].is_boolean()) {
+        bad_request(response, request, "'active' must be a boolean");
+        return;
+      }
+      active = body["active"].get<bool>();
+    }
+    std::optional<nlohmann::json> options;
+    if (body.contains("options")) {
+      options = body["options"];
+    }
+
+    std::string error;
+    if (const auto result = plugins::configure(*id, active, options, error); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    proc::refresh(config::stream.file_apps);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Start installing or uninstalling a plugin.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param action Operation to start.
+   */
+  void startPluginTask(const resp_https_t &response, const req_https_t &request, plugins::action_e action) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json body;
+    const auto id = read_plugin_request(response, request, body);
+    if (!id) {
+      return;
+    }
+
+    bool activate = false;
+    if (body.contains("activate")) {
+      if (!body["activate"].is_boolean()) {
+        bad_request(response, request, "'activate' must be a boolean");
+        return;
+      }
+      activate = body["activate"].get<bool>();
+    }
+
+    std::string error;
+    if (const auto result = plugins::start_task(*id, action, error, activate); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    if (action == plugins::action_e::uninstall) {
+      // Uninstalling deactivates the plugin right away.
+      proc::refresh(config::stream.file_apps);
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Start installing a plugin. Poll `/api/plugins` for the result.
+   * The body for the post request should be JSON serialized in the following format,
+   * where the optional `activate` activates the plugin once the install succeeds:
+   * @code{.json}
+   * {
+   *   "id": "virtual-display",
+   *   "activate": true
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/install| POST| {"id":"virtual-display","activate":true}}
+   */
+  void installPlugin(const resp_https_t &response, const req_https_t &request) {
+    startPluginTask(response, request, plugins::action_e::install);
+  }
+
+  /**
+   * @brief Deactivate a plugin and start uninstalling it. Poll `/api/plugins` for the result.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "id": "virtual-display"
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/uninstall| POST| {"id":"virtual-display"}}
+   */
+  void uninstallPlugin(const resp_https_t &response, const req_https_t &request) {
+    startPluginTask(response, request, plugins::action_e::uninstall);
+  }
+
+  /**
+   * @brief Get the output of the last install or uninstall of a plugin.
+   *
+   * @api_examples{/api/plugins/log?id=virtual-display| GET| null}
+   */
+  void getPluginLog(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto query_params = request->parse_query_string();
+    const auto id_it = query_params.find("id");
+    if (id_it == query_params.end()) {
+      bad_request(response, request, "Plugin id is required");
+      return;
+    }
+
+    const auto content = plugins::read_log(id_it->second);
+    if (!content) {
+      not_found(response, request, std::format("plugin '{}' not found", id_it->second));
+      return;
+    }
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/plain; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(SimpleWeb::StatusCode::success_ok, *content, headers);
+  }
+
+  /**
+   * @brief Rescan the plugin directories to pick up added or removed custom plugins.
+   *
+   * @api_examples{/api/plugins/rescan| POST| null}
+   */
+  void rescanPlugins(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    plugins::rescan();
+    proc::refresh(config::stream.file_apps);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["plugins"] = plugins::list();
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Start the HTTPS configuration server.
    */
   void start() {
@@ -2379,6 +2647,7 @@ namespace confighttp {
     server.resource["^/logout/?$"]["GET"] = page_handler("logout.html", false);
     server.resource["^/password/?$"]["GET"] = page_handler("password.html");
     server.resource["^/pin/?$"]["GET"] = page_handler("pin.html");
+    server.resource["^/plugins/?$"]["GET"] = page_handler("plugins.html");
     server.resource["^/troubleshooting/?$"]["GET"] = page_handler("troubleshooting.html");
     server.resource["^/welcome/?$"]["GET"] = page_handler("welcome.html", false, true);
 
@@ -2402,6 +2671,12 @@ namespace confighttp {
     server.resource["^/api/pin$"]["DELETE"] = cancelPairing;
     server.resource["^/api/pin$"]["GET"] = getPendingPairings;
     server.resource["^/api/pin$"]["POST"] = savePin;
+    server.resource["^/api/plugins$"]["GET"] = getPlugins;
+    server.resource["^/api/plugins/config$"]["POST"] = savePluginConfig;
+    server.resource["^/api/plugins/install$"]["POST"] = installPlugin;
+    server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
+    server.resource["^/api/plugins/rescan$"]["POST"] = rescanPlugins;
+    server.resource["^/api/plugins/uninstall$"]["POST"] = uninstallPlugin;
     server.resource["^/api/logs$"]["GET"] = getLogs;
     server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
     server.resource["^/api/reset-portal-token$"]["POST"] = resetPortalToken;

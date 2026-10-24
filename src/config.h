@@ -7,6 +7,7 @@
 // standard includes
 #include <bitset>
 #include <chrono>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -379,6 +380,8 @@ namespace config {
      * @return `type_e::connect` for `"connect"`, otherwise `type_e::app`.
      */
     static type_e parse_type(std::string_view value);
+
+    std::map<std::string, std::string> env;  ///< Variables added to the environment of these commands only.
   };
 
   /**

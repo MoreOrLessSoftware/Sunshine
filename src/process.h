@@ -217,6 +217,15 @@ namespace proc {
   };
 
   /**
+   * @brief Build the environment for a preparation command.
+   *
+   * @param base Environment shared by every command of the application.
+   * @param cmd Preparation command that may add its own variables.
+   * @return `base` with the command's variables added.
+   */
+  boost::process::v1::environment prep_cmd_env(const boost::process::v1::environment &base, const cmd_t &cmd);
+
+  /**
    * @brief Calculate a stable id based on name and image data
    * @return Tuple of id calculated without index (for use if no collision) and one with.
    *

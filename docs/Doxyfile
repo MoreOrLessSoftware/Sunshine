@@ -46,6 +46,7 @@ INPUT = ../README.md \
         legal.md \
         configuration.md \
         app_examples.md \
+        plugins.md \
         awesome_sunshine.md \
         guides.md \
         performance_tuning.md \

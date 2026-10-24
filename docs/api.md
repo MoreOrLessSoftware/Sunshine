@@ -88,6 +88,24 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## POST /api/pin
 @copydoc confighttp::savePin()
 
+## GET /api/plugins
+@copydoc confighttp::getPlugins()
+
+## POST /api/plugins/config
+@copydoc confighttp::savePluginConfig()
+
+## POST /api/plugins/install
+@copydoc confighttp::installPlugin()
+
+## GET /api/plugins/log
+@copydoc confighttp::getPluginLog()
+
+## POST /api/plugins/rescan
+@copydoc confighttp::rescanPlugins()
+
+## POST /api/plugins/uninstall
+@copydoc confighttp::uninstallPlugin()
+
 ## POST /api/reset-display-device-persistence
 @copydoc confighttp::resetDisplayDevicePersistence()
 

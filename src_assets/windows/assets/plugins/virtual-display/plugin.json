@@ -1,0 +1,64 @@
+{
+  "id": "virtual-display",
+  "name": "Virtual Display",
+  "version": "1.0.1",
+  "description": "Creates a virtual display that matches the client's resolution and frame rate for the length of the stream, then removes it. Uses sunshine-vdisplay and the SudoVDA driver.",
+  "author": "Sunshine",
+  "homepage": "https://github.com/Zayrick/sunshine-vdisplay",
+  "order": 100,
+  "elevated": false,
+  "scripts": {
+    "install": "install.ps1",
+    "uninstall": "uninstall.ps1",
+    "do": "do.ps1",
+    "undo": "undo.ps1"
+  },
+  "options": [
+    {
+      "id": "fps_multiplier",
+      "type": "number",
+      "label": "Refresh rate multiplier",
+      "description": "Run the virtual display at the client frame rate times this value. A higher refresh rate can lower latency. Use the RTSS Frame Limit plugin to keep games capped at the client frame rate.",
+      "default": 1,
+      "min": 1,
+      "max": 8,
+      "step": 1
+    },
+    {
+      "id": "exclusive",
+      "type": "boolean",
+      "label": "Turn off other displays",
+      "description": "Turn off the physical displays while streaming and make the virtual display the primary display.",
+      "default": true
+    },
+    {
+      "id": "hdr",
+      "type": "choice",
+      "label": "HDR",
+      "description": "HDR mode of the virtual display.",
+      "default": "client",
+      "choices": [
+        {"value": "client", "label": "Match the client"},
+        {"value": "on", "label": "Always on"},
+        {"value": "off", "label": "Always off"}
+      ]
+    },
+    {
+      "id": "settle_seconds",
+      "type": "number",
+      "label": "Wait after creating the display (seconds)",
+      "description": "Extra time to wait after the display is ready before the stream continues. Usually not needed.",
+      "default": 0,
+      "min": 0,
+      "max": 30,
+      "step": 1
+    },
+    {
+      "id": "remove_driver",
+      "type": "boolean",
+      "label": "Remove the driver when uninstalling",
+      "description": "Also remove the SudoVDA driver when this plugin is uninstalled. Leave this off if Apollo is installed, since it uses the same driver.",
+      "default": false
+    }
+  ]
+}

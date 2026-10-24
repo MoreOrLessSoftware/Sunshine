@@ -28,6 +28,7 @@
 #include "input.h"
 #include "logging.h"
 #include "platform/common.h"
+#include "plugins.h"
 #include "process.h"
 #include "system_tray.h"
 #include "utility.h"
@@ -149,6 +150,14 @@ namespace proc {
     return cmd_path.parent_path();
   }
 
+  boost::process::v1::environment prep_cmd_env(const boost::process::v1::environment &base, const cmd_t &cmd) {
+    auto env = base;
+    for (const auto &[name, value] : cmd.env) {
+      env[name] = value;
+    }
+    return env;
+  }
+
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
     terminate();
@@ -205,7 +214,7 @@ namespace proc {
                                               find_working_directory(cmd.do_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Do Cmd: ["sv << cmd.do_cmd << ']';
-      auto child = platf::run_command(cmd.elevated, true, cmd.do_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      auto child = platf::run_command(cmd.elevated, true, cmd.do_cmd, working_dir, prep_cmd_env(_env, cmd), _pipe.get(), ec, nullptr);
 
       if (ec) {
         BOOST_LOG(error) << "Couldn't run ["sv << cmd.do_cmd << "]: System: "sv << ec.message();
@@ -412,7 +421,7 @@ namespace proc {
                                               find_working_directory(cmd.undo_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
-      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, prep_cmd_env(_env, cmd), _pipe.get(), ec, nullptr);
 
       if (ec) {
         BOOST_LOG(warning) << "System: "sv << ec.message();
@@ -765,6 +774,7 @@ namespace proc {
         auto prep_nodes_opt = app_node.get_child_optional("prep-cmd"s);
         auto detached_nodes_opt = app_node.get_child_optional("detached"s);
         auto exclude_global_prep = app_node.get_optional<bool>("exclude-global-prep-cmd"s);
+        auto exclude_plugins_opt = app_node.get_child_optional("exclude-plugins"s);
         auto output = app_node.get_optional<std::string>("output"s);
         auto name = parse_env_val(this_env, app_node.get<std::string>("name"s));
         auto cmd = app_node.get_optional<std::string>("cmd"s);
@@ -775,8 +785,16 @@ namespace proc {
         auto wait_all = app_node.get_optional<bool>("wait-all"s);
         auto exit_timeout = app_node.get_optional<int>("exit-timeout"s);
 
-        // Global commands run before the app's own, for both types
-        std::vector<proc::cmd_t> prep_cmds;
+        std::vector<std::string> exclude_plugins;
+        if (exclude_plugins_opt) {
+          for (auto &[_, plugin_id] : *exclude_plugins_opt) {
+            exclude_plugins.emplace_back(plugin_id.get_value<std::string>());
+          }
+        }
+
+        // Plugins run first so global and app commands see their changes, and undo last.
+        // Global commands run before the app's own, for both types.
+        std::vector<proc::cmd_t> prep_cmds = plugins::prep_cmds(exclude_plugins);
         std::vector<proc::cmd_t> connect_cmds;
         auto add_prep_cmd = [&](std::string &&do_cmd, std::string &&undo_cmd, bool elevated, proc::cmd_t::type_e type) {
           auto &cmds = type == proc::cmd_t::type_e::connect ? connect_cmds : prep_cmds;

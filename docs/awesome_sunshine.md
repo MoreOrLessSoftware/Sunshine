@@ -11,9 +11,9 @@
 
 <div class="section_buttons">
 
-| Previous                        |                Next |
-|:--------------------------------|--------------------:|
-| [App Examples](app_examples.md) | [Guides](guides.md) |
+| Previous              |                Next |
+|:----------------------|--------------------:|
+| [Plugins](plugins.md) | [Guides](guides.md) |
 
 </div>
 

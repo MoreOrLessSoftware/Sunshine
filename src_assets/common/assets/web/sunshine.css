@@ -1430,6 +1430,21 @@ p {
     color: var(--color-text-base) !important;
 }
 
+/* Icons inside badges match the badge text instead of the global .icon size. */
+.badge .badge-icon {
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.125em;
+}
+
+/* Install and uninstall output on the Plugins page. */
+.plugin-log {
+    max-height: 300px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-size: 0.8rem;
+}
+
 /* ==========================================================================
    Toolbar Styles
    ========================================================================== */

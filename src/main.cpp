@@ -40,6 +40,7 @@
 #include "logging.h"
 #include "main.h"
 #include "nvhttp.h"
+#include "plugins.h"
 #include "process.h"
 #include "system_tray.h"
 #include "upnp.h"
@@ -440,6 +441,11 @@ int main(int argc, char *argv[]) {
   SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
 #endif
 
+  // Plugins must be loaded first since active plugins add preparation commands to every app.
+  auto plugins_deinit_guard = plugins::init();
+  plugins::set_change_callback([]() {
+    proc::refresh(config::stream.file_apps);
+  });
   proc::refresh(config::stream.file_apps);
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.

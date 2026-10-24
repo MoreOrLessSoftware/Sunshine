@@ -1,0 +1,30 @@
+{
+  "id": "vsync-toggle",
+  "name": "V-Sync Toggle",
+  "version": "1.1.0",
+  "description": "Changes the graphics driver's global V-Sync setting for the length of the stream, then restores the previous setting. Supports NVIDIA GPUs (using vsync-toggle) and AMD GPUs (using the driver's Wait for Vertical Refresh setting).",
+  "author": "Sunshine",
+  "homepage": "https://github.com/xanderfrangos/vsync-toggle",
+  "order": 300,
+  "elevated": true,
+  "scripts": {
+    "install": "install.ps1",
+    "do": "do.ps1",
+    "undo": "undo.ps1"
+  },
+  "options": [
+    {
+      "id": "mode",
+      "type": "choice",
+      "label": "V-Sync during the stream",
+      "description": "Global V-Sync setting to use while streaming. On AMD GPUs, Fast Sync is applied as On, and \"Let the application decide\" means Off unless the application asks for V-Sync.",
+      "default": "off",
+      "choices": [
+        {"value": "off", "label": "Off"},
+        {"value": "on", "label": "On"},
+        {"value": "fast", "label": "Fast Sync (NVIDIA)"},
+        {"value": "default", "label": "Let the application decide"}
+      ]
+    }
+  ]
+}

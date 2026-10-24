@@ -33,6 +33,7 @@
 #include <src/httpcommon.h>
 #include <src/network.h>
 #include <src/nvhttp.h>
+#include <src/plugins.h>
 #include <src/utility.h>
 
 using namespace std::literals;
@@ -333,6 +334,12 @@ protected:
     server->resource["^/pairing-test$"]["GET"] = confighttp::getPendingPairings;
     server->resource["^/pairing-test$"]["POST"] = confighttp::savePin;
     server->resource["^/portal-token-reset-test$"]["POST"] = confighttp::resetPortalToken;
+    server->resource["^/plugins-test$"]["GET"] = confighttp::getPlugins;
+    server->resource["^/plugins-config-test$"]["POST"] = confighttp::savePluginConfig;
+    server->resource["^/plugins-install-test$"]["POST"] = confighttp::installPlugin;
+    server->resource["^/plugins-uninstall-test$"]["POST"] = confighttp::uninstallPlugin;
+    server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
+    server->resource["^/plugins-rescan-test$"]["POST"] = confighttp::rescanPlugins;
 
     // Start server
     server_thread = std::jthread([this]() {
@@ -504,7 +511,10 @@ INSTANTIATE_TEST_SUITE_P(
     endpoint_request_t {"PortalTokenReset", "POST", "/portal-token-reset-test", ""},
     endpoint_request_t {"VirtualInputStatus", "GET", "/virtual-input-status-test", ""},
     endpoint_request_t {"VirtualInputLicense", "GET", "/virtual-input-license-test", ""},
-    endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"}
+    endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
+    endpoint_request_t {"Plugins", "GET", "/plugins-test", ""},
+    endpoint_request_t {"PluginLog", "GET", "/plugins-log-test?id=p", ""},
+    endpoint_request_t {"PluginRescan", "POST", "/plugins-rescan-test", ""}
   ),
   endpoint_request_name
 );
@@ -526,7 +536,8 @@ INSTANTIATE_TEST_SUITE_P(
   testing::Values(
     endpoint_request_t {"CsrfValidation", "POST", "/csrf-validate-test", ""},
     endpoint_request_t {"PortalTokenReset", "POST", "/portal-token-reset-test", ""},
-    endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"}
+    endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
+    endpoint_request_t {"PluginRescan", "POST", "/plugins-rescan-test", ""}
   ),
   endpoint_request_name
 );
@@ -1960,3 +1971,227 @@ TEST_F(BrowseDirectoryTest, GetWindowsDrives_EntriesHaveCorrectFormat) {
   }
 }
 #endif
+
+/**
+ * @brief Fixture with a temporary plugin registry for the plugin endpoints.
+ */
+class PluginsConfigHttpTest: public ConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::filesystem::path plugins_root;  ///< Temporary plugin directories.
+
+  void SetUp() override {
+    ConfigHttpTest::SetUp();
+    plugins_root = std::filesystem::temp_directory_path() / "sunshine_confighttp_plugins_test";  // NOSONAR(cpp:S5443): safe for tests
+    std::filesystem::remove_all(plugins_root);
+
+    const auto plugin_dir = plugins_root / "builtin" / "p";
+    std::filesystem::create_directories(plugin_dir);
+    std::ofstream(plugin_dir / "install.ps1") << "exit 0\n";
+    std::ofstream(plugin_dir / "plugin.json") << R"({
+      "id": "p",
+      "name": "Test Plugin",
+      "version": "1.0.0",
+      "scripts": {"install": "install.ps1"},
+      "options": [{"id": "level", "type": "number", "default": 1, "min": 0, "max": 10}]
+    })";
+
+    plugins::set_script_runner_for_testing([](const std::string &, bool, const std::map<std::string, std::string> &, const std::filesystem::path &, const std::filesystem::path &, std::stop_token) {
+      return 0;
+    });
+    plugins::load({plugins_root / "builtin", plugins_root / "custom", plugins_root / "data", plugins_root / "plugins.json"});
+  }
+
+  void TearDown() override {
+    plugins::cancel_task();
+    plugins::reset_script_runner_for_testing();
+    plugins::load({});
+    std::filesystem::remove_all(plugins_root);
+    ConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Send an authenticated same-origin JSON request.
+   *
+   * @param method HTTP method.
+   * @param path Test-server route.
+   * @param body Request body.
+   * @return Server response.
+   */
+  std::shared_ptr<SimpleWeb::Client<SimpleWeb::HTTPS>::Response> send(const std::string &method, const std::string &path, const std::string &body = "") {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    headers.emplace("Origin", std::format("https://localhost:{}", port));
+    headers.emplace("Content-Type", "application/json");
+    return client->request(method, path, body, headers);
+  }
+
+  /**
+   * @brief Return the plugin from `/api/plugins`.
+   *
+   * @return Plugin object.
+   */
+  nlohmann::json get_plugin() {
+    const auto response = send("GET", "/plugins-test");
+    return nlohmann::json::parse(response->content.string()).at("plugins").at(0);
+  }
+};
+
+TEST_F(PluginsConfigHttpTest, GetPluginsListsPlugins) {
+  const auto response = send("GET", "/plugins-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+  const auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_TRUE(body.at("status").get<bool>());
+  ASSERT_EQ(body.at("plugins").size(), 1);
+  EXPECT_EQ(body["plugins"][0]["id"], "p");
+  EXPECT_EQ(body["plugins"][0]["config"]["level"], 1);
+  EXPECT_EQ(std::filesystem::path(body.at("custom_dir").get<std::string>()), std::filesystem::path(plugins_root / "custom").make_preferred());
+}
+
+TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test"}) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    const auto response = client->request("POST", path, R"({"id":"p"})", headers);
+    EXPECT_EQ(response->status_code, "401 Unauthorized") << path;
+  }
+}
+
+TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsrfToken) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test"}) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    headers.emplace("Origin", "https://example.invalid");
+    headers.emplace("Content-Type", "application/json");
+    const auto response = client->request("POST", path, R"({"id":"p"})", headers);
+    EXPECT_EQ(response->status_code, "400 Bad Request") << path;
+    EXPECT_TRUE(response->content.string().contains("Missing CSRF token")) << path;
+  }
+}
+
+TEST_F(PluginsConfigHttpTest, PluginMutationsRequireJsonContentType) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test"}) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    const auto response = client->request("POST", path, R"({"id":"p"})", headers);
+    EXPECT_EQ(response->status_code, "400 Bad Request") << path;
+  }
+}
+
+/**
+ * @brief A rejected plugin request and the expected response.
+ */
+struct invalid_plugin_request_t {
+  const char *name;  ///< Stable parameter name.
+  const char *path;  ///< Test-server route.
+  const char *body;  ///< Request body.
+  const char *expected_status;  ///< Expected HTTP status.
+  const char *expected_error;  ///< Text expected in the response.
+};
+
+/**
+ * @brief Parameterized fixture for rejected plugin requests.
+ */
+class InvalidPluginRequestTest: public PluginsConfigHttpTest, public testing::WithParamInterface<invalid_plugin_request_t> {};
+
+TEST_P(InvalidPluginRequestTest, ReturnsExpectedError) {
+  const auto &request = GetParam();
+  const auto response = send("POST", request.path, request.body);
+  EXPECT_EQ(response->status_code, request.expected_status);
+  EXPECT_TRUE(response->content.string().contains(request.expected_error)) << response->content.string();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  InvalidRequests,
+  InvalidPluginRequestTest,
+  testing::Values(
+    invalid_plugin_request_t {"ConfigInvalidJson", "/plugins-config-test", "not-json", "400 Bad Request", "Invalid plugin request"},
+    invalid_plugin_request_t {"ConfigMissingId", "/plugins-config-test", R"({})", "400 Bad Request", "Plugin id is required"},
+    invalid_plugin_request_t {"ConfigIdNotString", "/plugins-config-test", R"({"id":1})", "400 Bad Request", "Plugin id is required"},
+    invalid_plugin_request_t {"ConfigNotObject", "/plugins-config-test", R"([])", "400 Bad Request", "Plugin id is required"},
+    invalid_plugin_request_t {"ConfigActiveNotBoolean", "/plugins-config-test", R"({"id":"p","active":"yes"})", "400 Bad Request", "'active' must be a boolean"},
+    invalid_plugin_request_t {"ConfigUnknownPlugin", "/plugins-config-test", R"({"id":"missing","active":false})", "404 Not Found", "plugin 'missing' not found"},
+    invalid_plugin_request_t {"ConfigInvalidOption", "/plugins-config-test", R"({"id":"p","options":{"level":11}})", "400 Bad Request", "invalid value for option 'level'"},
+    invalid_plugin_request_t {"ConfigActivateNotInstalled", "/plugins-config-test", R"({"id":"p","active":true})", "400 Bad Request", "must be installed"},
+    invalid_plugin_request_t {"InstallInvalidJson", "/plugins-install-test", "not-json", "400 Bad Request", "Invalid plugin request"},
+    invalid_plugin_request_t {"InstallUnknownPlugin", "/plugins-install-test", R"({"id":"missing"})", "404 Not Found", "plugin 'missing' not found"},
+    invalid_plugin_request_t {"InstallActivateNotBoolean", "/plugins-install-test", R"({"id":"p","activate":"yes"})", "400 Bad Request", "'activate' must be a boolean"},
+    invalid_plugin_request_t {"UninstallMissingId", "/plugins-uninstall-test", R"({})", "400 Bad Request", "Plugin id is required"}
+  ),
+  [](const testing::TestParamInfo<invalid_plugin_request_t> &info) {
+    return std::string(info.param.name);
+  }
+);
+
+TEST_F(PluginsConfigHttpTest, SavePluginConfigStoresOptions) {
+  const auto response = send("POST", "/plugins-config-test", R"({"id":"p","options":{"level":5}})");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_TRUE(nlohmann::json::parse(response->content.string()).at("status").get<bool>());
+  EXPECT_EQ(get_plugin()["config"]["level"], 5);
+}
+
+TEST_F(PluginsConfigHttpTest, InstallActivateAndUninstallPlugin) {
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  EXPECT_EQ(get_plugin()["installed"], true);
+
+  ASSERT_EQ(send("POST", "/plugins-config-test", R"({"id":"p","active":true})")->status_code, "200 OK");
+  EXPECT_EQ(get_plugin()["active"], true);
+
+  ASSERT_EQ(send("POST", "/plugins-uninstall-test", R"({"id":"p"})")->status_code, "200 OK");
+  EXPECT_EQ(get_plugin()["active"], false);
+  plugins::wait_for_task();
+  EXPECT_EQ(get_plugin()["installed"], false);
+}
+
+TEST_F(PluginsConfigHttpTest, InstallCanActivatePlugin) {
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p","activate":true})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  const auto plugin = get_plugin();
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_EQ(plugin["active"], true);
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginLogReturnsText) {
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+
+  const auto response = send("GET", "/plugins-log-test?id=p");
+  ASSERT_EQ(response->status_code, "200 OK");
+  const auto content_type = response->header.find("Content-Type");
+  ASSERT_NE(content_type, response->header.end());
+  EXPECT_TRUE(content_type->second.starts_with("text/plain"));
+  EXPECT_TRUE(response->content.string().contains("Installing Test Plugin 1.0.0"));
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginLogValidatesId) {
+  EXPECT_EQ(send("GET", "/plugins-log-test")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-log-test?id=missing")->status_code, "404 Not Found");
+}
+
+TEST_F(PluginsConfigHttpTest, RescanFindsNewPlugins) {
+  const auto plugin_dir = plugins_root / "custom" / "extra";
+  std::filesystem::create_directories(plugin_dir);
+  std::ofstream(plugin_dir / "plugin.json") << R"({"id":"extra"})";
+
+  const auto response = send("POST", "/plugins-rescan-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("plugins").size(), 2);
+}
+
+TEST_F(PluginsConfigHttpTest, SaveAppKeepsOnlyNonEmptyPluginExclusions) {
+  const auto saved_file_apps = config::stream.file_apps;
+  config::stream.file_apps = (plugins_root / "apps.json").string();
+  std::ofstream(config::stream.file_apps) << R"({"env":{},"apps":[]})";
+  server->resource["^/apps-save-test$"]["POST"] = confighttp::saveApp;
+
+  EXPECT_EQ(send("POST", "/apps-save-test", R"({"name":"A","index":-1,"exclude-plugins":[]})")->status_code, "200 OK");
+  EXPECT_EQ(send("POST", "/apps-save-test", R"({"name":"B","index":-1,"exclude-plugins":["p"]})")->status_code, "200 OK");
+
+  std::ifstream in(config::stream.file_apps);
+  const auto apps = nlohmann::json::parse(in).at("apps");
+  config::stream.file_apps = saved_file_apps;
+
+  ASSERT_EQ(apps.size(), 2);
+  EXPECT_FALSE(apps[0].contains("exclude-plugins"));
+  EXPECT_EQ(apps[1]["exclude-plugins"], nlohmann::json::array({"p"}));
+}

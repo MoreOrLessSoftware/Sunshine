@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="auto">
+
+<head>
+  <%- header %>
+</head>
+
+<body id="app" v-cloak>
+  <Navbar></Navbar>
+  <div id="content" class="container">
+    <div class="my-4 d-flex flex-wrap align-items-start justify-content-between gap-2">
+      <div>
+        <h1>{{ $t('plugins.title') }}</h1>
+        <p class="mb-0">{{ $t('plugins.description') }}</p>
+      </div>
+      <button type="button" class="btn btn-outline-secondary" @click="rescan" :disabled="loading">
+        <refresh-cw :size="18" class="icon"></refresh-cw>
+        {{ $t('plugins.rescan') }}
+      </button>
+    </div>
+
+    <div class="alert alert-info" v-if="customDir">
+      {{ $t('plugins.custom_dir_desc') }}
+      <code class="d-block mt-1">{{ customDir }}</code>
+    </div>
+
+    <div v-if="loading && plugins.length === 0" class="text-center py-5">
+      <div class="spinner-border" role="status">
+        <span class="visually-hidden">{{ $t('_common.loading') }}</span>
+      </div>
+    </div>
+
+    <div v-else-if="loadError" class="alert alert-danger" role="alert">{{ loadError }}</div>
+
+    <div v-else-if="plugins.length === 0" class="alert alert-secondary">{{ $t('plugins.no_plugins') }}</div>
+
+    <div v-else class="d-flex flex-column gap-3 mb-4">
+      <div class="card" :class="{'border-primary border-2': isBusy(plugin)}" v-for="plugin in plugins" :key="plugin.id">
+        <div class="card-body">
+          <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-2">
+            <div>
+              <h5 class="card-title mb-1">
+                {{ plugin.name }}
+                <small class="text-muted">{{ plugin.version }}</small>
+              </h5>
+              <span class="badge me-1" :class="plugin.builtin ? 'bg-secondary' : 'bg-info text-dark'">
+                {{ plugin.builtin ? $t('plugins.builtin') : $t('plugins.custom') }}
+              </span>
+              <span class="badge me-1" :class="plugin.installed ? 'bg-success' : 'bg-light text-dark border'">
+                {{ plugin.installed ? $t('plugins.installed') : $t('plugins.not_installed') }}
+              </span>
+              <span class="badge bg-primary me-1" v-if="plugin.active">{{ $t('plugins.active') }}</span>
+              <span class="badge bg-warning text-dark me-1" v-if="plugin.elevated">
+                <shield class="badge-icon"></shield>
+                {{ $t('plugins.elevated') }}
+              </span>
+            </div>
+            <div class="d-flex align-items-center gap-3">
+              <div class="form-check form-switch mb-0" :title="plugin.installed ? '' : $t('plugins.install_first')">
+                <input class="form-check-input" type="checkbox" role="switch" :id="'active-' + plugin.id"
+                       :checked="plugin.active" :disabled="!plugin.installed || isBusy(plugin)"
+                       @change="setActive(plugin, $event.target.checked)">
+                <label class="form-check-label" :for="'active-' + plugin.id">{{ $t('plugins.activate') }}</label>
+              </div>
+              <button type="button" class="btn btn-primary" v-if="isBusy(plugin)" disabled>
+                <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                {{ plugin.task.action === 'install' ? $t('plugins.installing') : $t('plugins.uninstalling') }}
+              </button>
+              <button type="button" class="btn btn-primary" v-else-if="!plugin.installed" :disabled="anyRunning" @click="runTask(plugin, 'install')">
+                <download :size="18" class="icon"></download>
+                {{ $t('plugins.install') }}
+              </button>
+              <button type="button" class="btn btn-outline-danger" v-else :disabled="anyRunning" @click="runTask(plugin, 'uninstall')">
+                <trash-2 :size="18" class="icon"></trash-2>
+                {{ $t('plugins.uninstall') }}
+              </button>
+            </div>
+          </div>
+
+          <p class="card-text mb-1">{{ plugin.description }}</p>
+          <p class="small text-muted mb-2" v-if="plugin.author || plugin.homepage">
+            <span v-if="plugin.author">{{ plugin.author }}</span>
+            <span v-if="plugin.author && plugin.homepage"> · </span>
+            <a v-if="plugin.homepage" :href="plugin.homepage" target="_blank" rel="noopener noreferrer">{{ $t('plugins.homepage') }}</a>
+          </p>
+
+          <!-- Install / uninstall status -->
+          <div v-if="plugin.task" class="mb-2">
+            <div v-if="plugin.task.status === 'running'" class="alert alert-primary py-2 mb-0" role="status">
+              <div class="d-flex align-items-center gap-2 fw-semibold mb-2">
+                <div class="spinner-border spinner-border-sm" aria-hidden="true"></div>
+                {{ plugin.task.action === 'install' ? $t('plugins.installing') : $t('plugins.uninstalling') }}
+              </div>
+              <div class="progress" style="height: 6px;">
+                <div class="progress-bar progress-bar-striped progress-bar-animated w-100"></div>
+              </div>
+            </div>
+            <div v-else-if="plugin.task.status === 'failed'" class="alert alert-danger py-2 mb-0">
+              {{ plugin.task.action === 'install' ? $t('plugins.install_failed') : $t('plugins.uninstall_failed') }}
+              ({{ $t('plugins.exit_code', { code: plugin.task.exit_code }) }})
+            </div>
+            <button type="button" class="btn btn-link btn-sm px-0" @click="toggleLog(plugin)">
+              <file-text :size="14" class="icon"></file-text>
+              {{ logs[plugin.id] !== undefined ? $t('plugins.hide_log') : $t('plugins.view_log') }}
+            </button>
+            <pre v-if="logs[plugin.id] !== undefined" class="plugin-log border rounded p-2 mb-0">{{ logs[plugin.id] }}</pre>
+          </div>
+
+          <!-- Options -->
+          <div v-if="plugin.active && plugin.options.length > 0 && drafts[plugin.id]" class="border-top pt-3 mt-2">
+            <h6>{{ $t('plugins.options') }}</h6>
+            <div class="row g-3">
+              <div class="col-12 col-md-6" v-for="option in plugin.options" :key="option.id">
+                <template v-if="option.type === 'boolean'">
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch"
+                           :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]">
+                    <label class="form-check-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
+                  </div>
+                </template>
+                <template v-else>
+                  <label class="form-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
+                  <select v-if="option.type === 'choice'" class="form-select"
+                          :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]">
+                    <option v-for="choice in option.choices" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
+                  </select>
+                  <input v-else-if="option.type === 'number'" type="number" class="form-control"
+                         :id="'opt-' + plugin.id + '-' + option.id" v-model.number="drafts[plugin.id][option.id]"
+                         :min="option.min" :max="option.max" :step="option.step ?? 'any'"
+                         :placeholder="defaultText(option)">
+                  <input v-else type="text" class="form-control"
+                         :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]"
+                         :placeholder="defaultText(option)">
+                </template>
+                <div class="form-text" v-if="hintText(option)">{{ hintText(option) }}</div>
+              </div>
+            </div>
+            <div class="d-flex align-items-center gap-2 mt-3">
+              <button type="button" class="btn btn-success" :disabled="!isDirty(plugin) || saving[plugin.id]" @click="saveOptions(plugin)">
+                <save :size="18" class="icon"></save>
+                {{ $t('plugins.save_options') }}
+              </button>
+              <button type="button" class="btn btn-outline-secondary" v-if="isDirty(plugin)" @click="resetDraft(plugin)">
+                {{ $t('_common.cancel') }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="errors[plugin.id]" class="alert alert-danger py-2 mt-2 mb-0">{{ errors[plugin.id] }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+
+<script type="module">
+  import { createApp } from 'vue'
+  import { initApp } from './init'
+  import Navbar from './Navbar.vue'
+  import { apiFetch } from './fetch_utils'
+  import { notifyKey } from './Notification.vue'
+  import { Download, FileText, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
+
+  const app = createApp({
+    components: {
+      Navbar,
+      Download,
+      FileText,
+      RefreshCw,
+      Save,
+      Shield,
+      Trash2,
+    },
+    inject: ['i18n'],
+    data() {
+      return {
+        plugins: [],
+        customDir: '',
+        loading: true,
+        loadError: null,
+        drafts: {},
+        logs: {},
+        errors: {},
+        saving: {},
+        pollTimer: null,
+      };
+    },
+    computed: {
+      anyRunning() {
+        return this.plugins.some((plugin) => this.isBusy(plugin));
+      },
+    },
+    mounted() {
+      this.loadPlugins();
+    },
+    beforeUnmount() {
+      window.clearTimeout(this.pollTimer);
+    },
+    methods: {
+      /**
+       * Fetch the plugin list, refresh option drafts that have no unsaved changes,
+       * and keep polling while an install or uninstall is running.
+       */
+      async loadPlugins() {
+        try {
+          const response = await apiFetch('./api/plugins', {method: 'GET'});
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const body = await response.json();
+          this.applyPlugins(body.plugins || []);
+          this.customDir = body.custom_dir || '';
+          this.loadError = null;
+        } catch (error) {
+          console.error('Failed to load plugins', error);
+          this.loadError = this.i18n.t('plugins.load_failure');
+        } finally {
+          this.loading = false;
+        }
+
+        window.clearTimeout(this.pollTimer);
+        if (this.anyRunning) {
+          this.pollTimer = window.setTimeout(() => this.loadPlugins(), 1500);
+        }
+      },
+
+      /**
+       * Store a new plugin list, keeping unsaved option edits and refreshing open logs.
+       */
+      applyPlugins(plugins) {
+        const previous = Object.fromEntries(this.plugins.map((plugin) => [plugin.id, plugin]));
+        this.plugins = plugins;
+        for (const plugin of plugins) {
+          const old = previous[plugin.id];
+          if (!this.drafts[plugin.id] || (old && !this.isDirtyAgainst(plugin.id, old.config))) {
+            this.drafts[plugin.id] = {...plugin.config};
+          }
+          if (this.logs[plugin.id] !== undefined) {
+            this.loadLog(plugin);
+          }
+        }
+      },
+
+      isBusy(plugin) {
+        return plugin.task && plugin.task.status === 'running';
+      },
+
+      isDirtyAgainst(id, config) {
+        const draft = this.drafts[id];
+        return !!draft && Object.keys(config).some((key) => draft[key] !== config[key]);
+      },
+
+      isDirty(plugin) {
+        return this.isDirtyAgainst(plugin.id, plugin.config);
+      },
+
+      resetDraft(plugin) {
+        this.drafts[plugin.id] = {...plugin.config};
+      },
+
+      /**
+       * Send a JSON POST to a plugin endpoint and report failures on the plugin card.
+       */
+      async post(plugin, url, payload) {
+        this.errors[plugin.id] = null;
+        try {
+          const response = await apiFetch(url, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id: plugin.id, ...payload}),
+          });
+          const result = await response.json();
+          if (!response.ok || result.status !== true) {
+            this.errors[plugin.id] = result.error || this.i18n.t('plugins.action_failure');
+            return false;
+          }
+          return true;
+        } catch (error) {
+          console.error('Plugin request failed', error);
+          this.errors[plugin.id] = this.i18n.t('plugins.action_failure');
+          return false;
+        }
+      },
+
+      async setActive(plugin, active) {
+        await this.post(plugin, './api/plugins/config', {active});
+        await this.loadPlugins();
+      },
+
+      /**
+       * Describe an option's default value for its hint text, or return an empty string when there is nothing to show.
+       */
+      defaultText(option) {
+        switch (option.type) {
+          case 'boolean':
+            return this.i18n.t(option.default ? 'plugins.default_on' : 'plugins.default_off');
+          case 'choice': {
+            const choice = option.choices.find((c) => c.value === option.default);
+            return choice ? choice.label : String(option.default);
+          }
+          default:
+            return option.default === '' || option.default === null || option.default === undefined ? '' : String(option.default);
+        }
+      },
+
+      /**
+       * Build an option's hint: its description followed by its default value.
+       */
+      hintText(option) {
+        const defaultText = this.defaultText(option);
+        const parts = [option.description, defaultText ? this.i18n.t('plugins.default_value', {value: defaultText}) : ''];
+        return parts.filter(Boolean).join(' ');
+      },
+
+      async saveOptions(plugin) {
+        // Fields left empty go back to their default value.
+        const options = {...this.drafts[plugin.id]};
+        for (const option of plugin.options) {
+          const value = options[option.id];
+          if (value === '' || value === null || value === undefined || (typeof value === 'number' && Number.isNaN(value))) {
+            options[option.id] = option.default;
+          }
+        }
+
+        this.saving[plugin.id] = true;
+        const ok = await this.post(plugin, './api/plugins/config', {options});
+        this.saving[plugin.id] = false;
+        if (ok) {
+          this.drafts[plugin.id] = null;
+          notifyKey.success('plugins.saved');
+        }
+        await this.loadPlugins();
+      },
+
+      async runTask(plugin, action) {
+        if (action === 'uninstall' && !window.confirm(this.i18n.t('plugins.uninstall_confirm', {name: plugin.name}))) {
+          return;
+        }
+        await this.post(plugin, `./api/plugins/${action}`, action === 'install' ? {activate: true} : {});
+        await this.loadPlugins();
+      },
+
+      async loadLog(plugin) {
+        try {
+          const response = await apiFetch(`./api/plugins/log?id=${encodeURIComponent(plugin.id)}`, {method: 'GET'});
+          this.logs[plugin.id] = response.ok ? await response.text() : '';
+        } catch (error) {
+          console.error('Failed to load plugin log', error);
+        }
+      },
+
+      toggleLog(plugin) {
+        if (this.logs[plugin.id] !== undefined) {
+          delete this.logs[plugin.id];
+        } else {
+          this.logs[plugin.id] = '';
+          this.loadLog(plugin);
+        }
+      },
+
+      async rescan() {
+        this.loading = true;
+        try {
+          const response = await apiFetch('./api/plugins/rescan', {method: 'POST'});
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+        } catch (error) {
+          console.error('Failed to rescan plugins', error);
+        }
+        await this.loadPlugins();
+      },
+    },
+  });
+
+  initApp(app);
+</script>
