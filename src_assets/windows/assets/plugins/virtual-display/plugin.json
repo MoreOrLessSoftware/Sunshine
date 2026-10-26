@@ -1,7 +1,7 @@
 {
   "id": "virtual-display",
   "name": "Virtual Display",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Creates a virtual display that matches the client's resolution and frame rate for the length of the stream, then removes it. Uses sunshine-vdisplay and the SudoVDA driver.",
   "author": "Sunshine",
   "homepage": "https://github.com/Zayrick/sunshine-vdisplay",
@@ -15,21 +15,28 @@
   },
   "options": [
     {
-      "id": "fps_multiplier",
-      "type": "number",
-      "label": "Refresh rate multiplier",
-      "description": "Run the virtual display at the client frame rate times this value. A higher refresh rate can lower latency. Use the RTSS Frame Limit plugin to keep games capped at the client frame rate.",
-      "default": 1,
-      "min": 1,
-      "max": 8,
-      "step": 1
-    },
-    {
       "id": "exclusive",
       "type": "boolean",
       "label": "Turn off other displays",
       "description": "Turn off the physical displays while streaming and make the virtual display the primary display.",
       "default": true
+    },
+    {
+      "id": "shared",
+      "type": "boolean",
+      "label": "Shared virtual monitor for all clients",
+      "description": "Use one virtual monitor for every client, so Windows keeps the same display settings for all of them. Turn this off to give each client its own monitor, which lets Windows remember settings such as scaling per client.",
+      "default": false
+    },
+    {
+      "id": "fps_multiplier",
+      "type": "number",
+      "label": "Refresh rate multiplier",
+      "description": "Run the virtual display at the client frame rate times this value. A higher refresh rate can lower latency. Use the RTSS Frame Limit plugin to keep games capped at the client frame rate.",
+      "default": 2,
+      "min": 1,
+      "max": 8,
+      "step": 1
     },
     {
       "id": "hdr",

@@ -1,5 +1,6 @@
 # Creates a virtual display matching the client's resolution and frame rate.
 # vdisplay reads the resolution, client name and (by default) HDR from the SUNSHINE_CLIENT_* variables.
+# The monitor identity comes from its name, so a fixed name gives every client the same monitor.
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vdisplay.ps1')
@@ -15,6 +16,9 @@ else {
 $displayFps = $fps * [decimal]$env:SUNSHINE_PLUGIN_OPT_FPS_MULTIPLIER
 
 $vdisplayArgs = @('start', '--fps', $displayFps.ToString($invariant))
+if ($env:SUNSHINE_PLUGIN_OPT_SHARED -eq 'true') {
+    $vdisplayArgs += @('--name', 'Sunshine')
+}
 if ($env:SUNSHINE_PLUGIN_OPT_EXCLUSIVE -eq 'true') {
     $vdisplayArgs += '--exclusive'
 }
