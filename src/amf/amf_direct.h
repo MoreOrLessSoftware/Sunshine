@@ -1,6 +1,6 @@
 /**
- * @file src/amf/amf_av1.h
- * @brief Declarations for encoding AV1 through AMD's AMF runtime directly, without FFmpeg.
+ * @file src/amf/amf_direct.h
+ * @brief Declarations for encoding AV1 and HEVC through AMD's AMF runtime directly, without FFmpeg.
  */
 #pragma once
 
@@ -28,24 +28,40 @@ namespace video {
 }  // namespace video
 
 /**
- * @brief Encoding AV1 through AMD's AMF runtime directly.
+ * @brief Encoding AV1 and HEVC through AMD's AMF runtime directly.
  *
  * @details FFmpeg's AMF encoder hands over whole frames only. Going to AMF directly lets the
- *          encoder hand over each tile of a frame as it finishes (AV1OutputMode TILE), so the
- *          frame can be sent while the rest is still encoding, as NVENC does with slices.
+ *          encoder hand over each AV1 tile or HEVC slice of a frame as it finishes (output mode
+ *          TILE or SLICE), so the frame can be sent while the rest is still encoding, as NVENC
+ *          does with slices. It also lets the encoder recover from lost frames with long-term
+ *          references.
  */
 namespace amf_direct {
 
   /**
+   * @brief The codecs the encoder can encode.
+   */
+  enum class codec_e {
+    av1,  ///< AV1, in tiles.
+    hevc,  ///< HEVC, in slices.
+  };
+
+  /**
    * @brief Settings for the encoder that come from the user's configuration.
+   *
+   * @details The usage, quality preset and rate control are the AMF enum values of the codec
+   *          encoded, which differ between codecs. The defaults are AV1's.
    */
   struct settings_t {
-    std::int64_t usage = 2;  ///< AMF_VIDEO_ENCODER_AV1_USAGE_ENUM. Ultra low latency by default.
-    std::int64_t quality_preset = 100;  ///< AMF_VIDEO_ENCODER_AV1_QUALITY_PRESET_ENUM. Speed by default.
-    std::int64_t rate_control = 3;  ///< AMF_VIDEO_ENCODER_AV1_RATE_CONTROL_METHOD_ENUM. CBR by default.
+    codec_e codec = codec_e::av1;  ///< The codec to encode.
+    std::int64_t usage = 2;  ///< AMF_VIDEO_ENCODER_AV1_USAGE_ENUM or AMF_VIDEO_ENCODER_HEVC_USAGE_ENUM. AV1 ultra low latency by default.
+    std::int64_t quality_preset = 100;  ///< AMF_VIDEO_ENCODER_AV1_QUALITY_PRESET_ENUM or AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_ENUM. AV1 speed by default.
+    std::int64_t rate_control = 3;  ///< AMF_VIDEO_ENCODER_AV1_RATE_CONTROL_METHOD_ENUM or AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_ENUM. CBR by default.
     bool preanalysis = false;  ///< Whether AMF's pre-analysis runs.
     bool enforce_hrd = false;  ///< Whether AMF enforces the HRD.
-    int tiles = 1;  ///< Tiles per frame. Above 1, AMF hands each tile over as it finishes.
+    std::optional<bool> vbaq;  ///< HEVC only. Whether variance-based adaptive quantization runs; unset leaves AMF's default.
+    std::optional<int> max_au_size;  ///< HEVC only. Largest access unit in bits; unset leaves AMF's default.
+    int parts = 1;  ///< Tiles (AV1) or slices (HEVC) per frame. Above 1, AMF hands each over as it finishes.
     int ltr_frames = 0;  ///< Long-term reference frames kept to recover from lost frames without a key frame. 0 turns them off.
   };
 
@@ -100,6 +116,20 @@ namespace amf_direct {
   std::int64_t ltr_interval(int fps_num, int fps_den);
 
   /**
+   * @brief Work out the HEVC level to ask AMF for, as the FFmpeg path does.
+   *
+   * @details Up to 4K, level 5.1 or 5.2 when the frame rate fits in it, so the stream doesn't
+   *          claim a higher level than it needs.
+   *
+   * @param width Frame width in pixels.
+   * @param height Frame height in pixels.
+   * @param framerate Frames per second.
+   * @return AMF_VIDEO_ENCODER_LEVEL_ENUM value (153 for 5.1, 156 for 5.2), or 0 to leave the
+   *         level to AMF.
+   */
+  std::int64_t hevc_level(int width, int height, int framerate);
+
+  /**
    * @brief Measure the OBUs at the start of an AMF output buffer.
    *
    * @details In tile output mode, AMF hands over each tile in a buffer larger than the tile,
@@ -127,25 +157,36 @@ namespace amf_direct {
   std::string describe_obus(const std::uint8_t *data, std::size_t size);
 
   /**
-   * @brief When each tile of a frame came out of the encoder.
+   * @brief Describe the NAL units in an Annex B HEVC bitstream, for the log.
+   *
+   * @param data The bitstream.
+   * @param size Size of the bitstream in bytes.
+   * @return The NAL units in order with their sizes after the start code, such as
+   *         "AUD:3 VPS:23 SPS:52 PPS:7 IDR_N_LP:5120", with other types by number, starting
+   *         with "invalid at 0" if the data doesn't start with a start code.
    */
-  struct tile_t {
-    std::chrono::steady_clock::duration after_submit;  ///< Time from submitting the frame to the tile coming out.
-    std::size_t bytes;  ///< Size of the tile's output.
+  std::string describe_nals(const std::uint8_t *data, std::size_t size);
+
+  /**
+   * @brief When each part (AV1 tile or HEVC slice) of a frame came out of the encoder.
+   */
+  struct part_t {
+    std::chrono::steady_clock::duration after_submit;  ///< Time from submitting the frame to the part coming out.
+    std::size_t bytes;  ///< Size of the part's output.
   };
 
   /**
-   * @brief Summarizes when tiles come out of the encoder, to tell whether they come out as each
+   * @brief Summarizes when parts come out of the encoder, to tell whether they come out as each
    *        finishes or all together at the end of the frame.
    */
-  class tile_timing_t {
+  class part_timing_t {
   public:
     /**
-     * @brief Add a frame's tiles.
+     * @brief Add a frame's parts.
      *
-     * @param tiles The frame's tiles, in the order they came out.
+     * @param parts The frame's parts, in the order they came out.
      */
-    void add(const std::vector<tile_t> &tiles);
+    void add(const std::vector<part_t> &parts);
 
     /**
      * @brief Get the number of frames added since the last reset().
@@ -157,7 +198,7 @@ namespace amf_direct {
     /**
      * @brief Describe the frames added since the last reset().
      *
-     * @return A line for the log, such as "120 frames, 4.0 tiles: first 1.10 ms, last 3.05 ms
+     * @return A line for the log, such as "120 frames, 4.0 parts: first 1.10 ms, last 3.05 ms
      *         after submit, 64% of the bytes before the last".
      */
     std::string summary() const;
@@ -169,7 +210,7 @@ namespace amf_direct {
 
   private:
     std::size_t frame_count = 0;
-    std::size_t tile_count = 0;
+    std::size_t part_count = 0;
     double first_ms = 0.0;
     double last_ms = 0.0;
     std::uint64_t bytes_before_last = 0;
@@ -279,21 +320,21 @@ namespace amf_direct {
    * @brief One encoded frame.
    */
   struct encoded_frame_t {
-    std::vector<std::uint8_t> data;  ///< The frame's bitstream, all tiles in order.
+    std::vector<std::uint8_t> data;  ///< The frame's bitstream, all parts in order.
     bool idr = false;  ///< Whether the frame is a key frame.
     bool after_ref_frame_invalidation = false;  ///< Whether the frame recovers from lost frames by referencing a long-term reference.
     bool ltr = false;  ///< Whether the frame is kept as a long-term reference, for the client to confirm.
-    std::vector<tile_t> tiles;  ///< When each tile came out of the encoder.
+    std::vector<part_t> parts;  ///< When each part came out of the encoder.
   };
 
   /**
-   * @brief Called as each tile but the last comes out of the encoder.
+   * @brief Called as each part but the last comes out of the encoder.
    *
-   * @details Receives the frame so far, all tiles out so far in order, and the number of tiles
+   * @details Receives the frame so far, all parts out so far in order, and the number of parts
    *          in the frame. Its `idr` is whether a key frame was asked for, as AMF may only say
-   *          so with the last tile.
+   *          so with the last part.
    */
-  using tile_callback_t = std::function<void(const encoded_frame_t &frame, int tiles_total)>;
+  using part_callback_t = std::function<void(const encoded_frame_t &frame, int parts_total)>;
 
 #ifdef _WIN32
   /**
@@ -304,15 +345,15 @@ namespace amf_direct {
   bool runtime_available();
 
   /**
-   * @brief AV1 encoder that reads a Direct3D 11 texture and encodes it through AMF.
+   * @brief AV1 or HEVC encoder that reads a Direct3D 11 texture and encodes it through AMF.
    */
-  class av1_encoder_t {
+  class encoder_t {
   public:
-    av1_encoder_t();
-    ~av1_encoder_t();
+    encoder_t();
+    ~encoder_t();
 
-    av1_encoder_t(const av1_encoder_t &) = delete;
-    av1_encoder_t &operator=(const av1_encoder_t &) = delete;
+    encoder_t(const encoder_t &) = delete;
+    encoder_t &operator=(const encoder_t &) = delete;
 
     /**
      * @brief Create the encoder and the texture it reads frames from.
@@ -333,17 +374,17 @@ namespace amf_direct {
     ID3D11Texture2D *input_texture() const;
 
     /**
-     * @brief Encode the frame in the input texture and wait for all of its tiles.
+     * @brief Encode the frame in the input texture and wait for all of its parts.
      *
      * @param frame_index Frame index, used as the frame's timestamp.
      * @param force_idr Whether to encode a key frame.
      * @param frame Receives the encoded frame.
-     * @param trace Optional. Marked when the frame is submitted and when its last tile comes out.
-     * @param on_tile Optional. Called as each tile but the last comes out, when tiles are handed
+     * @param trace Optional. Marked when the frame is submitted and when its last part comes out.
+     * @param on_part Optional. Called as each part but the last comes out, when parts are handed
      *                over on their own.
      * @return True on success.
      */
-    bool encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace, const tile_callback_t &on_tile = {});
+    bool encode_frame(std::uint64_t frame_index, bool force_idr, encoded_frame_t &frame, frame_trace::trace_t *trace, const part_callback_t &on_part = {});
 
     /**
      * @brief Recover from frames the client lost with the next frame.

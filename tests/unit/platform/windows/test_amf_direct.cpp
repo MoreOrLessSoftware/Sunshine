@@ -1,6 +1,6 @@
 /**
- * @file tests/unit/platform/windows/test_amf_av1.cpp
- * @brief Test the helpers in src/amf/amf_av1.cpp that don't need an AMD GPU.
+ * @file tests/unit/platform/windows/test_amf_direct.cpp
+ * @brief Test src/amf/amf_direct.cpp. The encoder tests are skipped without an AMD GPU.
  */
 
 // test includes
@@ -14,7 +14,7 @@
   #include <vector>
 
   // local includes
-  #include <src/amf/amf_av1.h>
+  #include <src/amf/amf_direct.h>
   #include <src/config.h>
   #include <src/video.h>
 
@@ -169,37 +169,37 @@ TEST(AmfObuBytesTest, IsZeroForAnEmptyBuffer) {
   EXPECT_EQ(amf_direct::obu_bytes(nullptr, 0), 0u);
 }
 
-TEST(AmfTileTimingTest, DescribesNoFrames) {
-  const amf_direct::tile_timing_t timing;
+TEST(AmfPartTimingTest, DescribesNoFrames) {
+  const amf_direct::part_timing_t timing;
   EXPECT_EQ(timing.frames(), 0u);
   EXPECT_EQ(timing.summary(), "no frames");
 }
 
-TEST(AmfTileTimingTest, IgnoresAFrameWithNoTiles) {
-  amf_direct::tile_timing_t timing;
+TEST(AmfPartTimingTest, IgnoresAFrameWithNoParts) {
+  amf_direct::part_timing_t timing;
   timing.add({});
   EXPECT_EQ(timing.frames(), 0u);
 }
 
-TEST(AmfTileTimingTest, AveragesWhenTilesComeOut) {
-  amf_direct::tile_timing_t timing;
-  // Tiles coming out as they finish: three quarters of the frame is out before the last tile
+TEST(AmfPartTimingTest, AveragesWhenPartsComeOut) {
+  amf_direct::part_timing_t timing;
+  // Parts coming out as they finish: three quarters of the frame is out before the last part
   timing.add({{1ms, 100}, {2ms, 100}, {3ms, 100}, {4ms, 100}});
   timing.add({{2ms, 100}, {3ms, 100}, {4ms, 100}, {5ms, 100}});
 
   EXPECT_EQ(timing.frames(), 2u);
-  EXPECT_EQ(timing.summary(), "2 frames, 4.0 tiles: first 1.50 ms, last 4.50 ms after submit, 75% of the bytes before the last");
+  EXPECT_EQ(timing.summary(), "2 frames, 4.0 parts: first 1.50 ms, last 4.50 ms after submit, 75% of the bytes before the last");
 }
 
-TEST(AmfTileTimingTest, DescribesWholeFrames) {
-  amf_direct::tile_timing_t timing;
+TEST(AmfPartTimingTest, DescribesWholeFrames) {
+  amf_direct::part_timing_t timing;
   timing.add({{3ms, 1000}});
 
-  EXPECT_EQ(timing.summary(), "1 frames, 1.0 tiles: first 3.00 ms, last 3.00 ms after submit, 0% of the bytes before the last");
+  EXPECT_EQ(timing.summary(), "1 frames, 1.0 parts: first 3.00 ms, last 3.00 ms after submit, 0% of the bytes before the last");
 }
 
-TEST(AmfTileTimingTest, ResetForgetsTheFrames) {
-  amf_direct::tile_timing_t timing;
+TEST(AmfPartTimingTest, ResetForgetsTheFrames) {
+  amf_direct::part_timing_t timing;
   timing.add({{3ms, 1000}});
   timing.reset();
 
@@ -241,15 +241,20 @@ TEST_F(UsesAmfDirectTest, EncodesAv1ThroughAmfWhenEnabled) {
   EXPECT_TRUE(video::uses_amf_direct(video::amdvce, stream(2)));
 }
 
-TEST_F(UsesAmfDirectTest, LeavesOtherCodecsToFfmpeg) {
+TEST_F(UsesAmfDirectTest, EncodesHevcThroughAmfWhenEnabled) {
+  config::video.amd.amd_direct = true;
+  EXPECT_TRUE(video::uses_amf_direct(video::amdvce, stream(1)));
+}
+
+TEST_F(UsesAmfDirectTest, LeavesH264ToFfmpeg) {
   config::video.amd.amd_direct = true;
   EXPECT_FALSE(video::uses_amf_direct(video::amdvce, stream(0)));
-  EXPECT_FALSE(video::uses_amf_direct(video::amdvce, stream(1)));
 }
 
 TEST_F(UsesAmfDirectTest, LeavesYuv444ToFfmpeg) {
   config::video.amd.amd_direct = true;
   EXPECT_FALSE(video::uses_amf_direct(video::amdvce, stream(2, 1)));
+  EXPECT_FALSE(video::uses_amf_direct(video::amdvce, stream(1, 1)));
 }
 
 TEST_F(UsesAmfDirectTest, LeavesOtherEncodersAlone) {
@@ -257,7 +262,7 @@ TEST_F(UsesAmfDirectTest, LeavesOtherEncodersAlone) {
   EXPECT_FALSE(video::uses_amf_direct(video::quicksync, stream(2)));
 }
 
-using AmfDirectConfigParam = std::tuple<std::string_view, bool, int>;
+using AmfDirectConfigParam = std::tuple<std::string_view, bool, int, int>;
 
 /**
  * @brief Parameterized coverage for parsing the direct AMF settings.
@@ -265,7 +270,7 @@ using AmfDirectConfigParam = std::tuple<std::string_view, bool, int>;
 struct AmfDirectConfigTest: BaseTest, testing::WithParamInterface<AmfDirectConfigParam> {
   void SetUp() override {
     BaseTest::SetUp();
-    config::stream.file_apps = SUNSHINE_SOURCE_DIR "/tests/unit/platform/windows/test_amf_av1.cpp";
+    config::stream.file_apps = SUNSHINE_SOURCE_DIR "/tests/unit/platform/windows/test_amf_direct.cpp";
   }
 
   void TearDown() override {
@@ -289,25 +294,31 @@ struct AmfDirectConfigTest: BaseTest, testing::WithParamInterface<AmfDirectConfi
 };
 
 TEST_P(AmfDirectConfigTest, ParsesTheSettings) {
-  const auto &[setting, direct, tiles] = GetParam();
+  const auto &[setting, direct, tiles, slices] = GetParam();
   config::video.amd.amd_direct = false;
   config::video.amd.amd_av1_tiles = 1;
+  config::video.amd.amd_hevc_slices = 1;
   config::apply_config_for_test(setting);
 
   EXPECT_EQ(config::video.amd.amd_direct, direct);
   EXPECT_EQ(config::video.amd.amd_av1_tiles, tiles);
+  EXPECT_EQ(config::video.amd.amd_hevc_slices, slices);
 }
 
 INSTANTIATE_TEST_SUITE_P(
   AmfDirectValues,
   AmfDirectConfigTest,
   testing::Values(
-    AmfDirectConfigParam {""sv, false, 1},
-    AmfDirectConfigParam {"amd_direct = enabled\n"sv, true, 1},
-    AmfDirectConfigParam {"amd_direct = enabled\namd_av1_tiles = 4\n"sv, true, 4},
-    AmfDirectConfigParam {"amd_av1_tiles = 64\n"sv, false, 64},
-    AmfDirectConfigParam {"amd_av1_tiles = 0\n"sv, false, 1},
-    AmfDirectConfigParam {"amd_av1_tiles = 65\n"sv, false, 1}
+    AmfDirectConfigParam {""sv, false, 1, 1},
+    AmfDirectConfigParam {"amd_direct = enabled\n"sv, true, 1, 1},
+    AmfDirectConfigParam {"amd_direct = enabled\namd_av1_tiles = 4\n"sv, true, 4, 1},
+    AmfDirectConfigParam {"amd_av1_tiles = 64\n"sv, false, 64, 1},
+    AmfDirectConfigParam {"amd_av1_tiles = 0\n"sv, false, 1, 1},
+    AmfDirectConfigParam {"amd_av1_tiles = 65\n"sv, false, 1, 1},
+    AmfDirectConfigParam {"amd_direct = enabled\namd_hevc_slices = 4\n"sv, true, 1, 4},
+    AmfDirectConfigParam {"amd_hevc_slices = 64\n"sv, false, 1, 64},
+    AmfDirectConfigParam {"amd_hevc_slices = 0\n"sv, false, 1, 1},
+    AmfDirectConfigParam {"amd_hevc_slices = 65\n"sv, false, 1, 1}
   )
 );
 
@@ -316,6 +327,232 @@ TEST(AmfLtrIntervalTest, KeepsAReferenceEveryEighthOfASecond) {
   EXPECT_EQ(amf_direct::ltr_interval(120, 1), 15);
   EXPECT_EQ(amf_direct::ltr_interval(60000, 1001), 7);
 }
+
+TEST(AmfHevcLevelTest, AsksForLevel51UpTo4K60) {
+  EXPECT_EQ(amf_direct::hevc_level(1920, 1080, 60), 153);
+  EXPECT_EQ(amf_direct::hevc_level(4096, 2176, 60), 153);
+}
+
+TEST(AmfHevcLevelTest, AsksForLevel52UpTo4K120) {
+  EXPECT_EQ(amf_direct::hevc_level(3840, 2160, 120), 156);
+}
+
+TEST(AmfHevcLevelTest, LeavesTheLevelToAmfBeyondLevel52) {
+  EXPECT_EQ(amf_direct::hevc_level(3840, 2160, 144), 0);
+  EXPECT_EQ(amf_direct::hevc_level(7680, 4320, 30), 0);
+}
+
+TEST(AmfDescribeNalsTest, NamesAKeyFrame) {
+  const std::vector<std::uint8_t> data {0, 0, 0, 1, 0x46, 0x01, 0x50, 0, 0, 1, 0x40, 0x01, 0x0C, 0, 0, 1, 0x42, 0x01, 0, 0, 1, 0x44, 0x01, 0, 0, 0, 1, 0x28, 0x01, 0xAF, 0x80};
+  EXPECT_EQ(amf_direct::describe_nals(data.data(), data.size()), "AUD:3 VPS:3 SPS:2 PPS:2 IDR_N_LP:4");
+}
+
+TEST(AmfDescribeNalsTest, NamesOtherTypes) {
+  const std::vector<std::uint8_t> data {0, 0, 1, 0x00, 0x01, 0, 0, 1, 0x02, 0x01, 0, 0, 1, 0x26, 0x01, 0, 0, 1, 0x2A, 0x01, 0, 0, 1, 0x4E, 0x01, 0, 0, 1, 0x50, 0x01, 0, 0, 1, 0x30, 0x01};
+  EXPECT_EQ(amf_direct::describe_nals(data.data(), data.size()), "TRAIL_N:2 TRAIL_R:2 IDR_W_RADL:2 CRA:2 SEI:2 SEI:2 24:2");
+}
+
+TEST(AmfDescribeNalsTest, SaysWhenTheDataDoesNotStartWithAStartCode) {
+  const std::vector<std::uint8_t> data {0x12, 0, 0, 1, 0x02, 0x01};
+  EXPECT_EQ(amf_direct::describe_nals(data.data(), data.size()), "invalid at 0 TRAIL_R:2");
+
+  const std::vector<std::uint8_t> late {0x12, 0x34, 0, 0, 1, 0x02, 0x01};
+  EXPECT_EQ(amf_direct::describe_nals(late.data(), late.size()), "invalid at 0 TRAIL_R:2");
+
+  const std::vector<std::uint8_t> none {0x12, 0x34};
+  EXPECT_EQ(amf_direct::describe_nals(none.data(), none.size()), "invalid at 0");
+}
+
+TEST(AmfDescribeNalsTest, MarksAStartCodeAtTheEnd) {
+  const std::vector<std::uint8_t> data {0, 0, 1};
+  EXPECT_EQ(amf_direct::describe_nals(data.data(), data.size()), "?:0");
+}
+
+namespace {
+  /**
+   * @brief Drives the encoder on this machine's GPU, for each codec. Skipped where AMF can't
+   *        encode the codec.
+   */
+  struct AmfEncoderTest: testing::TestWithParam<amf_direct::codec_e> {
+    void SetUp() override {
+      if (!amf_direct::runtime_available()) {
+        GTEST_SKIP() << "The AMF runtime isn't available";
+      }
+      if (FAILED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context))) {
+        GTEST_SKIP() << "No Direct3D 11 device";
+      }
+
+      const bool hevc = GetParam() == amf_direct::codec_e::hevc;
+      config.width = 1280;
+      config.height = 720;
+      config.framerate = 60;
+      config.bitrate = 20000;
+      config.videoFormat = hevc ? 1 : 2;
+
+      amf_direct::settings_t settings;
+      settings.codec = GetParam();
+      if (hevc) {
+        settings.usage = 1;  // Ultra low latency
+        settings.quality_preset = 10;  // Speed
+        settings.rate_control = 3;  // CBR
+        settings.vbaq = false;
+      }
+      settings.parts = 4;
+      settings.ltr_frames = 4;
+      if (!encoder.create(device, config, {video::colorspace_e::rec709, false, 8}, settings)) {
+        GTEST_SKIP() << "This GPU can't encode the codec through AMF";
+      }
+
+      D3D11_TEXTURE2D_DESC desc {};
+      encoder.input_texture()->GetDesc(&desc);
+      desc.Usage = D3D11_USAGE_STAGING;
+      desc.BindFlags = 0;
+      desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+      ASSERT_TRUE(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &staging)));
+    }
+
+    void TearDown() override {
+      if (staging) {
+        staging->Release();
+      }
+      if (context) {
+        context->Release();
+      }
+      if (device) {
+        device->Release();
+      }
+    }
+
+    /**
+     * @brief Draw a moving pattern into the encoder's input texture.
+     *
+     * @param frame Frame number, which moves the pattern.
+     */
+    void draw(int frame) {
+      D3D11_MAPPED_SUBRESOURCE mapped;
+      ASSERT_TRUE(SUCCEEDED(context->Map(staging, 0, D3D11_MAP_WRITE, 0, &mapped)));
+      for (int y = 0; y < config.height * 3 / 2; ++y) {
+        auto *row = static_cast<std::uint8_t *>(mapped.pData) + static_cast<std::size_t>(y) * mapped.RowPitch;
+        for (int x = 0; x < config.width; ++x) {
+          row[x] = y < config.height ? static_cast<std::uint8_t>((x + frame * 7) ^ (y + frame * 3)) : static_cast<std::uint8_t>(128 + ((x / 16 + y / 16 + frame) % 2 ? 40 : -40));
+        }
+      }
+      context->Unmap(staging, 0);
+      context->CopyResource(encoder.input_texture(), staging);
+      context->Flush();
+    }
+
+    /**
+     * @brief Draw and encode a frame.
+     *
+     * @param index Frame index.
+     * @param force_idr Whether to ask for a key frame.
+     * @param frame Receives the frame.
+     * @param on_part Optional. Called as each part but the last comes out.
+     */
+    void encode(int index, bool force_idr, amf_direct::encoded_frame_t &frame, const amf_direct::part_callback_t &on_part = {}) {
+      draw(index);
+      ASSERT_TRUE(encoder.encode_frame(index, force_idr, frame, nullptr, on_part));
+      ASSERT_FALSE(frame.data.empty());
+    }
+
+    /**
+     * @brief Describe a bitstream of the codec encoded.
+     *
+     * @param data The bitstream.
+     * @return The OBUs or NAL units in it.
+     */
+    std::string describe(const std::vector<std::uint8_t> &data) const {
+      return GetParam() == amf_direct::codec_e::hevc ? amf_direct::describe_nals(data.data(), data.size()) : amf_direct::describe_obus(data.data(), data.size());
+    }
+
+    ID3D11Device *device = nullptr;  ///< Device the encoder reads frames from.
+    ID3D11DeviceContext *context = nullptr;  ///< The device's immediate context.
+    ID3D11Texture2D *staging = nullptr;  ///< Texture frames are drawn into before they are copied to the encoder.
+    video::config_t config {};  ///< Stream configuration.
+    amf_direct::encoder_t encoder;  ///< The encoder.
+  };
+}  // namespace
+
+TEST_P(AmfEncoderTest, HandsOverEachPartAsItFinishes) {
+  for (int index = 0; index < 4; ++index) {
+    std::vector<std::size_t> sizes;
+    int parts_total = 0;
+    amf_direct::encoded_frame_t frame;
+    encode(index, false, frame, [&](const amf_direct::encoded_frame_t &so_far, int total) {
+      sizes.push_back(so_far.data.size());
+      parts_total = total;
+      EXPECT_EQ(so_far.idr, index == 0);
+    });
+
+    EXPECT_EQ(frame.idr, index == 0);
+    EXPECT_GT(frame.parts.size(), 1u);
+    EXPECT_EQ(sizes.size() + 1, frame.parts.size());
+    EXPECT_EQ(static_cast<std::size_t>(parts_total), frame.parts.size());
+
+    std::size_t bytes = 0;
+    for (std::size_t i = 0; i < frame.parts.size(); ++i) {
+      bytes += frame.parts[i].bytes;
+      if (i < sizes.size()) {
+        EXPECT_EQ(sizes[i], bytes);
+      }
+    }
+    EXPECT_EQ(bytes, frame.data.size());
+
+    const auto description = describe(frame.data);
+    EXPECT_EQ(description.find("invalid"), std::string::npos) << description;
+    if (GetParam() == amf_direct::codec_e::hevc) {
+      // Each slice starts with its own start code, so the parts can be cut anywhere between them
+      std::size_t offset = 0;
+      for (const auto &part : frame.parts) {
+        const auto start = amf_direct::describe_nals(frame.data.data() + offset, part.bytes);
+        EXPECT_EQ(start.find("invalid"), std::string::npos) << start;
+        offset += part.bytes;
+      }
+      EXPECT_NE(description.find(index == 0 ? "VPS:" : "TRAIL_R:"), std::string::npos) << description;
+    }
+  }
+}
+
+TEST_P(AmfEncoderTest, MakesAKeyFrameWhenAsked) {
+  amf_direct::encoded_frame_t frame;
+  encode(0, false, frame);
+  encode(1, false, frame);
+  EXPECT_FALSE(frame.idr);
+
+  encode(2, true, frame);
+  EXPECT_TRUE(frame.idr);
+  if (GetParam() == amf_direct::codec_e::hevc) {
+    EXPECT_NE(describe(frame.data).find("SPS:"), std::string::npos);
+  }
+}
+
+TEST_P(AmfEncoderTest, RecoversFromLostFramesWithALongTermReference) {
+  amf_direct::encoded_frame_t frame;
+  int kept = 0;
+  for (int index = 0; index < 16; ++index) {
+    encode(index, false, frame);
+    if (frame.ltr) {
+      ++kept;
+      encoder.acknowledge_ltr(index);
+    }
+  }
+  EXPECT_GT(kept, 1);
+
+  encoder.invalidate_ref_frames(14, 15);
+  encode(16, false, frame);
+  EXPECT_TRUE(frame.after_ref_frame_invalidation);
+  EXPECT_FALSE(frame.idr);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  AmfCodecs,
+  AmfEncoderTest,
+  testing::Values(amf_direct::codec_e::av1, amf_direct::codec_e::hevc),
+  [](const testing::TestParamInfo<amf_direct::codec_e> &info) {
+    return info.param == amf_direct::codec_e::hevc ? "Hevc" : "Av1";
+  }
+);
 
 TEST(AmfLtrIntervalTest, KeepsAReferenceEveryFrameAtLowFrameRates) {
   EXPECT_EQ(amf_direct::ltr_interval(4, 1), 1);

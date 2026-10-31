@@ -878,7 +878,8 @@ namespace video {
   /**
    * @brief Check whether a stream is encoded through AMF directly rather than through FFmpeg.
    *
-   * @details Only AV1 4:2:0 from the amdvce encoder, with amd_direct enabled. See amf_av1.h.
+   * @details Only AV1 and HEVC 4:2:0 from the amdvce encoder, with amd_direct enabled. See
+   *          amf_direct.h.
    *
    * @param encoder The stream's encoder.
    * @param config Client stream configuration.

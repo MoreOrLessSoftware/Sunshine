@@ -26,7 +26,7 @@ extern "C" {
 }
 
 // local includes
-#include "amf/amf_av1.h"
+#include "amf/amf_direct.h"
 #include "cbs.h"
 #include "config.h"
 #include "display_device.h"
@@ -183,7 +183,7 @@ namespace video {
   }
 
   bool uses_amf_direct(const encoder_t &encoder, const config_t &config) {
-    return config::video.amd.amd_direct && encoder.name == "amdvce"sv && config.videoFormat == 2 && config.chromaSamplingType == 0;
+    return config::video.amd.amd_direct && encoder.name == "amdvce"sv && (config.videoFormat == 1 || config.videoFormat == 2) && config.chromaSamplingType == 0;
   }
 
   repeat_t repeat_due(const std::optional<last_shown_t> &last_shown, std::chrono::steady_clock::duration interval, std::chrono::steady_clock::time_point now) {
@@ -674,7 +674,7 @@ namespace video {
   };
 
   /**
-   * @brief Encode session for AV1 through AMF directly. See amf_av1.h.
+   * @brief Encode session for AV1 or HEVC through AMF directly. See amf_direct.h.
    */
   class amf_encode_session_t: public encode_session_t {
   public:
@@ -744,16 +744,16 @@ namespace video {
      * @param frame_index Frame index, used as the frame's timestamp.
      * @param frame Receives the encoded frame.
      * @param trace Optional. Marked as the encode passes each step.
-     * @param on_tile Optional. Called with the frame so far and the number of tiles in it, as
-     *                each tile but the last comes out of the encoder.
+     * @param on_part Optional. Called with the frame so far and the number of parts in it, as
+     *                each part but the last comes out of the encoder.
      * @return True on success.
      */
-    bool encode_frame(int64_t frame_index, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const amf_direct::tile_callback_t &on_tile = {}) {
+    bool encode_frame(int64_t frame_index, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const amf_direct::part_callback_t &on_part = {}) {
       if (!device) {
         return false;
       }
 
-      const bool ok = device->encode_frame(static_cast<std::uint64_t>(frame_index), force_idr, frame, trace, on_tile);
+      const bool ok = device->encode_frame(static_cast<std::uint64_t>(frame_index), force_idr, frame, trace, on_part);
       force_idr = false;
       return ok;
     }
@@ -2399,8 +2399,8 @@ namespace video {
    * @return 0 when the frame is encoded and queued; nonzero on encoder failure.
    */
   int encode_amf(int64_t frame_nr, amf_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, void *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp, frame_trace::trace_t *trace) {
-    // Groups of tiles are sent as they finish, while the rest is still encoding, as NVENC sends
-    // groups of slices. See video_subframe.h.
+    // Groups of AV1 tiles or HEVC slices are sent as they finish, while the rest is still
+    // encoding, as NVENC sends groups of slices. See video_subframe.h.
     std::size_t bytes_sent = 0;
     int parts_sent = 0;
     std::uint32_t groups_sent = 0;
@@ -2432,10 +2432,10 @@ namespace video {
       packets->raise(std::move(packet));
     };
 
-    auto on_tile = [&](const amf_direct::encoded_frame_t &so_far, int tiles_total) {
+    auto on_part = [&](const amf_direct::encoded_frame_t &so_far, int parts_total) {
       parts_idr = so_far.idr;
-      // Groups that finished between tiles go out together
-      const auto groups_done = subframe::parts_ready(static_cast<std::uint32_t>(so_far.tiles.size()), static_cast<std::uint32_t>(tiles_total));
+      // Groups that finished between parts go out together
+      const auto groups_done = subframe::parts_ready(static_cast<std::uint32_t>(so_far.parts.size()), static_cast<std::uint32_t>(parts_total));
       if (groups_done > groups_sent) {
         groups_sent = groups_done;
         send_part(so_far, false, so_far.idr);
@@ -2443,7 +2443,7 @@ namespace video {
     };
 
     amf_direct::encoded_frame_t frame;
-    if (!session.encode_frame(frame_nr, frame, trace, on_tile) || frame.data.empty()) {
+    if (!session.encode_frame(frame_nr, frame, trace, on_part) || frame.data.empty()) {
       BOOST_LOG(error) << "AMF direct: couldn't encode frame "sv << frame_nr;
       return -1;
     }
@@ -4218,10 +4218,10 @@ namespace video {
 
     auto &encoder = *chosen_encoder;
 
-    // AV1 through AMF directly recovers from lost frames with long-term references. Other codecs
-    // on the same encoder answer the client's requests with key frames, as they would anyway.
+    // AV1 and HEVC through AMF directly recover from lost frames with long-term references.
+    // H.264 on the same encoder answers the client's requests with key frames, as it would anyway.
     last_encoder_probe_supported_ref_frames_invalidation = (encoder.flags & REF_FRAMES_INVALIDATION) ||
-                                                           (config::video.amd.amd_direct && encoder.name == "amdvce"sv && encoder.av1[encoder_t::PASSED]);
+                                                           (config::video.amd.amd_direct && encoder.name == "amdvce"sv && (encoder.hevc[encoder_t::PASSED] || encoder.av1[encoder_t::PASSED]));
     last_encoder_probe_supported_yuv444_for_codec[0] = encoder.h264[encoder_t::PASSED] &&
                                                        encoder.h264[encoder_t::YUV444];
     last_encoder_probe_supported_yuv444_for_codec[1] = encoder.hevc[encoder_t::PASSED] &&

@@ -119,7 +119,7 @@ const config = ref(props.config)
               <div class="form-text">{{ $t('config.amd_coder_desc') }}</div>
             </div>
 
-            <!-- AMF direct (AV1) -->
+            <!-- AMF direct (AV1 and HEVC) -->
             <Checkbox class="mb-3"
                       id="amd_direct"
                       locale-prefix="config"
@@ -133,6 +133,14 @@ const config = ref(props.config)
               <input type="number" class="form-control" id="amd_av1_tiles"
                      placeholder="1" min="1" max="64" v-model="config.amd_av1_tiles" />
               <div class="form-text">{{ $t('config.amd_av1_tiles_desc') }}</div>
+            </div>
+
+            <!-- AMF direct HEVC slices -->
+            <div class="mb-3">
+              <label for="amd_hevc_slices" class="form-label">{{ $t('config.amd_hevc_slices') }}</label>
+              <input type="number" class="form-control" id="amd_hevc_slices"
+                     placeholder="1" min="1" max="64" v-model="config.amd_hevc_slices" />
+              <div class="form-text">{{ $t('config.amd_hevc_slices_desc') }}</div>
             </div>
           </div>
         </div>

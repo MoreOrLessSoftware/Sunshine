@@ -16,13 +16,14 @@ extern "C" {
 }
 
 // lib includes
+#include <AMF/components/VideoEncoderHEVC.h>
 #include <AMF/core/Factory.h>
 #include <boost/algorithm/string/predicate.hpp>
 
 // local includes
 #include "display.h"
 #include "misc.h"
-#include "src/amf/amf_av1.h"
+#include "src/amf/amf_direct.h"
 #include "src/config.h"
 #include "src/frame_rate_limiter.h"
 #include "src/logging.h"
@@ -1342,8 +1343,8 @@ namespace platf::dxgi {
   };
 
   /**
-   * @brief D3D11 encode device that draws captured textures into the input of an AV1 encoder
-   *        driven through AMF directly.
+   * @brief D3D11 encode device that draws captured textures into the input of an AV1 or HEVC
+   *        encoder driven through AMF directly.
    */
   class d3d_amf_encode_device_t: public amf_encode_device_t {
   public:
@@ -1369,12 +1370,24 @@ namespace platf::dxgi {
     bool init_encoder(const ::video::config_t &client_config, const ::video::sunshine_colorspace_t &colorspace) override {
       const auto &amd = config::video.amd;
       amf_direct::settings_t settings;
-      settings.usage = amd.amd_usage_av1.value_or(settings.usage);
-      settings.quality_preset = amd.amd_quality_av1.value_or(settings.quality_preset);
-      settings.rate_control = amd.amd_rc_av1.value_or(settings.rate_control);
+      if (client_config.videoFormat == 1) {
+        settings.codec = amf_direct::codec_e::hevc;
+        settings.usage = amd.amd_usage_hevc.value_or(AMF_VIDEO_ENCODER_HEVC_USAGE_ULTRA_LOW_LATENCY);
+        settings.quality_preset = amd.amd_quality_hevc.value_or(AMF_VIDEO_ENCODER_HEVC_QUALITY_PRESET_SPEED);
+        settings.rate_control = amd.amd_rc_hevc.value_or(AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_CBR);
+        if (amd.amd_vbaq) {
+          settings.vbaq = *amd.amd_vbaq != 0;
+        }
+        settings.max_au_size = amd.amd_max_au_size;
+        settings.parts = amd.amd_hevc_slices;
+      } else {
+        settings.usage = amd.amd_usage_av1.value_or(settings.usage);
+        settings.quality_preset = amd.amd_quality_av1.value_or(settings.quality_preset);
+        settings.rate_control = amd.amd_rc_av1.value_or(settings.rate_control);
+        settings.parts = amd.amd_av1_tiles;
+      }
       settings.preanalysis = amd.amd_preanalysis.value_or(0) != 0;
       settings.enforce_hrd = amd.amd_enforce_hrd.value_or(0) != 0;
-      settings.tiles = amd.amd_av1_tiles;
       settings.ltr_frames = ltr_frames;
 
       if (!encoder.create(base.device.get(), client_config, colorspace, settings)) {
@@ -1402,12 +1415,12 @@ namespace platf::dxgi {
      * @param force_idr Whether to encode a key frame.
      * @param frame Receives the encoded frame.
      * @param trace Optional. Marked as the encode passes each step.
-     * @param on_tile Optional. Called with the frame so far and the number of tiles in it, as
-     *                each tile but the last comes out of the encoder.
+     * @param on_part Optional. Called with the frame so far and the number of parts in it, as
+     *                each part but the last comes out of the encoder.
      * @return True on success.
      */
-    bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const std::function<void(const amf_direct::encoded_frame_t &, int)> &on_tile) override {
-      return encoder.encode_frame(frame_index, force_idr, frame, trace, on_tile);
+    bool encode_frame(std::uint64_t frame_index, bool force_idr, amf_direct::encoded_frame_t &frame, frame_trace::trace_t *trace, const std::function<void(const amf_direct::encoded_frame_t &, int)> &on_part) override {
+      return encoder.encode_frame(frame_index, force_idr, frame, trace, on_part);
     }
 
     /**
@@ -1433,7 +1446,7 @@ namespace platf::dxgi {
     static constexpr int ltr_frames = 4;  ///< Long-term references kept to recover from lost frames.
 
     d3d_base_encode_device base;
-    amf_direct::av1_encoder_t encoder;
+    amf_direct::encoder_t encoder;
   };
 
   /**

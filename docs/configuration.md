@@ -3127,16 +3127,19 @@ supported on the current platform.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Encode AV1 through AMD's AMF runtime directly instead of through FFmpeg. This is experimental.
-            It uses the AV1 settings of [amd_usage](#amd_usage), [amd_rc](#amd_rc),
+            Encode AV1 and HEVC through AMD's AMF runtime directly instead of through FFmpeg. This is
+            experimental. It uses the AV1 or HEVC settings of [amd_usage](#amd_usage), [amd_rc](#amd_rc),
             [amd_quality](#amd_quality), [amd_preanalysis](#amd_preanalysis) and
-            [amd_enforce_hrd](#amd_enforce_hrd), and can encode each frame in tiles, see
-            [amd_av1_tiles](#amd_av1_tiles). If the AMF runtime can't be used, AV1 is encoded through FFmpeg.
+            [amd_enforce_hrd](#amd_enforce_hrd), and for HEVC also [amd_vbaq](#amd_vbaq) and
+            [amd_max_au_size](#amd_max_au_size). It can encode each frame in parts that are sent as they
+            finish, see [amd_av1_tiles](#amd_av1_tiles) and [amd_hevc_slices](#amd_hevc_slices). If the
+            AMF runtime can't be used, the stream is encoded through FFmpeg.
             Lost frames are recovered from without a key frame where possible: every eighth of a second a
             frame is kept as a long-term reference, and after a loss the next frame references only the
             newest one the client confirmed receiving. While this option is enabled, clients are told that
-            Sunshine can invalidate reference frames; H.264 and HEVC still recover with a key frame.
-            @note{This option only applies when using AV1 with 4:2:0 chroma and the amdvce [encoder](#encoder).}
+            Sunshine can invalidate reference frames; H.264 still recovers with a key frame.
+            @note{This option only applies when using AV1 or HEVC with 4:2:0 chroma and the amdvce
+            [encoder](#encoder).}
         </td>
     </tr>
     <tr>
@@ -3175,6 +3178,36 @@ supported on the current platform.
         <td>Example</td>
         <td colspan="2">@code{}
             amd_av1_tiles = 4
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Choices</td>
+        <td colspan="2">1-64</td>
+    </tr>
+</table>
+
+### amd_hevc_slices
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The number of slices each HEVC frame is encoded in when [amd_direct](#amd_direct) is enabled.
+            Above 1, AMF hands over each slice as it finishes. The log shows when slices come out of the
+            encoder about every 600 frames.
+            @note{This option only applies when [amd_direct](#amd_direct) is enabled.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            1
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            amd_hevc_slices = 4
             @endcode</td>
     </tr>
     <tr>

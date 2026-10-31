@@ -756,6 +756,7 @@ namespace config {
       (int) amd::coder_e::_auto,  // coder
       false,  // direct
       1,  // av1_tiles
+      1,  // hevc_slices
     },  // amd
 
     {
@@ -1674,6 +1675,7 @@ namespace config {
     bool_f(vars, "amd_vbaq", (bool &) video.amd.amd_vbaq);
     bool_f(vars, "amd_direct", video.amd.amd_direct);
     int_between_f(vars, "amd_av1_tiles", video.amd.amd_av1_tiles, {1, 64});
+    int_between_f(vars, "amd_hevc_slices", video.amd.amd_hevc_slices, {1, 64});
     bool_f(vars, "amd_enforce_hrd", (bool &) video.amd.amd_enforce_hrd);
     {
       auto max_au_size = video.amd.amd_max_au_size;
