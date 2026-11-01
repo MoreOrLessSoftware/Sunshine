@@ -33,6 +33,7 @@
 #include "src/platform/common.h"
 #include "src/platform/virtualhid_input.h"
 #include "xgpad.h"
+#include "xgpad_report.h"
 
 namespace platf {
   using namespace std::literals;
@@ -541,6 +542,10 @@ namespace platf {
     }
 
     const auto &capabilities = raw.virtualhid.runtime->capabilities();
+    if (!capabilities.supports_gamepad) {
+      // No Virtual HID Driver: skip the license query, which waits ~8 s for the absent license service
+      return false;
+    }
     const auto licensed = !capabilities.requires_installed_driver || lvh::get_license_status().license.licensed();
     return virtualhid::should_use_gamepad_runtime(capabilities, config::input.gamepad_driver, licensed);
   }
@@ -563,16 +568,21 @@ namespace platf {
   input_t input() {
     input_t result {new input_raw_t {}};
 
-    if (config::input.controller && config::input.gamepad_driver == config::GAMEPAD_DRIVER_XGPAD) {
+    // Evaluate once: it can involve a license query
+    const bool virtualhid_usable = should_use_virtualhid_gamepads(*result);
+
+    // xgpad: always with the "xgpad" policy, and under "all" when Virtual HID Driver is not usable
+    if (config::input.controller && xgpad::policy_uses_xgpad(config::input.gamepad_driver, virtualhid_usable)) {
+      const bool explicit_choice = config::input.gamepad_driver == config::GAMEPAD_DRIVER_XGPAD;
       if (xgpad::driver_installed()) {
-        BOOST_LOG(info) << "xgpad is selected as the preferred virtual gamepad driver"sv;
+        BOOST_LOG(info) << (explicit_choice ? "xgpad is selected as the preferred virtual gamepad driver"sv : "Using the installed xgpad driver for Xbox controllers"sv);
         result->xgpad = xgpad::create();
-      } else {
+      } else if (explicit_choice) {
         BOOST_LOG(warning) << "xgpad is selected but its driver package is not installed; using the other gamepad drivers"sv;
       }
     }
 
-    if (auto &raw = *result; config::input.controller && !should_use_virtualhid_gamepads(raw) && virtualhid::should_try_vigembus_fallback(config::input.gamepad, false, config::input.gamepad_driver)) {
+    if (auto &raw = *result; config::input.controller && !virtualhid_usable && virtualhid::should_try_vigembus_fallback(config::input.gamepad, false, config::input.gamepad_driver)) {
       if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS) {
         BOOST_LOG(info) << "ViGEmBus is selected as the only virtual gamepad driver"sv;
       } else if (raw.virtualhid.runtime && raw.virtualhid.runtime->capabilities().supports_gamepad) {
@@ -677,7 +687,16 @@ namespace platf {
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
-    if (raw->xgpad && xgpad::alloc(*raw->xgpad, id, feedback_queue) == 0) {
+    if (raw->xgpad && xgpad::should_allocate_xgpad({
+                        .driver_policy = config::input.gamepad_driver,
+                        .gamepad = config::input.gamepad,
+                        .client_type = metadata.type,
+                        .client_capabilities = metadata.capabilities,
+                        .vigem_available = raw->vigem != nullptr,
+                        .motion_as_ds4 = config::input.motion_as_ds4,
+                        .touchpad_as_ds4 = config::input.touchpad_as_ds4,
+                      }) &&
+        xgpad::alloc(*raw->xgpad, id, feedback_queue) == 0) {
       return 0;
     }
 
@@ -1316,12 +1335,27 @@ namespace platf {
     }
 
     const auto raw = (input_raw_t *) input->get();
-    if (raw->xgpad) {
-      // xgpad always emulates an Xbox Series controller; other profiles come from the fallback drivers.
-      gps = {
-        {"auto", true, ""},
-        {"xseries", true, ""},
-      };
+    const auto &driver = config::input.gamepad_driver;
+    if (raw->xgpad && (driver == config::GAMEPAD_DRIVER_XGPAD || driver == config::GAMEPAD_DRIVER_ALL || driver.empty())) {
+      if (driver == config::GAMEPAD_DRIVER_XGPAD) {
+        // xgpad always emulates an Xbox Series controller
+        gps = {
+          {"auto", true, ""},
+          {"xseries", true, ""},
+        };
+        return gps;
+      }
+
+      // "all" with xgpad: Xbox profiles through xgpad, DualShock 4 (and an explicit Xbox 360) through ViGEmBus
+      gps = vigembus_supported_gamepads(raw->vigem != nullptr);
+      for (auto &gamepad : gps) {
+        if (gamepad.name == "auto"sv || gamepad.name == "x360"sv) {
+          gamepad.is_enabled = true;
+          gamepad.reason_disabled.clear();
+        }
+      }
+      gps.emplace_back("xone", true, "");
+      gps.emplace_back("xseries", true, "");
       return gps;
     }
 
@@ -1344,7 +1378,9 @@ namespace platf {
     }
 
     const auto &capabilities = raw->virtualhid.runtime->capabilities();
-    const auto licensed = !capabilities.requires_installed_driver || lvh::get_license_status().license.licensed();
+    // Only query the license (slow when the license service is absent) if the driver is actually usable
+    const auto licensed = capabilities.supports_gamepad &&
+                          (!capabilities.requires_installed_driver || lvh::get_license_status().license.licensed());
     if (const auto use_virtualhid = virtualhid::should_use_gamepad_runtime(capabilities, config::input.gamepad_driver, licensed); !use_virtualhid && config::input.gamepad_driver != config::GAMEPAD_DRIVER_VIRTUALHID) {
       gps = vigembus_supported_gamepads(raw->vigem != nullptr);
       return gps;

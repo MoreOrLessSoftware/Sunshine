@@ -269,7 +269,7 @@
     "gamepad_desc": "Choose which type of gamepad to emulate on the host",
     "gamepad_driver": "Windows Gamepad Drivers",
     "gamepad_driver_all": "All Available Drivers",
-    "gamepad_driver_desc": "Choose which virtual gamepad drivers Sunshine may use. All Available Drivers prefers Virtual HID Driver when licensed and falls back to ViGEmBus. Virtual HID Driver is an optional paid upgrade. ViGEmBus supports only Xbox 360 and DualShock 4, has limited features, and has reached end of life. Sunshine Xbox Series Driver (xgpad) emulates every controller as an Xbox Series X|S controller with Guide, Share and impulse triggers, and falls back to the other drivers when its driver package is not installed.",
+    "gamepad_driver_desc": "Choose which virtual gamepad drivers Sunshine may use. All Available Drivers prefers Virtual HID Driver when licensed; otherwise it uses the Sunshine Xbox Series Driver (xgpad) for Xbox controllers when installed and ViGEmBus for the rest. Virtual HID Driver is an optional paid upgrade. ViGEmBus supports only Xbox 360 and DualShock 4, has limited features, and has reached end of life. Sunshine Xbox Series Driver (xgpad) emulates every controller as an Xbox Series X|S controller with Guide, Share and impulse triggers, and falls back to the other drivers when its driver package is not installed.",
     "gamepad_driver_select": "Choose a driver...",
     "gamepad_driver_vigembus": "ViGEmBus",
     "gamepad_driver_virtualhid": "Virtual HID Driver",
@@ -510,7 +510,9 @@
     "virtualhid_outdated_title": "libvirtualhid Driver Outdated",
     "virtualhid_required_desc": "Virtual HID Driver is selected, but it is not installed. Install it and activate a paid license, or choose a different gamepad driver in Input configuration.",
     "virtualhid_required_title": "Virtual HID Driver Is Not Installed",
-    "welcome": "Hello, Sunshine!"
+    "welcome": "Hello, Sunshine!",
+    "xgpad_required_desc": "Sunshine Xbox Series Driver (xgpad) is selected, but it is not installed. Reinstall Sunshine with the Xbox Series Controller Driver component, or choose a different gamepad driver in Input configuration.",
+    "xgpad_required_title": "Xbox Series Controller Driver Is Not Installed"
   },
   "navbar": {
     "applications": "Applications",

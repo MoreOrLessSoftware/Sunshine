@@ -157,6 +157,75 @@ TEST_F(XgpadReportTest, OutputReportKeepsDisabledMotors) {
   EXPECT_EQ(apply_output_report(report, previous), previous);
 }
 
+TEST_F(XgpadReportTest, PolicyUsesXgpad) {
+  EXPECT_TRUE(policy_uses_xgpad("xgpad", true));
+  EXPECT_TRUE(policy_uses_xgpad("xgpad", false));
+  EXPECT_TRUE(policy_uses_xgpad("all", false));
+  EXPECT_TRUE(policy_uses_xgpad("", false));  // unset behaves like "all"
+  EXPECT_FALSE(policy_uses_xgpad("all", true));  // licensed Virtual HID Driver keeps priority
+  EXPECT_FALSE(policy_uses_xgpad("", true));
+  EXPECT_FALSE(policy_uses_xgpad("vigembus", false));
+  EXPECT_FALSE(policy_uses_xgpad("virtualhid", false));
+}
+
+namespace {
+  allocation_choice_t make_choice(std::string_view policy, std::string_view gamepad, std::uint8_t type, bool vigem) {
+    return {
+      .driver_policy = policy,
+      .gamepad = gamepad,
+      .client_type = type,
+      .client_capabilities = 0,
+      .vigem_available = vigem,
+      .motion_as_ds4 = true,
+      .touchpad_as_ds4 = true,
+    };
+  }
+}  // namespace
+
+TEST_F(XgpadReportTest, ExplicitPolicyAlwaysAllocatesXgpad) {
+  EXPECT_TRUE(should_allocate_xgpad(make_choice("xgpad", "ds4", 0x02, true)));
+  EXPECT_TRUE(should_allocate_xgpad(make_choice("xgpad", "auto", 0x02, true)));
+}
+
+TEST_F(XgpadReportTest, AllPolicyRoutesXboxProfilesToXgpad) {
+  for (const bool vigem : {false, true}) {
+    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "xseries", 0x00, vigem)));
+    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "xone", 0x00, vigem)));
+    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "auto", 0x01, vigem)));  // Xbox client
+    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "auto", 0x00, vigem)));  // unknown client
+    EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "ds4", 0x00, vigem)));
+    EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "ds5", 0x00, vigem)));
+  }
+  // An explicit Xbox 360 choice goes to ViGEmBus when it can, xgpad otherwise
+  EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "x360", 0x00, true)));
+  EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "x360", 0x00, false)));
+}
+
+TEST_F(XgpadReportTest, OtherPoliciesNeverAllocateXgpad) {
+  for (const auto policy : {"vigembus", "virtualhid"}) {
+    EXPECT_FALSE(should_allocate_xgpad(make_choice(policy, "xseries", 0x01, false)));
+    EXPECT_FALSE(should_allocate_xgpad(make_choice(policy, "auto", 0x01, false)));
+  }
+  EXPECT_TRUE(should_allocate_xgpad(make_choice("", "auto", 0x01, false)));  // unset behaves like "all"
+}
+
+TEST_F(XgpadReportTest, AllPolicyKeepsDualShockClientsOnViGEmBus) {
+  // PlayStation client: DS4 through ViGEmBus when available, otherwise still a working Xbox controller
+  EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "auto", 0x02, true)));
+  EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "auto", 0x02, false)));
+
+  // Motion / touchpad capable clients with the *_as_ds4 options
+  auto choice = make_choice("all", "auto", 0x00, true);
+  choice.client_capabilities = 0x10;  // LI_CCAP_ACCEL
+  EXPECT_FALSE(should_allocate_xgpad(choice));
+  choice.motion_as_ds4 = false;
+  EXPECT_TRUE(should_allocate_xgpad(choice));
+  choice.client_capabilities = 0x08;  // LI_CCAP_TOUCHPAD
+  EXPECT_FALSE(should_allocate_xgpad(choice));
+  choice.touchpad_as_ds4 = false;
+  EXPECT_TRUE(should_allocate_xgpad(choice));
+}
+
 TEST_F(XgpadReportTest, MatchesOwnInstanceIds) {
   EXPECT_TRUE(is_xgpad_instance_id(L"SWD\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&02045E_PID&0B13_REV&0509\\PAD0"));
   EXPECT_TRUE(is_xgpad_instance_id(L"swd\\{00001812-0000-1000-8000-00805f9b34fb}_dev_vid&02045e_pid&0b13_rev&0509\\pad15"));

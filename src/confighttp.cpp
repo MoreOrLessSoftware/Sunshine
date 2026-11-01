@@ -31,6 +31,7 @@
   #include "platform/virtualhid_input.h"
   #include "platform/windows/misc.h"
   #include "platform/windows/utf_utils.h"
+  #include "platform/windows/xgpad.h"
 
   #include <Windows.h>
 #endif
@@ -2005,6 +2006,21 @@ namespace confighttp {
   }
 
   /**
+   * @brief Build the xgpad (virtual Xbox Series controller) driver installation status.
+   *
+   * @return xgpad driver status JSON ({"installed": bool}).
+   */
+  nlohmann::json get_xgpad_driver_status() {
+    nlohmann::json output_tree;
+#ifdef _WIN32
+    output_tree["installed"] = platf::xgpad::driver_installed();
+#else
+    output_tree["installed"] = false;
+#endif
+    return output_tree;
+  }
+
+  /**
    * @brief Build ViGEmBus fallback driver version and installation status.
    *
    * @return ViGEmBus fallback driver status JSON.
@@ -2050,6 +2066,7 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["virtualhid"] = get_virtualhid_driver_status();
     output_tree["vigembus"] = get_vigembus_driver_status();
+    output_tree["xgpad"] = get_xgpad_driver_status();
     send_response(response, output_tree);
   }
 

@@ -168,6 +168,13 @@ namespace confighttp {
    */
   nlohmann::json get_vigembus_driver_status();
 
+  /**
+   * @brief Build the xgpad (virtual Xbox Series controller) driver installation status.
+   *
+   * @return xgpad driver status JSON ({"installed": bool}).
+   */
+  nlohmann::json get_xgpad_driver_status();
+
   void getVirtualInputStatus(const resp_https_t &response, const req_https_t &request);
 
   void getVirtualInputLicense(const resp_https_t &response, const req_https_t &request);

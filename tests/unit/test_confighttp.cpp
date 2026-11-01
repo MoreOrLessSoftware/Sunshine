@@ -1639,6 +1639,10 @@ TEST(ConfigHttpDriverStatusTest, BuildsLiveVirtualInputDriverStatus) {
   EXPECT_TRUE(vigembus.contains("version"));
   EXPECT_TRUE(vigembus.contains("minimum_version"));
   EXPECT_TRUE(vigembus.contains("version_compatible"));
+
+  const auto xgpad = confighttp::get_xgpad_driver_status();
+  ASSERT_TRUE(xgpad.contains("installed"));
+  EXPECT_TRUE(xgpad["installed"].is_boolean());
 }
 
 TEST(ConfigHttpLicenseStatusTest, ClearsSensitiveRequestString) {
@@ -1656,8 +1660,10 @@ TEST_F(ConfigHttpTest, VirtualInputStatusReturnsBothBackends) {
   const auto body = nlohmann::json::parse(response->content.string());
   ASSERT_TRUE(body.contains("virtualhid"));
   ASSERT_TRUE(body.contains("vigembus"));
+  ASSERT_TRUE(body.contains("xgpad"));
   EXPECT_TRUE(body.at("virtualhid").contains("installed"));
   EXPECT_TRUE(body.at("vigembus").contains("installed"));
+  EXPECT_TRUE(body.at("xgpad").contains("installed"));
 }
 
 TEST_F(ConfigHttpTest, VirtualInputLicenseReturnsCurrentStatus) {

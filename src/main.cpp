@@ -289,7 +289,10 @@ int main(int argc, char *argv[]) {
   }
 
 #ifdef _WIN32
-  config::select_all_gamepad_drivers_if_licensed(lvh::get_license_status().license.licensed());
+  // Only a fresh configuration needs the license (the query waits ~8 s when the license service is absent)
+  if (config::input.gamepad_driver.empty()) {
+    config::select_all_gamepad_drivers_if_licensed(lvh::get_license_status().license.licensed());
+  }
 #endif
 
   // Adding guard here first as it also performs recovery after crash,

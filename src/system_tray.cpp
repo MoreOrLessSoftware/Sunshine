@@ -67,6 +67,8 @@
   #include <boost/process/v1/environment.hpp>
   #include <tray.h>
   #ifdef _WIN32
+    #include "platform/windows/xgpad.h"
+
     #include <libvirtualhid/license.hpp>
   #endif
 
@@ -506,6 +508,17 @@ namespace system_tray {
   }
 
   void prepare_tray_virtualhid_license() {
+    // When the xgpad driver provides gamepads and Virtual HID Driver is not installed, there is no license to
+    // report or nag about; skip the query, which waits ~8 s when the license service is absent.
+    const auto &driver = config::input.gamepad_driver;
+    const bool xgpad_policy = driver == config::GAMEPAD_DRIVER_XGPAD;
+    const bool all_policy = driver.empty() || driver == config::GAMEPAD_DRIVER_ALL;
+    if ((xgpad_policy || all_policy) && platf::xgpad::driver_installed() &&
+        !confighttp::get_virtualhid_driver_status().value("installed", false)) {
+      update_tray_virtualhid_license(lvh::LicenseStatus {}, false);
+      return;
+    }
+
     const auto result = lvh::get_license_status();
     update_tray_virtualhid_license(result.license, !result.license.licensed());
   }
