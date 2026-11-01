@@ -103,6 +103,55 @@ set(CPACK_COMPONENT_FIREWALL_DISPLAY_NAME "Add Firewall Exclusions")
 set(CPACK_COMPONENT_FIREWALL_DESCRIPTION "Scripts to enable or disable firewall rules.")
 set(CPACK_COMPONENT_FIREWALL_GROUP "Scripts")
 
+# optional xgpad driver (virtual Xbox Series controllers)
+if(SUNSHINE_BUILD_XGPAD_DRIVER)
+    find_program(XGPAD_POWERSHELL NAMES pwsh powershell REQUIRED)
+
+    # build.ps1 compiles the UMDF2 driver with MSVC + the NuGet WDK and signs it with a one-time
+    # certificate whose private key is destroyed afterwards (-Release).
+    set(XGPAD_DRIVER_DIR "${CMAKE_SOURCE_DIR}/drivers/xgpad")
+    set(XGPAD_OUT_DIR "${CMAKE_BINARY_DIR}/xgpad")
+    set(XGPAD_PACKAGE_FILES
+            "${XGPAD_OUT_DIR}/pkg/xgpad.inf"
+            "${XGPAD_OUT_DIR}/pkg/xgpad.dll"
+            "${XGPAD_OUT_DIR}/pkg/xgpad.cat"
+            "${XGPAD_OUT_DIR}/xgpad.cer")
+    add_custom_command(
+            OUTPUT ${XGPAD_PACKAGE_FILES}
+            COMMAND "${XGPAD_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
+                    -File "${XGPAD_DRIVER_DIR}/build.ps1"
+                    -OutDir "${XGPAD_OUT_DIR}"
+                    -Release
+                    -DriverVersion "${PROJECT_VERSION}"
+            DEPENDS
+                    "${XGPAD_DRIVER_DIR}/build.ps1"
+                    "${XGPAD_DRIVER_DIR}/driver/xgpad.c"
+                    "${XGPAD_DRIVER_DIR}/driver/xgpad.inf"
+                    "${XGPAD_DRIVER_DIR}/xgpad_shared.h"
+            COMMENT "Building and signing the xgpad driver package"
+            VERBATIM)
+    add_custom_target(xgpad_driver ALL DEPENDS ${XGPAD_PACKAGE_FILES})
+
+    install(FILES ${XGPAD_PACKAGE_FILES}
+            DESTINATION "drivers/xgpad"
+            COMPONENT xgpad)
+    install(FILES
+            "${XGPAD_DRIVER_DIR}/scripts/xgpad-driver.ps1"
+            "${XGPAD_DRIVER_DIR}/scripts/install-xgpad-driver.bat"
+            "${XGPAD_DRIVER_DIR}/scripts/uninstall-xgpad-driver.bat"
+            DESTINATION "scripts"
+            COMPONENT xgpad)
+
+    set(CPACK_COMPONENT_XGPAD_DISPLAY_NAME "Xbox Series Controller Driver")
+    set(CPACK_COMPONENT_XGPAD_DESCRIPTION
+            "Sunshine xgpad driver: virtual Xbox Series X|S controllers with Guide, Share and impulse triggers. \
+Trusts a self-signed certificate unique to this release (its private key was destroyed after signing). \
+Select 'Sunshine Xbox Series Driver (xgpad)' under Input in the web UI to use it.")
+    set(CPACK_COMPONENT_XGPAD_GROUP "Drivers")
+    set(CPACK_COMPONENT_XGPAD_DEPENDS application)
+    set(CPACK_COMPONENT_XGPAD_DISABLED true)  # optional, unchecked by default
+endif()
+
 # include specific packaging
 include(${CMAKE_MODULE_PATH}/packaging/windows_nsis.cmake)
 include(${CMAKE_MODULE_PATH}/packaging/windows_wix.cmake)

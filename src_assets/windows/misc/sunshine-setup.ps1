@@ -286,7 +286,7 @@ if ($Action -eq "install") {
         -Color "Yellow"
     Write-Information ""
 
-    $totalSteps = 6
+    $totalSteps = 7
     $currentStep = 0
 
     # Reset permissions on the install directory
@@ -396,7 +396,21 @@ if ($Action -eq "install") {
         -Emoji "🛡️"
     Write-Information ""
 
-    # 4. Install service
+    # 4. Install the optional xgpad driver (only present when the component was selected), before the
+    #    service starts so Sunshine finds it
+    $currentStep++
+    Write-Progress `
+        -Activity "Installing Sunshine" `
+        -Status "Installing Xbox Series controller driver" `
+        -PercentComplete (($currentStep / $totalSteps) * 100)
+    $installXgpadScript = Join-Path $RootDir "scripts\install-xgpad-driver.bat"
+    Invoke-ScriptIfExist `
+        -ScriptPath $installXgpadScript `
+        -Description "Installing Xbox Series controller driver (xgpad)" `
+        -Emoji "🎮"
+    Write-Information ""
+
+    # 5. Install service
     $currentStep++
     Write-Progress `
         -Activity "Installing Sunshine" `
@@ -409,7 +423,7 @@ if ($Action -eq "install") {
         -Emoji "⚡"
     Write-Information ""
 
-    # 5. Configure autostart
+    # 6. Configure autostart
     $currentStep++
     Write-Progress `
         -Activity "Installing Sunshine" `
@@ -448,7 +462,7 @@ if ($Action -eq "install") {
         -Color "Yellow"
     Write-Information ""
 
-    $totalSteps = 4
+    $totalSteps = 5
     $currentStep = 0
 
     # 1. Delete firewall rules
@@ -477,7 +491,20 @@ if ($Action -eq "install") {
         -Emoji "⚡"
     Write-Information ""
 
-    # 3. Restore NVIDIA preferences
+    # 3. Remove the optional xgpad driver (after the service is gone, so no virtual pad is in use)
+    $currentStep++
+    Write-Progress `
+        -Activity "Uninstalling Sunshine" `
+        -Status "Removing Xbox Series controller driver" `
+        -PercentComplete (($currentStep / $totalSteps) * 100)
+    $uninstallXgpadScript = Join-Path $RootDir "scripts\uninstall-xgpad-driver.bat"
+    Invoke-ScriptIfExist `
+        -ScriptPath $uninstallXgpadScript `
+        -Description "Removing Xbox Series controller driver (xgpad)" `
+        -Emoji "🎮"
+    Write-Information ""
+
+    # 4. Restore NVIDIA preferences
     $currentStep++
     Write-Progress `
         -Activity "Uninstalling Sunshine" `
@@ -489,7 +516,7 @@ if ($Action -eq "install") {
         -Emoji "🎮"
     Write-Information ""
 
-    # 4. Update PATH (remove)
+    # 5. Update PATH (remove)
     $currentStep++
     Write-Progress `
         -Activity "Uninstalling Sunshine" `

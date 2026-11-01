@@ -37,6 +37,11 @@ endif()
 if(WIN32)
     option(SUNSHINE_USE_STATIC_QT
             "Require static Qt libraries and their static third-party dependencies." ON)
+
+    # Builds and packages the xgpad UMDF2 driver (drivers/xgpad) as an optional installer component.
+    # Requires Visual Studio (MSVC) and PowerShell; the WDK is fetched from NuGet by build.ps1.
+    option(SUNSHINE_BUILD_XGPAD_DRIVER
+            "Build the xgpad virtual Xbox Series controller driver and add it to the installer." OFF)
 endif()
 
 option(SUNSHINE_SYSTEM_VULKAN_HEADERS "Use system installation of vulkan-headers rather than the submodule." OFF)
