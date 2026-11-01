@@ -1,0 +1,103 @@
+;
+; xgpad.inf - Sunshine virtual Xbox Series X|S controller (UMDF2 HID minidriver)
+;
+; Mirrors the stack Windows builds for a Bluetooth LE Xbox Series controller:
+;   xinputhid (upper/bus filter) -> mshidumdf (function) -> WUDFRd (lower filter) -> SWD
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = HIDClass
+ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
+Provider    = %ProviderName%
+CatalogFile = xgpad.cat
+DriverVer   = 10/31/2026,0.2.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+; Variant A: BLE-style ID tail -> HID child gets HID\{00001812-...}_Dev_VID&02045e_PID&0b13 like a real BLE pad
+%DeviceDesc% = Xgpad, SunshineXgpad\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02045e_PID&0b13
+; Variant B: USB-style ID tail -> HID child gets HID\VID_045E&PID_0B13
+%DeviceDesc% = Xgpad, SunshineXgpad\VID_045E&PID_0B13
+
+[SourceDisksNames]
+1 = %DiskName%
+
+[SourceDisksFiles]
+xgpad.dll = 1
+
+[DestinationDirs]
+UMDriverCopy = 13
+
+[UMDriverCopy]
+xgpad.dll
+
+;---------------------------------------------------------------------------------------------------------------
+
+[Xgpad.NT]
+CopyFiles = UMDriverCopy
+AddReg    = Xgpad_SoftwareKey_AddReg
+
+[Xgpad_SoftwareKey_AddReg]
+; xinputhid: BusDevice (0x1) = focused bus filter, same as the Btle_Bus section of xinputhid.inf
+HKR,,"DevicePropertyFlags",0x00010001,0x1
+
+[Xgpad.NT.HW]
+AddReg = Xgpad_HW_AddReg
+
+[Xgpad_HW_AddReg]
+HKR,,"LowerFilters",0x00010008,"WUDFRd"
+HKR,,"UpperFilters",0x00010008,"xinputhid"
+
+[Xgpad.NT.Services]
+AddService = WUDFRd,0x000001f8,WUDFRD_ServiceInstall
+AddService = mshidumdf,0x000001fa,MsHidUmdf_ServiceInstall
+AddService = xinputhid,,XInputHid_ServiceInstall
+
+[WUDFRD_ServiceInstall]
+DisplayName   = %WudfRdDisplayName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\WUDFRd.sys
+
+[MsHidUmdf_ServiceInstall]
+DisplayName   = %MsHidUmdfDisplayName%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\mshidumdf.sys
+
+; Inbox Microsoft-signed filter (installed by xinputhid.inf); referenced, not shipped.
+[XInputHid_ServiceInstall]
+DisplayName    = %XInputHidDisplayName%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\xinputhid.sys
+LoadOrderGroup = Base
+
+[Xgpad.NT.Wdf]
+UmdfService                 = xgpad,Xgpad_UmdfInstall
+UmdfServiceOrder            = xgpad
+UmdfKernelModeClientPolicy  = AllowKernelModeClients
+UmdfFileObjectPolicy        = AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction     = Copy
+UmdfFsContextUsePolicy      = CanUseFsContext2
+UmdfHostPriority            = PriorityHigh
+
+[Xgpad_UmdfInstall]
+UmdfLibraryVersion = 2.15.0
+ServiceBinary      = %13%\xgpad.dll
+
+[Strings]
+ProviderName         = "Sunshine"
+ManufacturerName     = "Sunshine"
+DiskName             = "Sunshine Virtual Gamepad Installation Disk"
+DeviceDesc           = "Sunshine Virtual Xbox Series Controller"
+WudfRdDisplayName    = "Windows Driver Foundation - User-mode Driver Framework Reflector"
+MsHidUmdfDisplayName = "MS HID UMDF Pass-Through Driver"
+XInputHidDisplayName = "XINPUT HID Filter Driver"

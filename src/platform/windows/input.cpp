@@ -32,6 +32,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/virtualhid_input.h"
+#include "xgpad.h"
 
 namespace platf {
   using namespace std::literals;
@@ -522,6 +523,7 @@ namespace platf {
   struct input_raw_t {
     virtualhid::input_context_t virtualhid;  ///< libvirtualhid input context.
     std::unique_ptr<vigem_t> vigem;  ///< ViGEm fallback context.
+    xgpad::context_ptr xgpad {nullptr, &xgpad::destroy};  ///< xgpad virtual Xbox Series controllers, when selected.
   };
 
   /**
@@ -560,6 +562,15 @@ namespace platf {
 
   input_t input() {
     input_t result {new input_raw_t {}};
+
+    if (config::input.controller && config::input.gamepad_driver == config::GAMEPAD_DRIVER_XGPAD) {
+      if (xgpad::driver_installed()) {
+        BOOST_LOG(info) << "xgpad is selected as the preferred virtual gamepad driver"sv;
+        result->xgpad = xgpad::create();
+      } else {
+        BOOST_LOG(warning) << "xgpad is selected but its driver package is not installed; using the other gamepad drivers"sv;
+      }
+    }
 
     if (auto &raw = *result; config::input.controller && !should_use_virtualhid_gamepads(raw) && virtualhid::should_try_vigembus_fallback(config::input.gamepad, false, config::input.gamepad_driver)) {
       if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS) {
@@ -665,6 +676,11 @@ namespace platf {
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
+
+    if (raw->xgpad && xgpad::alloc(*raw->xgpad, id, feedback_queue) == 0) {
+      return 0;
+    }
+
     const auto use_virtualhid = should_use_virtualhid_gamepads(*raw);
 
     if (use_virtualhid && virtualhid::alloc_gamepad(raw->virtualhid, id, metadata, feedback_queue) == 0) {
@@ -729,6 +745,10 @@ namespace platf {
   int rebind_gamepad(input_t &input, const gamepad_id_t &id, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
+    if (xgpad::has(raw->xgpad.get(), id.globalIndex)) {
+      return xgpad::rebind(*raw->xgpad, id, std::move(feedback_queue));
+    }
+
     if (virtualhid::has_gamepad(raw->virtualhid, id.globalIndex)) {
       return virtualhid::rebind_gamepad(raw->virtualhid, id, std::move(feedback_queue));
     }
@@ -742,6 +762,11 @@ namespace platf {
 
   void free_gamepad(input_t &input, int nr) {
     auto raw = (input_raw_t *) input.get();
+
+    if (xgpad::has(raw->xgpad.get(), nr)) {
+      xgpad::free(*raw->xgpad, nr);
+      return;
+    }
 
     if (virtualhid::has_gamepad(raw->virtualhid, nr)) {
       virtualhid::free_gamepad(raw->virtualhid, nr);
@@ -1007,6 +1032,11 @@ namespace platf {
    */
   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
     auto raw = (input_raw_t *) input.get();
+    if (xgpad::has(raw->xgpad.get(), nr)) {
+      xgpad::update(*raw->xgpad, nr, gamepad_state);
+      return;
+    }
+
     if (virtualhid::has_gamepad(raw->virtualhid, nr)) {
       virtualhid::gamepad_update(raw->virtualhid, nr, gamepad_state);
       return;
@@ -1045,6 +1075,10 @@ namespace platf {
    */
   void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
     auto raw = (input_raw_t *) input.get();
+    if (xgpad::has(raw->xgpad.get(), touch.id.globalIndex)) {
+      return;  // The Xbox Series controller has no touchpad
+    }
+
     if (virtualhid::has_gamepad(raw->virtualhid, touch.id.globalIndex)) {
       virtualhid::gamepad_touch(raw->virtualhid, touch);
       return;
@@ -1157,6 +1191,10 @@ namespace platf {
    */
   void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
     auto raw = (input_raw_t *) input.get();
+    if (xgpad::has(raw->xgpad.get(), motion.id.globalIndex)) {
+      return;  // The Xbox Series controller has no motion sensors
+    }
+
     if (virtualhid::has_gamepad(raw->virtualhid, motion.id.globalIndex)) {
       virtualhid::gamepad_motion(raw->virtualhid, motion);
       return;
@@ -1190,6 +1228,10 @@ namespace platf {
    */
   void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
     auto raw = (input_raw_t *) input.get();
+    if (xgpad::has(raw->xgpad.get(), battery.id.globalIndex)) {
+      return;  // Battery reporting is not part of the xgpad path
+    }
+
     if (virtualhid::has_gamepad(raw->virtualhid, battery.id.globalIndex)) {
       virtualhid::gamepad_battery(raw->virtualhid, battery);
       return;
@@ -1274,6 +1316,15 @@ namespace platf {
     }
 
     const auto raw = (input_raw_t *) input->get();
+    if (raw->xgpad) {
+      // xgpad always emulates an Xbox Series controller; other profiles come from the fallback drivers.
+      gps = {
+        {"auto", true, ""},
+        {"xseries", true, ""},
+      };
+      return gps;
+    }
+
     if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS) {
       gps = vigembus_supported_gamepads(raw->vigem != nullptr);
       return gps;

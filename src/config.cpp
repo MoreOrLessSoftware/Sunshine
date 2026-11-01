@@ -1841,6 +1841,7 @@ namespace config {
                                                                         GAMEPAD_DRIVER_ALL,
                                                                         GAMEPAD_DRIVER_VIRTUALHID,
                                                                         GAMEPAD_DRIVER_VIGEMBUS,
+                                                                        GAMEPAD_DRIVER_XGPAD,
                                                                       });
     string_restricted_f(vars, "gamepad"s, input.gamepad, get_supported_gamepad_options());
 #ifdef _WIN32
