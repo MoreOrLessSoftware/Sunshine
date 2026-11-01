@@ -230,6 +230,22 @@ namespace platf::xgpad {
   }
 
   /**
+   * @brief How long a rumble output report lasts before the controller stops on its own.
+   *
+   * Duration and start delay are in 10 ms units; the effect repeats loopCount additional times. A duration of
+   * 0xFF (what XInput, Windows.Gaming.Input and GameInput send) or 0 means "until changed".
+   *
+   * @param report Output report written by the game through the HID stack.
+   * @return Milliseconds until the rumble should stop, or 0 for no automatic stop.
+   */
+  constexpr std::uint32_t rumble_duration_ms(const XGPAD_OUTPUT_REPORT &report) {
+    if (report.duration == 0xFF || report.duration == 0) {
+      return 0;
+    }
+    return (static_cast<std::uint32_t>(report.startDelay) + report.duration) * (static_cast<std::uint32_t>(report.loopCount) + 1u) * 10u;
+  }
+
+  /**
    * @brief Apply an output report (ID 0x03 payload) to the current rumble state.
    *
    * Motors whose enable bit is clear keep their previous strength.

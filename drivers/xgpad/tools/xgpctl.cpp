@@ -47,14 +47,13 @@ static std::atomic<bool> g_stop {false};
 
 static void WriteInput(Pad &pad, const XGPAD_INPUT_REPORT &r) {
   XGPAD_SHARED *s = pad.shared;
-  InterlockedIncrement(&s->inputSeq);  // odd
-  MemoryBarrier();
-  memcpy((void *) &s->input, &r, sizeof(r));
+  const long seq = s->inputCount + 1;  // single writer
+  memcpy((void *) &s->inputRing[(seq - 1) % XGPAD_INPUT_RING_SIZE], &r, sizeof(r));
   LARGE_INTEGER t;
   QueryPerformanceCounter(&t);
   s->inputQpc = t.QuadPart;
   MemoryBarrier();
-  long seq = InterlockedIncrement(&s->inputSeq);  // even
+  InterlockedExchange(&s->inputCount, seq);  // publish
   pad.pendingSeq = seq;
   pad.pendingQpc = t.QuadPart;
   SetEvent(pad.inputEvent);
@@ -88,8 +87,7 @@ static bool CreateObjects(Pad &pad, PSECURITY_DESCRIPTOR sd) {
   pad.shared = (XGPAD_SHARED *) MapViewOfFile(pad.section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(XGPAD_SHARED));
   memset(pad.shared, 0, sizeof(*pad.shared));
   pad.shared->magic = XGPAD_SHARED_MAGIC;
-  pad.shared->version = XGPAD_SHARED_VERSION;
-  pad.shared->input.lx = pad.shared->input.ly = pad.shared->input.rx = pad.shared->input.ry = 0x8000;
+  pad.shared->version = XGPAD_SHARED_VERSION;  // the driver starts from a neutral state
   swprintf_s(name, XGPAD_INPUT_EVENT_NAME_FMT, pad.token);
   pad.inputEvent = CreateEventW(&sa, FALSE, FALSE, name);
   swprintf_s(name, XGPAD_OUTPUT_EVENT_NAME_FMT, pad.token);

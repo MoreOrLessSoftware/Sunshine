@@ -51,6 +51,13 @@ static const HID_DESCRIPTOR g_HidDescriptor = {
 };
 
 #define INPUT_REPORT_SIZE (1 + sizeof(XGPAD_INPUT_REPORT))
+#define PENDING_QUEUE_SIZE 16
+
+// A report waiting for an IOCTL_HID_READ_REPORT, with the producer's report number (diagnostics).
+typedef struct PENDING_REPORT {
+  XGPAD_INPUT_REPORT report;
+  long seq;
+} PENDING_REPORT;
 
 typedef struct DEVICE_CONTEXT {
   WDFDEVICE device;
@@ -58,10 +65,12 @@ typedef struct DEVICE_CONTEXT {
   ULONG padIndex;
   wchar_t token[XGPAD_TOKEN_MAX];  // object name token (device property, or the pad index)
 
-  SRWLOCK lock;
-  UCHAR report[INPUT_REPORT_SIZE];  // latest input report incl. report ID
-  BOOLEAN reportPending;  // report not yet delivered to HID class
-  long reportSeq;
+  SRWLOCK lock;  // guards everything below up to 'section'
+  XGPAD_INPUT_REPORT current;  // latest state (IOCTL_UMDF_HID_GET_INPUT_REPORT)
+  PENDING_REPORT pending[PENDING_QUEUE_SIZE];  // reports not yet delivered to HID class, oldest first
+  ULONG pendingHead;
+  ULONG pendingCount;
+  long consumedCount;  // shared inputCount already taken from the ring
 
   HANDLE section;
   XGPAD_SHARED *shared;
@@ -95,11 +104,44 @@ static int64_t Qpc(void) {
   return t.QuadPart;
 }
 
-static void SetNeutralReport(UCHAR *report) {
+static XGPAD_INPUT_REPORT NeutralReport(void) {
   XGPAD_INPUT_REPORT r = {0};
-  r.lx = r.ly = r.rx = r.ry = 0x8000;
-  report[0] = XGPAD_INPUT_REPORT_ID;
-  memcpy(report + 1, &r, sizeof(r));
+  r.lx = r.rx = 0x8000;
+  r.ly = r.ry = 0x7FFF;
+  return r;
+}
+
+/** True when two reports differ in a digital control (buttons, D-pad or Share). */
+static BOOLEAN DigitalStateDiffers(const XGPAD_INPUT_REPORT *a, const XGPAD_INPUT_REPORT *b) {
+  return a->buttons != b->buttons || a->hat != b->hat || a->share != b->share;
+}
+
+/**
+ * Queue a report for HID class (lock held). Every digital change gets its own entry so presses and releases are
+ * never lost; analog-only changes update the newest undelivered entry so the queue never builds up stale stick
+ * positions (no added latency).
+ */
+static void EnqueueReport(DEVICE_CONTEXT *ctx, const XGPAD_INPUT_REPORT *report, long seq) {
+  ctx->current = *report;
+
+  if (ctx->pendingCount > 0) {
+    PENDING_REPORT *tail = &ctx->pending[(ctx->pendingHead + ctx->pendingCount - 1) % PENDING_QUEUE_SIZE];
+    if (!DigitalStateDiffers(&tail->report, report)) {
+      tail->report = *report;
+      tail->seq = seq;
+      return;
+    }
+  }
+
+  if (ctx->pendingCount == PENDING_QUEUE_SIZE) {
+    // HID class is not reading at all; keep the newest states
+    ctx->pendingHead = (ctx->pendingHead + 1) % PENDING_QUEUE_SIZE;
+    ctx->pendingCount--;
+  }
+  PENDING_REPORT *slot = &ctx->pending[(ctx->pendingHead + ctx->pendingCount) % PENDING_QUEUE_SIZE];
+  slot->report = *report;
+  slot->seq = seq;
+  ctx->pendingCount++;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -215,68 +257,79 @@ static void CloseSharedObjects(DEVICE_CONTEXT *ctx) {
 // ---------------------------------------------------------------------------------------------------------------
 // Input delivery
 
-/** Complete one pended read with the latest report, if both exist. */
+/** Complete pended reads with queued reports, oldest first, as long as both exist. */
 static void TryCompleteRead(DEVICE_CONTEXT *ctx) {
-  WDFREQUEST request = NULL;
-  UCHAR report[INPUT_REPORT_SIZE];
-  long seq = 0;
+  for (;;) {
+    WDFREQUEST request = NULL;
+    PENDING_REPORT entry;
 
-  AcquireSRWLockExclusive(&ctx->lock);
-  if (ctx->reportPending && NT_SUCCESS(WdfIoQueueRetrieveNextRequest(ctx->readQueue, &request))) {
-    memcpy(report, ctx->report, sizeof(report));
-    seq = ctx->reportSeq;
-    ctx->reportPending = FALSE;
-  }
-  ReleaseSRWLockExclusive(&ctx->lock);
-
-  if (!request) {
-    return;
-  }
-
-  void *buffer;
-  size_t length;
-  NTSTATUS status = WdfRequestRetrieveOutputBuffer(request, sizeof(report), &buffer, &length);
-  if (NT_SUCCESS(status)) {
-    memcpy(buffer, report, sizeof(report));
-    if (ctx->shared) {
-      ctx->shared->deliveredQpc = Qpc();
-      ctx->shared->deliveredSeq = seq;
-      InterlockedIncrement(&ctx->shared->readsCompleted);
+    AcquireSRWLockExclusive(&ctx->lock);
+    if (ctx->pendingCount == 0 || !NT_SUCCESS(WdfIoQueueRetrieveNextRequest(ctx->readQueue, &request))) {
+      ReleaseSRWLockExclusive(&ctx->lock);
+      return;
     }
-    WdfRequestCompleteWithInformation(request, STATUS_SUCCESS, sizeof(report));
-  } else {
-    WdfRequestComplete(request, status);
+    entry = ctx->pending[ctx->pendingHead];
+    ctx->pendingHead = (ctx->pendingHead + 1) % PENDING_QUEUE_SIZE;
+    ctx->pendingCount--;
+    ReleaseSRWLockExclusive(&ctx->lock);
+
+    UCHAR report[INPUT_REPORT_SIZE];
+    report[0] = XGPAD_INPUT_REPORT_ID;
+    memcpy(report + 1, &entry.report, sizeof(entry.report));
+
+    void *buffer;
+    size_t length;
+    NTSTATUS status = WdfRequestRetrieveOutputBuffer(request, sizeof(report), &buffer, &length);
+    if (NT_SUCCESS(status)) {
+      memcpy(buffer, report, sizeof(report));
+      XGPAD_SHARED *shared = ctx->shared;
+      if (shared) {
+        shared->deliveredQpc = Qpc();
+        shared->deliveredSeq = entry.seq;
+        InterlockedIncrement(&shared->readsCompleted);
+      }
+      WdfRequestCompleteWithInformation(request, STATUS_SUCCESS, sizeof(report));
+    } else {
+      WdfRequestComplete(request, status);
+    }
   }
 }
 
-/** Copy the producer's report out of shared memory (seqlock read). */
-static BOOLEAN ReadSharedInput(DEVICE_CONTEXT *ctx) {
+/** Move newly published reports from the shared ring into the pending queue, in order. */
+static void DrainSharedInput(DEVICE_CONTEXT *ctx) {
   XGPAD_SHARED *shared = ctx->shared;
-  XGPAD_INPUT_REPORT input;
-  long seq;
-
-  for (int attempt = 0; attempt < 1000; attempt++) {
-    seq = shared->inputSeq;
-    MemoryBarrier();
-    if (seq & 1) {
-      YieldProcessor();
-      continue;
-    }
-    memcpy(&input, (const void *) &shared->input, sizeof(input));
-    MemoryBarrier();
-    if (seq == shared->inputSeq) {
-      AcquireSRWLockExclusive(&ctx->lock);
-      BOOLEAN changed = seq != ctx->reportSeq;
-      if (changed) {
-        memcpy(ctx->report + 1, &input, sizeof(input));
-        ctx->reportSeq = seq;
-        ctx->reportPending = TRUE;
-      }
-      ReleaseSRWLockExclusive(&ctx->lock);
-      return changed;
-    }
+  if (!shared) {
+    return;
   }
-  return FALSE;
+
+  AcquireSRWLockExclusive(&ctx->lock);
+  const long available = shared->inputCount;
+  MemoryBarrier();
+
+  long next = ctx->consumedCount;
+  if (available < next) {
+    next = available;  // producer restarted its count
+  }
+  if ((unsigned long) (available - next) > XGPAD_INPUT_RING_SIZE) {
+    InterlockedAdd(&shared->inputOverruns, (long) (available - next - XGPAD_INPUT_RING_SIZE));
+    next = available - XGPAD_INPUT_RING_SIZE;
+  }
+
+  while (next < available) {
+    const long n = next + 1;
+    XGPAD_INPUT_REPORT report;
+    memcpy(&report, (const void *) &shared->inputRing[(n - 1) % XGPAD_INPUT_RING_SIZE], sizeof(report));
+    MemoryBarrier();
+    if ((unsigned long) (shared->inputCount - n) >= XGPAD_INPUT_RING_SIZE) {
+      // The producer lapped this slot while we copied it: the copy may be torn, skip it
+      InterlockedIncrement(&shared->inputOverruns);
+    } else {
+      EnqueueReport(ctx, &report, n);
+    }
+    next = n;
+  }
+  ctx->consumedCount = next;
+  ReleaseSRWLockExclusive(&ctx->lock);
 }
 
 static DWORD WINAPI WorkerThread(LPVOID param) {
@@ -294,7 +347,7 @@ static DWORD WINAPI WorkerThread(LPVOID param) {
       continue;
     }
 
-    ReadSharedInput(ctx);
+    DrainSharedInput(ctx);
     TryCompleteRead(ctx);
 
     // The timeout is only a safety net: reports are normally picked up on the event (or on the next
@@ -417,7 +470,7 @@ VOID XgpEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputLeng
         XGPAD_SHARED *shared = ctx->shared;
         if (shared) {
           InterlockedIncrement(&shared->readRequests);
-          ReadSharedInput(ctx);
+          DrainSharedInput(ctx);
         }
         TryCompleteRead(ctx);
         return;
@@ -442,8 +495,9 @@ VOID XgpEvtIoDeviceControl(WDFQUEUE queue, WDFREQUEST request, size_t outputLeng
       {
         // UMDF: report buffer = output buffer, report ID = input buffer length.
         UCHAR report[INPUT_REPORT_SIZE];
+        report[0] = XGPAD_INPUT_REPORT_ID;
         AcquireSRWLockShared(&ctx->lock);
-        memcpy(report, ctx->report, sizeof(report));
+        memcpy(report + 1, &ctx->current, sizeof(ctx->current));
         ReleaseSRWLockShared(&ctx->lock);
         status = inputLength == XGPAD_INPUT_REPORT_ID || inputLength == 0 ? CopyToOutput(request, report, sizeof(report), &information) :
                                                                               STATUS_INVALID_PARAMETER;
@@ -526,9 +580,10 @@ NTSTATUS XgpEvtDeviceAdd(WDFDRIVER driver, PWDFDEVICE_INIT deviceInit) {
   DEVICE_CONTEXT *ctx = GetDeviceContext(device);
   ctx->device = device;
   InitializeSRWLock(&ctx->lock);
-  SetNeutralReport(ctx->report);
-  ctx->reportPending = TRUE;
-  ctx->reportSeq = -1;
+  // Hand HID class a neutral state first; reports from the producer follow in order
+  const XGPAD_INPUT_REPORT neutral = NeutralReport();
+  EnqueueReport(ctx, &neutral, 0);
+  ctx->consumedCount = 0;
   ctx->padIndex = ParsePadIndex(device);
   QueryToken(device, ctx);
 

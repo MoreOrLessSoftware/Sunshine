@@ -140,6 +140,26 @@ TEST_F(XgpadReportTest, OutputReportAllMotors) {
   EXPECT_EQ(state.right_trigger, 16383);
 }
 
+TEST_F(XgpadReportTest, RumbleDuration) {
+  XGPAD_OUTPUT_REPORT report {};
+
+  // XInput / Windows.Gaming.Input / GameInput: continuous until changed
+  report.duration = 0xFF;
+  report.loopCount = 0xEB;
+  EXPECT_EQ(rumble_duration_ms(report), 0u);
+  report.duration = 0;
+  EXPECT_EQ(rumble_duration_ms(report), 0u);
+
+  // Finite effects: (start delay + duration) * (loops + 1), in 10 ms units
+  report.duration = 25;
+  report.startDelay = 0;
+  report.loopCount = 0;
+  EXPECT_EQ(rumble_duration_ms(report), 250u);
+  report.startDelay = 5;
+  report.loopCount = 2;
+  EXPECT_EQ(rumble_duration_ms(report), 900u);
+}
+
 TEST_F(XgpadReportTest, OutputReportKeepsDisabledMotors) {
   const rumble_state_t previous {1, 2, 3, 4};
   XGPAD_OUTPUT_REPORT report {};

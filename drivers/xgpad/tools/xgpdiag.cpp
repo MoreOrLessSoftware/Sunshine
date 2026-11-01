@@ -6,8 +6,8 @@
  *
  * <token> is logged by Sunshine ("Gamepad N will be Xbox Series controller (xgpad, token ...)").
  *
- * Prints producer/driver counters twice a second so a stall can be attributed to the producer (inputSeq not
- * moving), the driver (deliveredSeq lagging inputSeq) or HID class (readsCompleted not moving).
+ * Prints producer/driver counters twice a second so a stall can be attributed to the producer (inputCount not
+ * moving), the driver (deliveredSeq lagging inputCount) or HID class (readsCompleted not moving).
  */
 #define NOMINMAX
 #include <windows.h>
@@ -47,8 +47,10 @@ int main(int argc, char **argv) {
     QueryPerformanceCounter(&now);
     double sinceInput = (now.QuadPart - s->inputQpc) * 1000.0 / f.QuadPart;
     double sinceDelivered = (now.QuadPart - s->deliveredQpc) * 1000.0 / f.QuadPart;
-    printf("inputSeq=%ld deliveredSeq=%ld readsCompleted=%ld readRequests=%ld wakeups=%ld outputs=%ld btn=%04x | last write %.0f ms ago, last delivery %.0f ms ago\n",
-           s->inputSeq, s->deliveredSeq, s->readsCompleted, s->readRequests, s->workerWakeups, s->outputsReceived, s->input.buttons, sinceInput,
+    const long count = s->inputCount;
+    const unsigned btn = count > 0 ? s->inputRing[(count - 1) % XGPAD_INPUT_RING_SIZE].buttons : 0;
+    printf("inputCount=%ld deliveredSeq=%ld readsCompleted=%ld readRequests=%ld wakeups=%ld overruns=%ld outputs=%ld btn=%04x | last write %.0f ms ago, last delivery %.0f ms ago\n",
+           count, s->deliveredSeq, s->readsCompleted, s->readRequests, s->workerWakeups, s->inputOverruns, s->outputsReceived, btn, sinceInput,
            sinceDelivered);
     Sleep(500);
   }

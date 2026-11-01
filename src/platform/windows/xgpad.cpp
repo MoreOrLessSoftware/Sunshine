@@ -26,6 +26,7 @@
 #include <vector>
 
 // local includes
+#include "src/globals.h"
 #include "src/logging.h"
 #include "src/utility.h"
 #include "xgpad.h"
@@ -255,6 +256,8 @@ namespace platf::xgpad {
     std::uint8_t client_relative_index = 0;  ///< Controller number as known by the client.
     rumble_state_t rumble {};  ///< Last rumble state applied from the driver.
     rumble_state_t sent {};  ///< Last rumble state sent to the client.
+    thread_pool_util::ThreadPool::task_id_t rumble_stop_task = nullptr;  ///< Pending stop for a finite-duration rumble.
+    std::uint32_t rumble_generation = 0;  ///< Incremented per output report; stale stop tasks are ignored.
 
     /**
      * @brief Release all handles; the device must already be closed.
@@ -378,7 +381,7 @@ namespace platf::xgpad {
      * @brief Read a pad's latest output report and send changed rumble to the client.
      * @param pad Pad whose output event fired; the caller holds the lock.
      */
-    static void forward_rumble(pad_t &pad) {
+    void forward_rumble(pad_t &pad) {
       XGPAD_OUTPUT_REPORT report;
       long seq;
       do {
@@ -389,6 +392,48 @@ namespace platf::xgpad {
       } while ((seq & 1) || seq != pad.shared->outputSeq);
 
       pad.rumble = apply_output_report(report, pad.rumble);
+
+      // Finite-duration effects (games writing HID rumble directly) must stop on their own
+      ++pad.rumble_generation;
+      if (pad.rumble_stop_task) {
+        task_pool.cancel(pad.rumble_stop_task);
+        pad.rumble_stop_task = nullptr;
+      }
+      if (const auto duration_ms = rumble_duration_ms(report); duration_ms > 0) {
+        pad.rumble_stop_task = task_pool
+                                 .pushDelayed(
+                                   [this, slot = pad.index, generation = pad.rumble_generation]() {
+                                     stop_rumble(slot, generation);
+                                   },
+                                   std::chrono::milliseconds(duration_ms)
+                                 )
+                                 .task_id;
+      }
+
+      send_rumble(pad);
+    }
+
+    /**
+     * @brief Stop a finite-duration rumble once it has played out.
+     * @param slot Pad slot.
+     * @param generation Rumble generation the stop was scheduled for.
+     */
+    void stop_rumble(const unsigned slot, const std::uint32_t generation) {
+      std::lock_guard lock {mutex};
+      auto &pad = pads[slot];
+      if (!pad || pad->rumble_generation != generation) {
+        return;  // pad removed or a newer rumble replaced this one
+      }
+      pad->rumble_stop_task = nullptr;
+      pad->rumble = {};
+      send_rumble(*pad);
+    }
+
+    /**
+     * @brief Send changed rumble state to the client; the caller holds the lock.
+     * @param pad Pad whose rumble state changed.
+     */
+    static void send_rumble(pad_t &pad) {
       if (!pad.feedback_queue) {
         return;
       }
@@ -420,20 +465,23 @@ namespace platf::xgpad {
     }
 
     /**
-     * @brief Write an input report into a pad's shared memory (seqlock) and wake the driver.
+     * @brief Append an input report to a pad's shared ring and wake the driver.
+     *
+     * Every report is kept (up to XGPAD_INPUT_RING_SIZE outstanding), so short button presses survive even when
+     * several reports arrive before HID class reads the next one.
+     *
      * @param pad Target pad.
      * @param report Input report payload.
      */
     void write_input(pad_t &pad, const XGPAD_INPUT_REPORT &report) {
       XGPAD_SHARED *shared = pad.shared;
-      InterlockedIncrement(&shared->inputSeq);  // odd: write in progress
-      MemoryBarrier();
-      std::memcpy(const_cast<XGPAD_INPUT_REPORT *>(&shared->input), &report, sizeof(report));
+      const long count = shared->inputCount + 1;  // single writer (the input thread)
+      std::memcpy(const_cast<XGPAD_INPUT_REPORT *>(&shared->inputRing[(count - 1) % XGPAD_INPUT_RING_SIZE]), &report, sizeof(report));
       LARGE_INTEGER now;
       QueryPerformanceCounter(&now);
       shared->inputQpc = now.QuadPart;
       MemoryBarrier();
-      InterlockedIncrement(&shared->inputSeq);  // even: complete
+      InterlockedExchange(&shared->inputCount, count);  // publish
       SetEvent(pad.input_event);
     }
 
@@ -469,9 +517,7 @@ namespace platf::xgpad {
 
       std::memset(pad.shared, 0, sizeof(*pad.shared));
       pad.shared->magic = XGPAD_SHARED_MAGIC;
-      pad.shared->version = XGPAD_SHARED_VERSION;
-      const auto neutral = make_input_report(gamepad_state_t {});
-      std::memcpy(const_cast<XGPAD_INPUT_REPORT *>(&pad.shared->input), &neutral, sizeof(neutral));
+      pad.shared->version = XGPAD_SHARED_VERSION;  // the driver starts from a neutral state on its own
       return true;
     }
 
@@ -726,6 +772,10 @@ namespace platf::xgpad {
         return;
       }
       pad = std::move(context.pads[nr]);
+      if (pad->rumble_stop_task) {
+        task_pool.cancel(pad->rumble_stop_task);
+        pad->rumble_stop_task = nullptr;
+      }
     }
     SetEvent(context.wake_event);
     if (pad->device) {

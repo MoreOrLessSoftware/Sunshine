@@ -6,13 +6,18 @@
  * The producer (Sunshine) creates the section and events *before* creating the device, so the driver can open
  * them when it starts.
  *
- * Input path:  producer writes XGPAD_INPUT_REPORT into Input under the InputSeq seqlock, then sets the input event.
- *              The driver wakes up and completes the pending IOCTL_HID_READ_REPORT with report ID 0x01.
+ * Input path:  the producer appends every XGPAD_INPUT_REPORT to the inputRing (single writer), publishes it by
+ *              incrementing inputCount, then sets the input event. The driver drains the ring in order and
+ *              completes pended IOCTL_HID_READ_REPORT requests (report ID 0x01). Nothing is lost unless the driver
+ *              falls more than XGPAD_INPUT_RING_SIZE reports behind.
  * Output path: the driver receives HID output report 0x03 (rumble incl. impulse triggers), writes it into Output
  *              under the OutputSeq seqlock, then sets the output event.
  *
- * Seqlock protocol (single writer per direction): seq becomes odd, data is written, seq becomes even.
- * Readers retry while seq is odd or changed across the copy.
+ * Input ring: report n (1-based) lives in inputRing[(n - 1) % XGPAD_INPUT_RING_SIZE]. A reader that copied report n
+ * must re-check inputCount afterwards: if it advanced by XGPAD_INPUT_RING_SIZE or more, the copy may be torn.
+ *
+ * Output seqlock (single writer): seq becomes odd, data is written, seq becomes even. Readers retry while seq is odd
+ * or changed across the copy.
  */
 #pragma once
 
@@ -20,7 +25,8 @@
 
 #define XGPAD_MAX_PADS 16
 #define XGPAD_SHARED_MAGIC 0x44415047u  // 'GPAD'
-#define XGPAD_SHARED_VERSION 2u
+#define XGPAD_SHARED_VERSION 3u
+#define XGPAD_INPUT_RING_SIZE 16u
 
 // Object names; %ls = per-device token. The producer generates a fresh token for every device it creates and
 // passes it to the driver through the XGPAD_TOKEN_PROPKEY device property, so a stale or second driver
@@ -108,21 +114,22 @@ typedef struct XGPAD_SHARED {
   uint32_t magic;  ///< XGPAD_SHARED_MAGIC, written by the producer
   uint32_t version;  ///< XGPAD_SHARED_VERSION, written by the producer
 
-  volatile long inputSeq;
-  XGPAD_INPUT_REPORT input;
-  int64_t inputQpc;  ///< producer QueryPerformanceCounter at write time (diagnostics)
+  volatile long inputCount;  ///< number of input reports published so far
+  XGPAD_INPUT_REPORT inputRing[XGPAD_INPUT_RING_SIZE];  ///< report n at index (n - 1) % XGPAD_INPUT_RING_SIZE
+  int64_t inputQpc;  ///< producer QueryPerformanceCounter when the latest report was published (diagnostics)
 
   volatile long outputSeq;
   XGPAD_OUTPUT_REPORT output;
   int64_t outputQpc;  ///< driver QPC when the output report arrived
 
   volatile long driverStatus;  ///< XGPAD_STATUS_*
-  volatile long deliveredSeq;  ///< inputSeq of the last report handed to HID class
+  volatile long deliveredSeq;  ///< inputCount value of the last report handed to HID class
   int64_t deliveredQpc;  ///< driver QPC when that report completed a read request
   volatile long readsCompleted;
   volatile long outputsReceived;
   volatile long workerWakeups;  ///< driver worker woke on the input event (diagnostics)
   volatile long readRequests;  ///< IOCTL_HID_READ_REPORT requests received from HID class (diagnostics)
+  volatile long inputOverruns;  ///< reports lost because the driver fell a full ring behind (diagnostics)
 } XGPAD_SHARED;
 
 #ifdef __cplusplus
