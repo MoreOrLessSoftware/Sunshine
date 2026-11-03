@@ -704,6 +704,11 @@ namespace stream {
     return requested >= 0 && requested <= 255 ? requested : host_default;
   }
 
+  int session_video_send_rate(int requested, int host_default) {
+    // The same range the host's own setting allows
+    return requested >= 100 && requested <= 100000 ? requested : host_default;
+  }
+
   /**
    * @brief Parse a control message from an ENet packet.
    *
@@ -1780,9 +1785,10 @@ namespace stream {
       auto blocksize = session->config.packetsize + MAX_RTP_HEADER_SIZE;
       auto lowseq = session->video.lowseq;
 
-      // Send at the configured rate, 800 Mbps (80% of gigabit) by default
+      // Send at the session's rate: the client's request, or the host's video_send_rate,
+      // 800 Mbps (80% of gigabit) by default
       //                                Mbps -> bytes per ms                    packet
-      size_t ratecontrol_packets_in_1ms = std::max<size_t>(1, (size_t) config::stream.video_send_rate * 1'000'000 / 8 / 1000 / blocksize);
+      size_t ratecontrol_packets_in_1ms = std::max<size_t>(1, (size_t) video::send_rate_mbps(session->config.monitor, config::stream.video_send_rate) * 1'000'000 / 8 / 1000 / blocksize);
 
       // Send less than 64K in a single batch.
       // On Windows, batches above 64K seem to bypass SO_SNDBUF regardless of its size,

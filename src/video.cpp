@@ -3053,7 +3053,7 @@ namespace video {
     bool limit_logged = false;
     if (config::video.low_fps_bitrate_boost > 1.0) {
       const AVRational fps = framerate_to_rational(config);
-      bitrate_booster.emplace(config.bitrate, av_q2d(fps), config::video.low_fps_bitrate_boost, config::stream.video_send_rate);
+      bitrate_booster.emplace(config.bitrate, av_q2d(fps), config::video.low_fps_bitrate_boost, send_rate_mbps(config, config::stream.video_send_rate));
     }
 
     auto shutdown_event = mail->event<bool>(mail::shutdown);

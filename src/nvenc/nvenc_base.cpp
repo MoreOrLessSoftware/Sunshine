@@ -602,7 +602,7 @@ namespace NVENC_NAMESPACE {
     if (config::video.low_fps_bitrate_boost > 1.0 && client_config.bitrate > 0 && (client_config.videoFormat == 0 || client_config.videoFormat == 1)) {
       const AVRational fps = video::framerate_to_rational(client_config);
       const double stream_fps = static_cast<double>(fps.num) / std::max(fps.den, 1);
-      const auto factor = video::bitrate::max_boost_factor(stream_fps, config::video.low_fps_bitrate_boost, client_config.bitrate, config::stream.video_send_rate);
+      const auto factor = video::bitrate::max_boost_factor(stream_fps, config::video.low_fps_bitrate_boost, client_config.bitrate, video::send_rate_mbps(client_config, config::stream.video_send_rate));
       headroom_kbps = static_cast<uint32_t>(std::min<double>(std::round(client_config.bitrate * factor), max_level_bitrate_kbps));
     }
 

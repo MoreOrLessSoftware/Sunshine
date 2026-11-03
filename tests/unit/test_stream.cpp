@@ -23,6 +23,7 @@ namespace stream {
   std::vector<uint8_t> concat_and_insert(uint64_t insert_size, uint64_t slice_size, const std::string_view &data1, const std::string_view &data2);
   std::optional<std::pair<std::uint16_t, std::string_view>> parse_control_packet(const ENetPacket &packet);
   int session_fec_percentage(int requested, int host_default);
+  int session_video_send_rate(int requested, int host_default);
 }  // namespace stream
 
 TEST(SessionFecPercentageTests, UsesTheHostsWhenTheClientDoesNotAsk) {
@@ -40,6 +41,21 @@ TEST(SessionFecPercentageTests, AllowsTheClientToTurnFecOff) {
 
 TEST(SessionFecPercentageTests, IgnoresRequestsAboveTheHostsRange) {
   EXPECT_EQ(stream::session_fec_percentage(256, 20), 20);
+}
+
+TEST(SessionVideoSendRateTests, UsesTheHostsWhenTheClientDoesNotAsk) {
+  EXPECT_EQ(stream::session_video_send_rate(0, 800), 800);
+}
+
+TEST(SessionVideoSendRateTests, UsesTheClientsRequest) {
+  EXPECT_EQ(stream::session_video_send_rate(100, 800), 100);
+  EXPECT_EQ(stream::session_video_send_rate(400, 800), 400);
+  EXPECT_EQ(stream::session_video_send_rate(100000, 800), 100000);
+}
+
+TEST(SessionVideoSendRateTests, IgnoresRequestsOutsideTheHostsRange) {
+  EXPECT_EQ(stream::session_video_send_rate(99, 800), 800);
+  EXPECT_EQ(stream::session_video_send_rate(100001, 800), 800);
 }
 
 TEST(ConcatAndInsertTests, ConcatNoInsertionTest) {

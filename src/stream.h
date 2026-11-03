@@ -51,6 +51,15 @@ namespace stream {
    */
   int session_fec_percentage(int requested, int host_default);
 
+  /**
+   * @brief Choose the video send rate for a session.
+   *
+   * @param requested Rate in Mbps the client asked for, or 0 if it didn't ask.
+   * @param host_default The host's video_send_rate.
+   * @return The client's request when it is in the range the host's own setting allows (100 to 100000), otherwise the host's.
+   */
+  int session_video_send_rate(int requested, int host_default);
+
   namespace session {
     /**
      * @brief Enumerates supported state options.

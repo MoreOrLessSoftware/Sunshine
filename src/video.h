@@ -47,6 +47,7 @@ namespace video {
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
     int pyrowavePacketPayload;  ///< PyroWave in record framing: frame bytes per packet, which records are laid out on (see pyrowave_records.h). 0 sends frames as encoded.
     int framerateUhz;  ///< Optional exact framerate in microhertz, e.g. 71.8317 as 71831700, finer than framerateX100. 0 when not provided.
+    int sendRateMbps;  ///< Rate each frame's packets are sent at for this session: the client's request, or the host's video_send_rate. 0 when not set, which means the host's.
   };
 
   namespace amf {
@@ -989,6 +990,17 @@ namespace video {
       return framerateX100_to_rational(config.framerateX100);
     }
     return AVRational {config.framerate, 1};
+  }
+
+  /**
+   * @brief Video send rate in effect for a stream.
+   *
+   * @param config Stream configuration carrying the session's rate, if it has one.
+   * @param host_default The host's video_send_rate.
+   * @return The session's rate in Mbps, or host_default when it has none.
+   */
+  inline int send_rate_mbps(const config_t &config, int host_default) {
+    return config.sendRateMbps > 0 ? config.sendRateMbps : host_default;
   }
 
   /**
