@@ -493,6 +493,8 @@ namespace nvhttp {
     }
     // Optional exact frame rate (e.g. 5994 for 59.94), so prep commands and display configuration can use it
     launch_session->fps_x100 = std::max(0, (int) util::from_view(get_arg(args, "clientRefreshRateX100", "0")));
+    // The same to a millionth of a hertz, from Moonlight forks that match the host to their display
+    launch_session->fps_uhz = std::max(0, (int) util::from_view(get_arg(args, "clientRefreshRateUhz", "0")));
     launch_session->unique_id = (get_arg(args, "uniqueid", "unknown"));
     launch_session->appid = (int) util::from_view(get_arg(args, "appid", "unknown"));
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));

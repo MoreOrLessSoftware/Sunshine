@@ -1146,6 +1146,7 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
+    args.try_emplace("x-ml-video.clientRefreshRateUhz"sv, "0"sv);
     args.try_emplace("x-ss-video[0].pyrowaveFeatures"sv, "0"sv);
 
     stream::config_t config;
@@ -1196,6 +1197,7 @@ namespace rtsp_stream {
       config.monitor.width = (int) util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
       config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));
       config.monitor.framerateX100 = std::max(0, (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv)));
+      config.monitor.framerateUhz = std::max(0, (int) util::from_view(args.at("x-ml-video.clientRefreshRateUhz"sv)));
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
       config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));

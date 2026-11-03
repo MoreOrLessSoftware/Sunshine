@@ -32,6 +32,7 @@ namespace rtsp_stream {
     int height;  ///< Frame or display height in pixels.
     int fps;  ///< Requested video frame rate.
     int fps_x100;  ///< Optional exact requested frame rate multiplied by 100 (e.g. 5994 for 59.94), or 0 when not provided. Not validated against `fps`.
+    int fps_uhz;  ///< Optional exact requested frame rate in microhertz (e.g. 71831700 for 71.8317), finer than `fps_x100`, or 0 when not provided. Not validated against `fps`.
     int gcmap;  ///< Game controller mapping requested by the client.
     int appid;  ///< Application ID requested for launch or resume.
     int surround_info;  ///< Encoded GameStream surround-sound capability flags.

@@ -6,6 +6,7 @@
 
 // standard includes
 #include <chrono>
+#include <climits>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -45,6 +46,7 @@ namespace video {
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
     int pyrowavePacketPayload;  ///< PyroWave in record framing: frame bytes per packet, which records are laid out on (see pyrowave_records.h). 0 sends frames as encoded.
+    int framerateUhz;  ///< Optional exact framerate in microhertz, e.g. 71.8317 as 71831700, finer than framerateX100. 0 when not provided.
   };
 
   namespace amf {
@@ -968,13 +970,21 @@ namespace video {
 
   /**
    * @brief Requested framerate as an exact rational.
-   * Uses the exact fractional rate when the client provided an X100 value,
+   * Uses the client's microhertz value if it sent one, then its X100 value,
    * otherwise the integer framerate over 1.
    *
    * @param config Stream configuration carrying the requested framerate.
    * @return Requested frame rate as a rational.
    */
   inline AVRational framerate_to_rational(const config_t &config) {
+    if (config.framerateUhz > 0) {
+      // A client matching its display asks for rates like 71.8317, which hundredths would leave
+      // up to 70 ppm off: enough for frames to drift a whole vsync against its display every
+      // few minutes
+      AVRational fps;
+      av_reduce(&fps.num, &fps.den, config.framerateUhz, 1'000'000, INT_MAX);
+      return fps;
+    }
     if (config.framerateX100 > 0) {
       return framerateX100_to_rational(config.framerateX100);
     }
@@ -983,7 +993,7 @@ namespace video {
 
   /**
    * @brief Capture frame interval for the requested framerate.
-   * Uses the exact fractional rate when the client provided an X100 value.
+   * Uses the exact fractional rate when the client provided a microhertz or X100 value.
    *
    * @param config Stream configuration carrying the requested framerate.
    * @return Duration of a single frame interval in nanoseconds.

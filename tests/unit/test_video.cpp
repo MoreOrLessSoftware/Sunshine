@@ -350,6 +350,31 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 /**
+ * @brief A microhertz rate takes precedence over X100 and is kept to the microhertz.
+ */
+TEST(FramerateUhz, PrefersMicrohertz) {
+  video::config_t config {};
+  config.framerate = 72;
+  config.framerateX100 = 7183;
+  config.framerateUhz = 71831700;
+  const AVRational fps = video::framerate_to_rational(config);
+  ASSERT_EQ(0, av_cmp_q(fps, AVRational {718317, 10000})) << fps.num << "/" << fps.den;
+  ASSERT_EQ(std::chrono::nanoseconds {13921430}, video::capture_frame_interval(config));  // 1e9 * 10000 / 718317
+}
+
+/**
+ * @brief Microhertz rates reduce to their lowest terms.
+ */
+TEST(FramerateUhz, ReducesWholeRates) {
+  video::config_t config {};
+  config.framerate = 60;
+  config.framerateUhz = 60000000;
+  ASSERT_EQ(0, av_cmp_q(video::framerate_to_rational(config), AVRational {60, 1}));
+  config.framerateUhz = 143655000;
+  ASSERT_EQ(0, av_cmp_q(video::framerate_to_rational(config), AVRational {28731, 200}));
+}
+
+/**
  * @brief Software encoder converts BGR0 and NV12 frames, including padded strides and
  *        backends that don't report the pixel pitch.
  */
