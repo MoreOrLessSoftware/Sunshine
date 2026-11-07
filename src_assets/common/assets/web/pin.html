@@ -55,6 +55,54 @@
       </div>
       <div v-if="status" :class="`alert alert-${status.type}`" role="alert">{{ status.message }}</div>
     </form>
+    <!-- Paired Clients -->
+    <div class="card my-4">
+      <div class="card-body">
+        <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
+          <h2 id="unpair" class="mb-0">{{ $t('troubleshooting.unpair_title') }}</h2>
+          <button class="btn btn-danger" :disabled="unpairAllPressed || clients.length === 0" @click="unpairAll">
+            <trash-2 :size="18" class="icon"></trash-2>
+            {{ $t('troubleshooting.unpair_all') }}
+          </button>
+        </div>
+        <p>{{ $t('troubleshooting.unpair_desc') }}</p>
+        <div class="alert alert-success d-flex align-items-center" v-if="showUnpairMessage">
+          <check-circle :size="18" class="icon"></check-circle>
+          <div><b>{{ $t('_common.success') }}</b> {{ $t('pin.unpair_single_success') }}</div>
+          <button class="btn btn-success ms-auto" @click="showUnpairMessage = false">{{ $t('_common.dismiss') }}</button>
+        </div>
+        <div class="alert alert-success" v-if="unpairAllStatus === true">
+          <check-circle :size="18" class="icon"></check-circle>
+          {{ $t('troubleshooting.unpair_all_success') }}
+        </div>
+        <div class="alert alert-danger" v-if="unpairAllStatus === false">
+          <alert-circle :size="18" class="icon"></alert-circle>
+          {{ $t('troubleshooting.unpair_all_error') }}
+        </div>
+      </div>
+      <ul class="list-group list-group-flush" v-if="clients.length > 0">
+        <li v-for="client in clients" :key="client.uuid" class="list-group-item d-flex align-items-center">
+          <div class="flex-grow-1 text-break">
+            {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
+          </div>
+          <div class="form-check form-switch ms-2 mb-0">
+            <input class="form-check-input" type="checkbox" role="switch"
+                   :id="'toggle-' + client.uuid"
+                   :checked="client.enabled"
+                   :aria-checked="client.enabled.toString()"
+                   @change="toggleClient(client.uuid, !client.enabled)">
+          </div>
+          <button class="btn btn-danger btn-sm ms-2" @click="unpairSingle(client.uuid)">
+            <trash-2 :size="18" class="icon"></trash-2>
+          </button>
+        </li>
+      </ul>
+      <ul v-else class="list-group list-group-flush">
+        <li class="list-group-item p-3 text-center">
+          <em>{{ $t('troubleshooting.unpair_single_no_devices') }}</em>
+        </li>
+      </ul>
+    </div>
   </div>
 </body>
 
@@ -64,9 +112,12 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import {
+    AlertCircle,
+    CheckCircle,
     Forward,
     Hash,
     Monitor,
+    Trash2,
     UserRoundSearch,
     X,
   } from '@lucide/vue'
@@ -74,26 +125,34 @@
   let app = createApp({
     components: {
       Navbar,
+      AlertCircle,
+      CheckCircle,
       Forward,
       Hash,
       Monitor,
+      Trash2,
       UserRoundSearch,
       X,
     },
     inject: ['i18n'],
     data() {
       return {
+        clients: [],
         name: '',
         pendingPairings: [],
         pin: '',
         refreshTimer: null,
         selectedPairingId: '',
+        showUnpairMessage: false,
         status: null,
+        unpairAllPressed: false,
+        unpairAllStatus: null,
       };
     },
     mounted() {
       this.loadPendingPairings();
       this.refreshTimer = window.setInterval(() => this.loadPendingPairings(), 2000);
+      this.refreshClients();
     },
     beforeUnmount() {
       window.clearInterval(this.refreshTimer);
@@ -147,6 +206,7 @@
           this.status = {type: 'success', message: this.i18n.t('pin.pair_success')};
           this.pin = '';
           this.name = '';
+          await this.refreshClients();
         } else {
           this.status = {type: 'danger', message: this.i18n.t('pin.pair_failure')};
         }
@@ -173,6 +233,81 @@
           ? {type: 'success', message: this.i18n.t('pin.cancel_success')}
           : {type: 'danger', message: this.i18n.t('pin.cancel_failure')};
         await this.loadPendingPairings();
+      },
+
+      /**
+       * Load the paired clients, sorted by name with unnamed ones last.
+       */
+      async refreshClients() {
+        try {
+          const response = await apiFetch('./api/clients/list', {method: 'GET'});
+          const body = await response.json();
+          this.clients = body.status === true && body.named_certs
+            ? body.named_certs.sort((a, b) => (a.name.toLowerCase() > b.name.toLowerCase() || a.name === '' ? 1 : -1))
+            : [];
+        } catch (error) {
+          console.error('Failed to load paired clients', error);
+          this.clients = [];
+        }
+      },
+
+      /**
+       * Unpair every client.
+       */
+      async unpairAll() {
+        this.unpairAllPressed = true;
+        try {
+          const response = await apiFetch('./api/clients/unpair-all', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          });
+          const result = await response.json();
+          this.unpairAllStatus = result.status;
+        } catch (error) {
+          console.error('Failed to unpair all clients', error);
+          this.unpairAllStatus = false;
+        }
+        this.unpairAllPressed = false;
+        setTimeout(() => {
+          this.unpairAllStatus = null;
+        }, 5000);
+        await this.refreshClients();
+      },
+
+      /**
+       * Unpair one client.
+       *
+       * @param {string} uuid The client's UUID.
+       */
+      async unpairSingle(uuid) {
+        await apiFetch('./api/clients/unpair', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({uuid}),
+        });
+        this.showUnpairMessage = true;
+        await this.refreshClients();
+      },
+
+      /**
+       * Enable or disable one client.
+       *
+       * @param {string} uuid The client's UUID.
+       * @param {boolean} enabled Whether the client may connect.
+       */
+      async toggleClient(uuid, enabled) {
+        await apiFetch('./api/clients/update', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({uuid, enabled}),
+        });
+        await this.refreshClients();
       }
     }
   });

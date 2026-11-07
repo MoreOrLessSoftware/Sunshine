@@ -583,6 +583,7 @@
     "send": "Send",
     "unknown_address": "Unknown address",
     "unknown_device": "Unknown device",
+    "unpair_single_success": "However, the device may still be in an active session. Use 'Force Close' on the Troubleshooting page to end any open sessions.",
     "warning_msg": "Make sure you have access to the client you are pairing with. This software can give total control to your computer, so be careful!"
   },
   "resource_card": {
@@ -641,7 +642,6 @@
     "unpair_all_success": "All devices unpaired.",
     "unpair_desc": "Remove your paired devices. Individually unpaired devices with an active session will remain connected, but cannot start or resume a session.",
     "unpair_single_no_devices": "There are no paired devices.",
-    "unpair_single_success": "However, the device(s) may still be in an active session. Use the 'Force Close' button above to end any open sessions.",
     "unpair_single_unknown": "Unknown Client",
     "unpair_title": "Unpair Devices",
     "vigembus_driver": "ViGEmBus Driver",
