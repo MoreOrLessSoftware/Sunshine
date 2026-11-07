@@ -25,6 +25,9 @@
 #ifdef _WIN32
   // fopen() interprets the filename as an ANSI string on Windows, so we use _wfsopen() instead.
   #include <share.h>
+
+  #include <boost/winapi/process.hpp>
+  #include <boost/winapi/wait.hpp>
 #endif
 
 using namespace std::literals;
@@ -496,6 +499,13 @@ namespace plugins {
       while (child.running(ec) && !ec) {
         if (stop.stop_requested()) {
           BOOST_LOG(warning) << "Stopping ["sv << command << ']';
+#ifdef _WIN32
+          // child.terminate() closes the process handle without waiting for the asynchronous exit, so
+          // terminate and wait here: the script must release its log and working directory before returning.
+          if (boost::winapi::TerminateProcess(child.native_handle(), 1)) {
+            boost::winapi::WaitForSingleObject(child.native_handle(), 5000);
+          }
+#endif
           child.terminate(ec);
           return -1;
         }
