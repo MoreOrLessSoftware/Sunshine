@@ -147,6 +147,25 @@ namespace amf_direct {
   std::size_t obu_bytes(const std::uint8_t *data, std::size_t size, bool through_first_tile = false);
 
   /**
+   * @brief Tiles an AV1 tile group OBU carries, or a frame OBU, whose tiles aren't read.
+   */
+  struct tile_group_t {
+    int start;  ///< First tile, -1 for a frame OBU.
+    int end;  ///< Last tile, -1 for a frame OBU.
+  };
+
+  /**
+   * @brief The tile groups in an AV1 bitstream, to check that a frame sent all its tiles.
+   *
+   * @param data The bitstream.
+   * @param size Size of the bitstream in bytes.
+   * @param tile_bits Bits that number a tile: log2 of the tile count, which must be a power of two.
+   * @return The tile groups and frame OBUs in order, up to the first byte that doesn't start an
+   *         OBU with a size field.
+   */
+  std::vector<tile_group_t> tile_groups(const std::uint8_t *data, std::size_t size, int tile_bits);
+
+  /**
    * @brief Describe the OBUs in an AV1 bitstream, for the log.
    *
    * @param data The bitstream.

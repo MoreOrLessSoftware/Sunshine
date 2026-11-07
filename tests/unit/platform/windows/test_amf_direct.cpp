@@ -169,6 +169,41 @@ TEST(AmfObuBytesTest, IsZeroForAnEmptyBuffer) {
   EXPECT_EQ(amf_direct::obu_bytes(nullptr, 0), 0u);
 }
 
+TEST(AmfTileGroupsTest, ReadsTheTileRange) {
+  // Of 4 tiles: the flag, then tg_start 2 (10) and tg_end 3 (11), as 1 10 11 000
+  const std::vector<std::uint8_t> data {0x22, 0x02, 0xD8, 0xAA};
+  const auto groups = amf_direct::tile_groups(data.data(), data.size(), 2);
+  ASSERT_EQ(groups.size(), 1u);
+  EXPECT_EQ(groups[0].start, 2);
+  EXPECT_EQ(groups[0].end, 3);
+}
+
+TEST(AmfTileGroupsTest, TakesAllTilesWithoutTheFlag) {
+  const std::vector<std::uint8_t> data {0x22, 0x01, 0x00};
+  const auto groups = amf_direct::tile_groups(data.data(), data.size(), 2);
+  ASSERT_EQ(groups.size(), 1u);
+  EXPECT_EQ(groups[0].start, 0);
+  EXPECT_EQ(groups[0].end, 3);
+}
+
+TEST(AmfTileGroupsTest, SkipsOtherObusAndStopsAtLeftoverBytes) {
+  // Temporal delimiter, frame header of 1 byte, tile 0 of 4, tile 1 of 4, then zero bytes
+  const std::vector<std::uint8_t> data {0x12, 0x00, 0x1A, 0x01, 0xCC, 0x22, 0x02, 0x80, 0xAA, 0x22, 0x02, 0xA8, 0xBB, 0, 0};
+  const auto groups = amf_direct::tile_groups(data.data(), data.size(), 2);
+  ASSERT_EQ(groups.size(), 2u);
+  EXPECT_EQ(groups[0].start, 0);
+  EXPECT_EQ(groups[0].end, 0);
+  EXPECT_EQ(groups[1].start, 1);
+  EXPECT_EQ(groups[1].end, 1);
+}
+
+TEST(AmfTileGroupsTest, MarksAFrameObuAsUnknown) {
+  const std::vector<std::uint8_t> data {0x32, 0x01, 0x00};
+  const auto groups = amf_direct::tile_groups(data.data(), data.size(), 2);
+  ASSERT_EQ(groups.size(), 1u);
+  EXPECT_EQ(groups[0].start, -1);
+}
+
 TEST(AmfPartTimingTest, DescribesNoFrames) {
   const amf_direct::part_timing_t timing;
   EXPECT_EQ(timing.frames(), 0u);

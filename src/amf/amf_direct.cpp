@@ -7,6 +7,7 @@
 
 // standard includes
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <format>
 
@@ -129,6 +130,61 @@ namespace amf_direct {
       }
     }
     return end;
+  }
+
+  std::vector<tile_group_t> tile_groups(const std::uint8_t *data, std::size_t size, int tile_bits) {
+    std::vector<tile_group_t> groups;
+    std::size_t offset = 0;
+    while (offset < size) {
+      const auto header = data[offset];
+      if ((header & 0x80) || ((header >> 3) & 0x0F) == 0 || !(header & 0x02)) {
+        break;
+      }
+
+      std::size_t start = offset + 1 + ((header & 0x04) ? 1 : 0);
+      std::uint64_t payload = 0;
+      int shift = 0;
+      bool size_read = false;
+      while (start < size && shift <= 56) {
+        const auto byte = data[start++];
+        payload |= static_cast<std::uint64_t>(byte & 0x7F) << shift;
+        shift += 7;
+        if (!(byte & 0x80)) {
+          size_read = true;
+          break;
+        }
+      }
+      if (!size_read || start > size || payload > size - start) {
+        break;
+      }
+
+      const auto type = (header >> 3) & 0x0F;
+      if (type == 6) {
+        groups.push_back({-1, -1});
+      } else if (type == 4) {
+        // tile_start_and_end_present_flag, then tg_start and tg_end of tile_bits each, read
+        // from the most significant bit. One tile, or no flag, means all the tiles.
+        const auto last = (1 << tile_bits) - 1;
+        tile_group_t group {0, last};
+        if (tile_bits > 0 && payload > 0 && (data[start] & 0x80)) {
+          std::size_t bit = 1;
+          auto read = [&](int bits) {
+            int value = 0;
+            for (int i = 0; i < bits; ++i, ++bit) {
+              const auto byte = bit / 8;
+              const auto bit_value = byte < payload ? (data[start + byte] >> (7 - bit % 8)) & 1 : 0;
+              value = (value << 1) | bit_value;
+            }
+            return value;
+          };
+          group.start = read(tile_bits);
+          group.end = read(tile_bits);
+        }
+        groups.push_back(group);
+      }
+      offset = start + payload;
+    }
+    return groups;
   }
 
   std::string describe_obus(const std::uint8_t *data, std::size_t size) {
@@ -615,6 +671,9 @@ namespace amf_direct {
     std::int64_t duration = 0;  ///< Frame duration in AMF's 100 ns units.
     int frames_described = 0;  ///< Frames whose bitstream was described in the log.
     std::size_t leftover_obus = 0;  ///< AV1 tile buffers whose leftover bytes looked like OBUs, since the last timing line.
+    int tile_bits = -1;  ///< Bits that number an AV1 tile, -1 where the tiles aren't checked.
+    std::size_t incomplete_frames = 0;  ///< AV1 frames sent without all their tiles, since the last timing line.
+    std::size_t incomplete_logged = 0;  ///< AV1 frames sent without all their tiles that were described in the log.
 
     ~impl_t() {
       surface = nullptr;
@@ -810,6 +869,17 @@ namespace amf_direct {
     amf_int64 parts = 1;
     encoder->GetProperty(p.parts_per_frame, &parts);
     state->parts = static_cast<int>(std::max<amf_int64>(parts, 1));
+
+    // With tiles handed over one by one, each frame is checked for all of them. A frame missing
+    // one can't be decoded, and FFmpeg's AV1 decoder drops it without an error. Tile numbers are
+    // read only for a power of two tiles, whose numbers take log2 of the count in bits however
+    // the tiles are laid out.
+    if (av1 && state->part_output && (state->parts & (state->parts - 1)) == 0) {
+      state->tile_bits = 0;
+      while ((1 << state->tile_bits) < state->parts) {
+        ++state->tile_bits;
+      }
+    }
     BOOST_LOG(info) << "AMF direct: encoding "sv << p.name << ' ' << config.width << 'x' << config.height << ' ' << colorspace.bit_depth << "-bit at "sv << bitrate_kbps << " kbps, "sv
                     << parts << ' ' << p.part_name << (parts == 1 ? ""sv : "s"sv) << (state->part_output ? ", each handed over as it finishes"sv : ", frames handed over whole"sv) << ", "sv
                     << ltr_frames << " long-term references"sv;
@@ -880,6 +950,19 @@ namespace amf_direct {
       trace->mark(frame_trace::point_e::encode_submitted);
     }
 
+    // The next tile each buffer should start with, and what each buffer held, for the log if the
+    // frame turns out to be missing a tile. -1 once a frame OBU makes the tiles unknown.
+    struct buffer_tiles_t {
+      std::size_t kept;  ///< Bytes kept.
+      std::size_t size;  ///< Bytes in the buffer.
+      int next_tile;  ///< The next tile expected after the tiles kept.
+      tile_group_t cut;  ///< The tiles cut off when they were the next expected, otherwise -1.
+    };
+
+    std::array<buffer_tiles_t, 16> buffer_tiles;
+    std::size_t buffers = 0;
+    int next_tile = impl->tile_bits >= 0 ? 0 : -1;
+
     for (int query = 0; query < max_queries; ++query) {
       amf::AMFDataPtr data;
       const auto res = impl->encoder->QueryOutput(&data);
@@ -911,6 +994,25 @@ namespace amf_direct {
         if (impl->part_output && used != obu_bytes(native, bytes)) {
           ++impl->leftover_obus;
         }
+
+        if (next_tile >= 0) {
+          for (const auto &group : tile_groups(native, used, impl->tile_bits)) {
+            if (group.start < 0) {
+              next_tile = -1;
+              break;
+            }
+            if (group.start == next_tile) {
+              next_tile = group.end + 1;
+            }
+          }
+        }
+        if (next_tile >= 0 && buffers < buffer_tiles.size()) {
+          // Whether the bytes cut off start with the tile that should come next, which would
+          // mean AMF put two tiles in this buffer
+          const auto cut = tile_groups(native + used, bytes - used, impl->tile_bits);
+          const bool next_cut_off = !cut.empty() && cut.front().start == next_tile;
+          buffer_tiles[buffers++] = {used, bytes, next_tile, next_cut_off ? cut.front() : tile_group_t {-1, -1}};
+        }
       }
       frame.data.insert(frame.data.end(), native, native + used);
       frame.parts.push_back({std::chrono::steady_clock::now() - submitted, used});
@@ -936,6 +1038,19 @@ namespace amf_direct {
         if (frame.idr != idr_expected) {
           ++impl->idr_mismatches;
         }
+        if (next_tile >= 0 && next_tile != impl->parts) {
+          ++impl->incomplete_frames;
+          if (impl->incomplete_logged < 20) {
+            ++impl->incomplete_logged;
+            std::string notes;
+            for (std::size_t i = 0; i < buffers; ++i) {
+              const auto &b = buffer_tiles[i];
+              notes += std::format(" [{} of {} bytes kept, through tile {}{}]", b.kept, b.size, b.next_tile - 1, b.cut.start >= 0 ? std::format(", cut off tiles {}-{}", b.cut.start, b.cut.end) : std::string {});
+            }
+            BOOST_LOG(warning) << "AMF direct: frame "sv << frame_index << " was sent with tiles 0-"sv << next_tile - 1 << " of "sv << impl->parts
+                               << " in "sv << frame.parts.size() << " buffers:"sv << notes;
+          }
+        }
         if (plan.mark >= 0 && marked != plan.mark) {
           // Not a reference to recover from after all
           ++impl->ltr_misses;
@@ -958,11 +1073,15 @@ namespace amf_direct {
         impl->timing.add(frame.parts);
         if (impl->timing.frames() >= timing_log_frames) {
           const auto frames = static_cast<double>(impl->timing.frames());
-          const auto leftovers = impl->av1() ? std::format("{} tiles followed by bytes that looked like OBUs, ", impl->leftover_obus) : std::string {};
+          auto leftovers = impl->av1() ? std::format("{} tiles followed by bytes that looked like OBUs, ", impl->leftover_obus) : std::string {};
+          if (impl->tile_bits >= 0) {
+            leftovers += std::format("{} frames missing a tile, ", impl->incomplete_frames);
+          }
           BOOST_LOG(info) << "AMF direct: "sv << p.name << ' ' << impl->timing.summary() << ", "sv << leftovers << impl->idr_mismatches << " key frame flags not as asked, "sv
                           << std::format("{:.3f} ms preparing and {:.3f} ms submitting each frame, ", std::chrono::duration<double, std::milli>(impl->prepare_time).count() / frames, std::chrono::duration<double, std::milli>(impl->submit_time).count() / frames)
                           << impl->recoveries << " recoveries from long-term references, "sv << impl->recovery_keys << " key frames for lost frames, "sv << impl->ltr_misses << " long-term references not as asked"sv;
           impl->leftover_obus = 0;
+          impl->incomplete_frames = 0;
           impl->idr_mismatches = 0;
           impl->recoveries = 0;
           impl->recovery_keys = 0;
