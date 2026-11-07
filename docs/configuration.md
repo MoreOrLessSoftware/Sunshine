@@ -225,7 +225,17 @@ supported on the current platform.
         <td>Description</td>
         <td colspan="2">
             A list of commands to be run before/after all applications.
-            If any of the prep-commands fail, starting the application is aborted.
+            The optional `type` of each command sets which events run it:
+            <ul>
+                <li>`app` (default): `do` runs when the application starts and `undo` when it stops.
+                    If any of these commands fail, starting the application is aborted.</li>
+                <li>`connect`: `do` runs when a client resumes the running application with no other
+                    client streaming it, and `undo` runs when the last client leaves it running.
+                    Neither runs at the first launch or when the application is quit.
+                    A failing `do` skips the remaining connect commands but does not stop the resume.</li>
+            </ul>
+            The `SUNSHINE_CLIENT_*` environment variables describe the client that most recently
+            launched or resumed the application.
         </td>
     </tr>
     <tr>
@@ -237,7 +247,7 @@ supported on the current platform.
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            global_prep_cmd = [{"do":"nircmd.exe setdisplay 1280 720 32 144","elevated":true,"undo":"nircmd.exe setdisplay 2560 1440 32 144"}]
+            global_prep_cmd = [{"do":"nircmd.exe setdisplay 1280 720 32 144","elevated":true,"undo":"nircmd.exe setdisplay 2560 1440 32 144"},{"type":"connect","do":"nircmd.exe mutesysvolume 0","undo":"nircmd.exe mutesysvolume 1"}]
             @endcode</td>
     </tr>
 </table>

@@ -2219,6 +2219,16 @@ p {
     font-size: 0.875rem;
 }
 
+/* Command Preparations: fixed widths so the header lines up with each command's row */
+.prep-cmd-elevated {
+    width: 9rem;
+}
+
+.prep-cmd-actions {
+    width: 7rem;
+    text-align: end;
+}
+
 /* ==========================================================================
    Markdown Body (for release notes)
    ========================================================================== */

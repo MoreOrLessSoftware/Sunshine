@@ -2693,10 +2693,16 @@ namespace stream {
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
 
+      // The session's threads are done; the disconnect commands below may take longer than the hang limit
+      task_pool.cancel(force_kill);
+      fg.disable();
+
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
+          // The last client left the app running
+          proc::proc.disconnect();
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
 #endif

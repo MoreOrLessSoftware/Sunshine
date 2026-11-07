@@ -55,7 +55,8 @@ namespace proc {
    *    filename -- The output of the commands are appended to filename
    */
   struct ctx_t {
-    std::vector<cmd_t> prep_cmds;  ///< Prep cmds.
+    std::vector<cmd_t> prep_cmds;  ///< Prep cmds run when the app starts and stops.
+    std::vector<cmd_t> connect_cmds;  ///< Prep cmds run when a client resumes the running app and when the last client leaves it running.
 
     /**
      * Some applications, such as Steam, either exit quickly, or keep running indefinitely.
@@ -115,6 +116,31 @@ namespace proc {
     int execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session);
 
     /**
+     * @brief A client is resuming the running app with no other client streaming it.
+     *
+     * Points the client environment variables at the new client and runs the Do command of each
+     * connect prep command. A failing Do command stops the rest but does not stop the resume.
+     * Does nothing while the connect commands are already in effect.
+     *
+     * @param launch_session The resuming client's launch session.
+     */
+    void connect(const rtsp_stream::launch_session_t &launch_session);
+
+    /**
+     * @brief The last client left and the app keeps running.
+     *
+     * Runs the Undo command of each connect prep command in effect, in reverse order.
+     * The commands are in effect from the app's launch, or from the Do commands that succeeded
+     * on the last connect().
+     */
+    void disconnect();
+
+    /**
+     * @brief The app is about to be quit: let its clients leave without running the connect Undo commands.
+     */
+    void drop_connection();
+
+    /**
      * @return `_app_id` if a process is running, otherwise returns `0`
      */
     int running();
@@ -168,6 +194,26 @@ namespace proc {
     file_t _pipe;
     std::vector<cmd_t>::const_iterator _app_prep_it;
     std::vector<cmd_t>::const_iterator _app_prep_begin;
+
+    // How many of _app.connect_cmds, from the front, have their Do in effect; their Undo runs on disconnect()
+    std::size_t _connect_cmds_in_effect {};
+
+    /**
+     * @brief Point the client environment variables at a launch session's client.
+     *
+     * @param launch_session The client's launch session.
+     */
+    void set_client_env(const rtsp_stream::launch_session_t &launch_session);
+
+    /**
+     * @brief Run a prep command and wait for it to exit.
+     *
+     * @param cmd The command line to run.
+     * @param elevated Whether to run it elevated.
+     * @param label What kind of command it is, for the log.
+     * @return `true` when it ran and exited with code 0.
+     */
+    bool run_prep(const std::string &cmd, bool elevated, std::string_view label);
   };
 
   /**

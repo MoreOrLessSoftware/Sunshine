@@ -170,35 +170,7 @@ namespace proc {
     // Add Stream-specific environment variables
     _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
     _env["SUNSHINE_APP_NAME"] = _app.name;
-    _env["SUNSHINE_CLIENT_NAME"] = launch_session->client_name;
-    _env["SUNSHINE_CLIENT_WIDTH"] = std::to_string(launch_session->width);
-    _env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(launch_session->height);
-    _env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session->fps);
-    _env["SUNSHINE_CLIENT_FPS_X100"] = std::to_string(launch_session->fps_x100 > 0 ? launch_session->fps_x100 : launch_session->fps * 100);
-    // Thousandths, as finely as RTSS takes a frame rate limit: from the client's microhertz value
-    // when it sent one
-    _env["SUNSHINE_CLIENT_FPS_X1000"] = std::to_string(
-      launch_session->fps_uhz > 0 ? (launch_session->fps_uhz + 500) / 1000 :
-      launch_session->fps_x100 > 0 ? launch_session->fps_x100 * 10 :
-                                     launch_session->fps * 1000
-    );
-    _env["SUNSHINE_CLIENT_HDR"] = launch_session->enable_hdr ? "true" : "false";
-    _env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
-    _env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
-    _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
-    int channelCount = launch_session->surround_info & 65535;
-    switch (channelCount) {
-      case 2:
-        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "2.0";
-        break;
-      case 6:
-        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "5.1";
-        break;
-      case 8:
-        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1";
-        break;
-    }
-    _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
+    set_client_env(*launch_session);
 
     if (!_app.output.empty() && _app.output != "null"sv) {
 #ifdef _WIN32
@@ -287,9 +259,103 @@ namespace proc {
 
     _app_launch_time = std::chrono::steady_clock::now();
 
+    // The launching client is connected, so every connect command is in effect: when it leaves
+    // with the app still running, all their Undo commands run.
+    _connect_cmds_in_effect = _app.connect_cmds.size();
+
     fg.disable();
 
     return 0;
+  }
+
+  void proc_t::set_client_env(const rtsp_stream::launch_session_t &launch_session) {
+    _env["SUNSHINE_CLIENT_NAME"] = launch_session.client_name;
+    _env["SUNSHINE_CLIENT_WIDTH"] = std::to_string(launch_session.width);
+    _env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(launch_session.height);
+    _env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session.fps);
+    _env["SUNSHINE_CLIENT_FPS_X100"] = std::to_string(launch_session.fps_x100 > 0 ? launch_session.fps_x100 : launch_session.fps * 100);
+    // Thousandths, as finely as RTSS takes a frame rate limit: from the client's microhertz value
+    // when it sent one
+    _env["SUNSHINE_CLIENT_FPS_X1000"] = std::to_string(
+      launch_session.fps_uhz > 0 ? (launch_session.fps_uhz + 500) / 1000 :
+      launch_session.fps_x100 > 0 ? launch_session.fps_x100 * 10 :
+                                    launch_session.fps * 1000
+    );
+    _env["SUNSHINE_CLIENT_HDR"] = launch_session.enable_hdr ? "true" : "false";
+    _env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session.gcmap);
+    _env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session.host_audio ? "true" : "false";
+    _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session.enable_sops ? "true" : "false";
+    int channelCount = launch_session.surround_info & 65535;
+    switch (channelCount) {
+      case 2:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "2.0";
+        break;
+      case 6:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "5.1";
+        break;
+      case 8:
+        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1";
+        break;
+    }
+    _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session.surround_params;
+  }
+
+  bool proc_t::run_prep(const std::string &cmd, bool elevated, std::string_view label) {
+    std::error_code ec;
+    boost::filesystem::path working_dir = _app.working_dir.empty() ?
+                                            find_working_directory(cmd, _env) :
+                                            boost::filesystem::path(_app.working_dir);
+    BOOST_LOG(info) << "Executing "sv << label << ": ["sv << cmd << ']';
+    auto child = platf::run_command(elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+    if (ec) {
+      BOOST_LOG(error) << "Couldn't run ["sv << cmd << "]: System: "sv << ec.message();
+      return false;
+    }
+
+    child.wait(ec);
+    if (ec) {
+      BOOST_LOG(error) << '[' << cmd << "] wait failed with error code ["sv << ec << ']';
+      return false;
+    }
+
+    if (auto ret = child.exit_code(); ret != 0) {
+      BOOST_LOG(error) << '[' << cmd << "] exited with code ["sv << ret << ']';
+      return false;
+    }
+
+    return true;
+  }
+
+  void proc_t::connect(const rtsp_stream::launch_session_t &launch_session) {
+    if (_connect_cmds_in_effect > 0) {
+      // The Do commands are already in effect: no client has left since they ran
+      return;
+    }
+
+    // The connect commands, and the Undo commands of the app later, act for the client now streaming
+    set_client_env(launch_session);
+
+    for (; _connect_cmds_in_effect < _app.connect_cmds.size(); ++_connect_cmds_in_effect) {
+      const auto &cmd = _app.connect_cmds[_connect_cmds_in_effect];
+      if (!cmd.do_cmd.empty() && !run_prep(cmd.do_cmd, cmd.elevated, "Connect Do Cmd"sv)) {
+        // Don't keep the client from its game; the commands that ran are undone when it leaves
+        BOOST_LOG(warning) << "Skipping the remaining connect commands"sv;
+        return;
+      }
+    }
+  }
+
+  void proc_t::disconnect() {
+    for (; _connect_cmds_in_effect > 0; --_connect_cmds_in_effect) {
+      const auto &cmd = _app.connect_cmds[_connect_cmds_in_effect - 1];
+      if (!cmd.undo_cmd.empty()) {
+        run_prep(cmd.undo_cmd, cmd.elevated, "Disconnect Undo Cmd"sv);
+      }
+    }
+  }
+
+  void proc_t::drop_connection() {
+    _connect_cmds_in_effect = 0;
   }
 
   int proc_t::running() {
@@ -361,6 +427,9 @@ namespace proc {
     }
 
     _pipe.reset();
+
+    // Quitting runs the app's Undo commands only; the connect commands end with the app
+    _connect_cmds_in_effect = 0;
 
     bool has_run = _app_id > 0;
 
@@ -706,34 +775,37 @@ namespace proc {
         auto wait_all = app_node.get_optional<bool>("wait-all"s);
         auto exit_timeout = app_node.get_optional<int>("exit-timeout"s);
 
+        // Global commands run before the app's own, for both types
         std::vector<proc::cmd_t> prep_cmds;
-        if (!exclude_global_prep.value_or(false)) {
-          prep_cmds.reserve(config::sunshine.prep_cmds.size());
-          for (auto &prep_cmd : config::sunshine.prep_cmds) {
-            auto do_cmd = parse_env_val(this_env, prep_cmd.do_cmd);
-            auto undo_cmd = parse_env_val(this_env, prep_cmd.undo_cmd);
+        std::vector<proc::cmd_t> connect_cmds;
+        auto add_prep_cmd = [&](std::string &&do_cmd, std::string &&undo_cmd, bool elevated, proc::cmd_t::type_e type) {
+          auto &cmds = type == proc::cmd_t::type_e::connect ? connect_cmds : prep_cmds;
+          cmds.emplace_back(std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type);
+        };
 
-            prep_cmds.emplace_back(
-              std::move(do_cmd),
-              std::move(undo_cmd),
-              std::move(prep_cmd.elevated)
+        if (!exclude_global_prep.value_or(false)) {
+          for (auto &prep_cmd : config::sunshine.prep_cmds) {
+            add_prep_cmd(
+              parse_env_val(this_env, prep_cmd.do_cmd),
+              parse_env_val(this_env, prep_cmd.undo_cmd),
+              prep_cmd.elevated,
+              prep_cmd.type
             );
           }
         }
 
         if (prep_nodes_opt) {
-          auto &prep_nodes = *prep_nodes_opt;
-
-          prep_cmds.reserve(prep_cmds.size() + prep_nodes.size());
-          for (auto &[_, prep_node] : prep_nodes) {
+          for (auto &[_, prep_node] : *prep_nodes_opt) {
             auto do_cmd = prep_node.get_optional<std::string>("do"s);
             auto undo_cmd = prep_node.get_optional<std::string>("undo"s);
             auto elevated = prep_node.get_optional<bool>("elevated");
+            auto type = prep_node.get_optional<std::string>("type"s);
 
-            prep_cmds.emplace_back(
+            add_prep_cmd(
               parse_env_val(this_env, do_cmd.value_or("")),
               parse_env_val(this_env, undo_cmd.value_or("")),
-              std::move(elevated.value_or(false))
+              elevated.value_or(false),
+              proc::cmd_t::parse_type(type.value_or(""))
             );
           }
         }
@@ -787,6 +859,7 @@ namespace proc {
 
         ctx.name = std::move(name);
         ctx.prep_cmds = std::move(prep_cmds);
+        ctx.connect_cmds = std::move(connect_cmds);
         ctx.detached = std::move(detached);
 
         apps.emplace_back(std::move(ctx));

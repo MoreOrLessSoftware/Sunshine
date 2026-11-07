@@ -378,6 +378,43 @@ UAC prompt.
 }
 ```
 
+#### Running Commands When a Client Resumes or Leaves
+
+A prep command with `"type": "connect"` runs around clients instead of around the application.
+Its ``Do`` runs when a client resumes the running application with no other client streaming it,
+and its ``Undo`` runs when the last client leaves the application running. Neither runs at the first
+launch or when the application is quit; commands with the default `"type": "app"` cover those.
+
+| Event                                  | Commands run       |
+|----------------------------------------|--------------------|
+| Launch                                 | app ``Do``         |
+| Last client leaves, application runs   | connect ``Undo``   |
+| A client resumes                       | connect ``Do``     |
+| Quit                                   | app ``Undo``       |
+
+A failing connect ``Do`` skips the remaining connect commands but still lets the client resume. The
+``SUNSHINE_CLIENT_*`` environment variables describe the resuming client, so a connect command can match
+the display to it. Pairing the same commands under both types keeps the display matched to whichever
+client is streaming, and restores it whenever none is.
+
+**Example**
+```json
+{
+  "name": "Desktop",
+  "prep-cmd": [
+    {
+      "do": "sh -c \"xrandr --output HDMI-1 --mode ${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}\"",
+      "undo": "xrandr --output HDMI-1 --mode 3840x2160"
+    },
+    {
+      "type": "connect",
+      "do": "sh -c \"xrandr --output HDMI-1 --mode ${SUNSHINE_CLIENT_WIDTH}x${SUNSHINE_CLIENT_HEIGHT}\"",
+      "undo": "xrandr --output HDMI-1 --mode 3840x2160"
+    }
+  ]
+}
+```
+
 <div class="section_buttons">
 
 | Previous                          |                                    Next |

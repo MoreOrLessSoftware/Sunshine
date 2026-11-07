@@ -1469,9 +1469,14 @@ namespace config {
       auto do_cmd = prep_cmd.get_optional<std::string>("do"s);
       auto undo_cmd = prep_cmd.get_optional<std::string>("undo"s);
       auto elevated = prep_cmd.get_optional<bool>("elevated"s);
+      auto type = prep_cmd.get_optional<std::string>("type"s);
 
-      input.emplace_back(do_cmd.value_or(""), undo_cmd.value_or(""), elevated.value_or(false));
+      input.emplace_back(do_cmd.value_or(""), undo_cmd.value_or(""), elevated.value_or(false), prep_cmd_t::parse_type(type.value_or("")));
     }
+  }
+
+  prep_cmd_t::type_e prep_cmd_t::parse_type(std::string_view value) {
+    return value == "connect"sv ? type_e::connect : type_e::app;
   }
 
   /**

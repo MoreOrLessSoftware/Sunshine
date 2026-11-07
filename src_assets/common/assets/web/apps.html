@@ -161,60 +161,73 @@
                   {{ $t('apps.add_cmds') }}
                 </button>
               </div>
-              <table class="table" v-if="editForm['prep-cmd'].length > 0">
-                <thead>
-                  <tr>
-                    <th scope="col">
-                      <play :size="18" class="icon"></play>
+              <!-- One row per command from lg up (the modal is full screen below that); stacked with per-field labels otherwise -->
+              <div class="mt-3" v-if="editForm['prep-cmd'].length > 0">
+                <div class="row g-2 d-none d-lg-flex fw-semibold border-bottom pb-2">
+                  <div class="col-lg-3">{{ $t('_common.prep_type') }}</div>
+                  <div class="col-lg">
+                    <play :size="18" class="icon"></play>
+                    {{ $t('_common.do_cmd') }}
+                  </div>
+                  <div class="col-lg">
+                    <rotate-ccw :size="18" class="icon"></rotate-ccw>
+                    {{ $t('_common.undo_cmd') }}
+                  </div>
+                  <div class="col-auto prep-cmd-elevated" v-if="platform === 'windows'">
+                    <shield :size="18" class="icon"></shield>
+                    {{ $t('_common.run_as') }}
+                  </div>
+                  <div class="col-auto prep-cmd-actions"></div>
+                </div>
+                <div class="row g-2 align-items-end border-bottom py-2" v-for="(c, i) in editForm['prep-cmd']">
+                  <div class="col-12 col-lg-3">
+                    <label class="form-label small mb-1 d-lg-none" :for="'app-prep-cmd-type-' + i">{{ $t('_common.prep_type') }}</label>
+                    <select class="form-select" :id="'app-prep-cmd-type-' + i" v-model="c.type">
+                      <option value="app">{{ $t('_common.prep_type_app') }}</option>
+                      <option value="connect">{{ $t('_common.prep_type_connect') }}</option>
+                    </select>
+                  </div>
+                  <div class="col-12 col-lg">
+                    <label class="form-label small mb-1 d-lg-none" :for="'app-prep-cmd-do-' + i">
+                      <play :size="14" class="icon"></play>
                       {{ $t('_common.do_cmd') }}
-                    </th>
-                    <th scope="col">
-                      <rotate-ccw :size="18" class="icon"></rotate-ccw>
+                    </label>
+                    <div class="input-group">
+                      <input type="text" class="form-control monospace" :id="'app-prep-cmd-do-' + i" v-model="c.do" />
+                      <button class="btn btn-secondary btn-sm" type="button" @click="browsePrep(i, 'do')">
+                        <folder-open :size="14" class="icon"></folder-open>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="col-12 col-lg">
+                    <label class="form-label small mb-1 d-lg-none" :for="'app-prep-cmd-undo-' + i">
+                      <rotate-ccw :size="14" class="icon"></rotate-ccw>
                       {{ $t('_common.undo_cmd') }}
-                    </th>
-                    <th scope="col" v-if="platform === 'windows'">
-                      <shield :size="18" class="icon"></shield>
-                      {{ $t('_common.run_as') }}
-                    </th>
-                    <th scope="col"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(c, i) in editForm['prep-cmd']">
-                    <td>
-                      <div class="input-group">
-                        <input type="text" class="form-control monospace" v-model="c.do" />
-                        <button class="btn btn-secondary btn-sm" type="button" @click="browsePrep(i, 'do')">
-                          <folder-open :size="14" class="icon"></folder-open>
-                        </button>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="input-group">
-                        <input type="text" class="form-control monospace" v-model="c.undo" />
-                        <button class="btn btn-secondary btn-sm" type="button" @click="browsePrep(i, 'undo')">
-                          <folder-open :size="14" class="icon"></folder-open>
-                        </button>
-                      </div>
-                    </td>
-                    <td v-if="platform === 'windows'" class="align-middle">
-                      <Checkbox :id="'prep-cmd-admin-' + i"
-                                label="_common.elevated"
-                                desc=""
-                                v-model="c.elevated"
-                      ></Checkbox>
-                    </td>
-                    <td class="align-middle">
-                      <button class="btn btn-danger btn-sm ms-2" @click="deletePrepCmd(i)">
-                        <trash-2 :size="16" class="icon"></trash-2>
+                    </label>
+                    <div class="input-group">
+                      <input type="text" class="form-control monospace" :id="'app-prep-cmd-undo-' + i" v-model="c.undo" />
+                      <button class="btn btn-secondary btn-sm" type="button" @click="browsePrep(i, 'undo')">
+                        <folder-open :size="14" class="icon"></folder-open>
                       </button>
-                      <button class="btn btn-success btn-sm ms-2" @click="addPrepCmd">
-                        <plus :size="16" class="icon"></plus>
-                      </button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                    </div>
+                  </div>
+                  <div class="col-auto prep-cmd-elevated align-self-center" v-if="platform === 'windows'">
+                    <Checkbox :id="'prep-cmd-admin-' + i"
+                              label="_common.elevated"
+                              desc=""
+                              v-model="c.elevated"
+                    ></Checkbox>
+                  </div>
+                  <div class="col-auto prep-cmd-actions ms-auto align-self-center">
+                    <button class="btn btn-danger btn-sm" @click="deletePrepCmd(i)">
+                      <trash-2 :size="16" class="icon"></trash-2>
+                    </button>
+                    <button class="btn btn-success btn-sm ms-2" @click="addPrepCmd">
+                      <plus :size="16" class="icon"></plus>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
             <!-- detached -->
             <div class="mb-3">
@@ -763,6 +776,10 @@
         this.editForm.index = id;
         if (this.editForm["prep-cmd"] === undefined)
           this.editForm["prep-cmd"] = [];
+        for (const prep of this.editForm["prep-cmd"]) {
+          if (prep.type === undefined)
+            prep.type = "app";
+        }
         if (this.editForm["detached"] === undefined)
           this.editForm["detached"] = [];
         if (this.editForm["exclude-global-prep-cmd"] === undefined)
@@ -810,6 +827,7 @@
       },
       addPrepCmd() {
         let template = {
+          type: "app",
           do: "",
           undo: ""
         };

@@ -1107,7 +1107,8 @@ namespace confighttp {
    *     {
    *       "do": "Command to prepare",
    *       "undo": "Command to undo preparation",
-   *       "elevated": false
+   *       "elevated": false,
+   *       "type": "app or connect"
    *     }
    *   ],
    *   "detached": [

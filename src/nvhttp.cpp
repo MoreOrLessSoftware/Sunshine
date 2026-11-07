@@ -1547,6 +1547,11 @@ namespace nvhttp {
       return;
     }
 
+    if (no_active_sessions) {
+      // A client is coming back to the app it left running
+      proc::proc.connect(*launch_session);
+    }
+
     tree.put("root.<xmlattr>.status_code", 200);
     tree.put(
       "root.sessionUrl0",
@@ -1583,6 +1588,8 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
+    // The clients are leaving because the app is quitting, which runs the app's Undo commands instead
+    proc::proc.drop_connection();
     rtsp_stream::terminate_sessions();
 
     if (proc::proc.running() > 0) {

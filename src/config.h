@@ -334,16 +334,26 @@ namespace config {
    */
   struct prep_cmd_t {
     /**
+     * @brief Which events run a preparation command.
+     */
+    enum class type_e {
+      app,  ///< Do runs when the application starts; Undo runs when it stops.
+      connect,  ///< Do runs when a client resumes the running application; Undo runs when the last client leaves it running.
+    };
+
+    /**
      * @brief Build a preparation command entry from parsed configuration data.
      *
      * @param do_cmd Command to run before the application starts.
      * @param undo_cmd Command to run after the application exits.
      * @param elevated Whether the command should run with elevated privileges.
+     * @param type Which events run the command.
      */
-    prep_cmd_t(std::string &&do_cmd, std::string &&undo_cmd, bool &&elevated):
+    prep_cmd_t(std::string &&do_cmd, std::string &&undo_cmd, bool &&elevated, type_e type = type_e::app):
         do_cmd(std::move(do_cmd)),
         undo_cmd(std::move(undo_cmd)),
-        elevated(std::move(elevated)) {
+        elevated(std::move(elevated)),
+        type(type) {
     }
 
     /**
@@ -360,6 +370,15 @@ namespace config {
     std::string do_cmd;  ///< Command to run before the application starts.
     std::string undo_cmd;  ///< Command to run after the application exits.
     bool elevated;  ///< Whether the process should be launched elevated.
+    type_e type = type_e::app;  ///< Which events run the command.
+
+    /**
+     * @brief Parse the `type` field of a preparation command.
+     *
+     * @param value The configured type, or empty when the field is absent.
+     * @return `type_e::connect` for `"connect"`, otherwise `type_e::app`.
+     */
+    static type_e parse_type(std::string_view value);
   };
 
   /**
