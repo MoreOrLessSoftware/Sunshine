@@ -266,6 +266,19 @@ TEST_F(XgpadReportTest, NeverMatchesRealControllers) {
   EXPECT_FALSE(is_xgpad_instance_id(L""));
 }
 
+TEST_F(XgpadReportTest, DriverAttachState) {
+  using namespace std::chrono_literals;
+  // Attached as soon as the driver sets its flag, regardless of time
+  EXPECT_EQ(driver_attach_state(XGPAD_STATUS_DRIVER_STARTED, 0ms), attach_state_e::attached);
+  EXPECT_EQ(driver_attach_state(XGPAD_STATUS_DRIVER_STARTED, 1h), attach_state_e::attached);
+  EXPECT_EQ(driver_attach_state(XGPAD_STATUS_DRIVER_STARTED | 0x10, 0ms), attach_state_e::attached);
+  // Without the flag: pending inside the window, missing from the timeout on
+  EXPECT_EQ(driver_attach_state(0, 0ms), attach_state_e::pending);
+  EXPECT_EQ(driver_attach_state(0, driver_attach_timeout - 1ms), attach_state_e::pending);
+  EXPECT_EQ(driver_attach_state(0, driver_attach_timeout), attach_state_e::missing);
+  EXPECT_EQ(driver_attach_state(0x10, 1h), attach_state_e::missing);
+}
+
 TEST_F(XgpadReportTest, HasHandlesMissingContext) {
   EXPECT_FALSE(has(nullptr, 0));
   EXPECT_FALSE(has(nullptr, -1));

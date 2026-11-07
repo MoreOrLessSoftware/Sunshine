@@ -7,6 +7,7 @@
 #pragma once
 
 // standard includes
+#include <chrono>
 #include <cstdint>
 #include <string_view>
 
@@ -269,6 +270,40 @@ namespace platf::xgpad {
       state.right_trigger = motor_from_percent(report.rightTrigger);
     }
     return state;
+  }
+
+  /**
+   * @brief How long a new pad may take for the driver to open its shared objects.
+   *
+   * The driver polls for them every 250 ms, so a working driver attaches well within this window.
+   */
+  constexpr std::chrono::milliseconds driver_attach_timeout {3000};
+
+  /**
+   * @brief Whether the xgpad driver has picked up a pad's shared memory.
+   */
+  enum class attach_state_e {
+    pending,  ///< Not attached yet, still within driver_attach_timeout.
+    attached,  ///< The driver set XGPAD_STATUS_DRIVER_STARTED.
+    missing,  ///< Not attached after driver_attach_timeout; the installed driver likely does not match.
+  };
+
+  /**
+   * @brief Classify a pad's driver attachment.
+   *
+   * A driver built for another XGPAD_SHARED_VERSION rejects the section without an error, so the device
+   * still enumerates while every input report is ignored. This turns that silent state into something
+   * Sunshine can log.
+   *
+   * @param driver_status XGPAD_SHARED::driverStatus.
+   * @param since_created Time since the pad's device was created.
+   * @return Attachment state.
+   */
+  constexpr attach_state_e driver_attach_state(const long driver_status, const std::chrono::steady_clock::duration since_created) {
+    if (driver_status & XGPAD_STATUS_DRIVER_STARTED) {
+      return attach_state_e::attached;
+    }
+    return since_created >= driver_attach_timeout ? attach_state_e::missing : attach_state_e::pending;
   }
 
 }  // namespace platf::xgpad

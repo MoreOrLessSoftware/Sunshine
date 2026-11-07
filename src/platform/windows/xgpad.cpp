@@ -251,6 +251,8 @@ namespace platf::xgpad {
     hswdevice_t device = nullptr;  ///< Software device handle (device lives as long as this handle).
     std::atomic<HRESULT> create_result {E_PENDING};  ///< Result reported by the SwDeviceCreate callback.
     std::wstring instance_id;  ///< Device instance ID reported by PnP.
+    std::chrono::steady_clock::time_point created_at {};  ///< When PnP finished creating the device.
+    bool attach_checked = false;  ///< Driver attachment has been confirmed or reported as missing.
 
     feedback_queue_t feedback_queue;  ///< Queue for rumble feedback to the client.
     std::uint8_t client_relative_index = 0;  ///< Controller number as known by the client.
@@ -483,6 +485,33 @@ namespace platf::xgpad {
       MemoryBarrier();
       InterlockedExchange(&shared->inputCount, count);  // publish
       SetEvent(pad.input_event);
+    }
+
+    /**
+     * @brief Log once whether the driver picked up a pad's shared memory.
+     *
+     * Runs on the input path, so it only reads a shared flag. An outdated driver package enumerates the
+     * controller but ignores every report; without this check that failure is silent.
+     *
+     * @param pad Pad receiving input.
+     */
+    void check_driver_attached(pad_t &pad) {
+      if (pad.attach_checked) {
+        return;
+      }
+      switch (driver_attach_state(pad.shared->driverStatus, std::chrono::steady_clock::now() - pad.created_at)) {
+        case attach_state_e::pending:
+          return;
+        case attach_state_e::attached:
+          BOOST_LOG(debug) << "xgpad: driver attached to pad "sv << pad.index;
+          break;
+        case attach_state_e::missing:
+          BOOST_LOG(error) << "xgpad: driver has not attached to pad "sv << pad.index << " after "sv << driver_attach_timeout.count()
+                           << " ms; controller input is ignored. The installed xgpad driver probably does not match this Sunshine build "sv
+                           << "(shared memory v"sv << XGPAD_SHARED_VERSION << "). Reinstall the xgpad driver."sv;
+          break;
+      }
+      pad.attach_checked = true;
     }
 
     /**
@@ -719,7 +748,8 @@ namespace platf::xgpad {
       std::lock_guard pnp {context.pnp_mutex};
       result = create_device(context.api, *pad);
     }
-    const auto create_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+    pad->created_at = std::chrono::steady_clock::now();
+    const auto create_ms = std::chrono::duration_cast<std::chrono::milliseconds>(pad->created_at - started).count();
     if (FAILED(result)) {
       if (pad->device) {
         context.api.close(pad->device);
@@ -761,7 +791,9 @@ namespace platf::xgpad {
     if (!has(&context, nr)) {
       return;
     }
-    write_input(*context.pads[nr], make_input_report(state));
+    auto &pad = *context.pads[nr];
+    check_driver_attached(pad);
+    write_input(pad, make_input_report(state));
   }
 
   void free(context_t &context, const int nr) {
