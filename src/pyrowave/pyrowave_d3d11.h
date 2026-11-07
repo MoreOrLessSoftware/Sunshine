@@ -62,10 +62,10 @@ namespace pyrowave {
   /**
    * @brief Check whether the PyroWave library can be loaded.
    *
-   * The library (libpyrowave-shared-0.dll) is loaded on first use from the directory of
+   * The library (libpyrowave-shared-1.dll) is loaded on first use from the directory of
    * the executable or the DLL search path. Nothing is linked against it at build time.
    *
-   * @return True when the library loaded and its API version matches the one built against.
+   * @return True when the library loaded and its API version is compatible with the one built against.
    */
   bool library_available();
 

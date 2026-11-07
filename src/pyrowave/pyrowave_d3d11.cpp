@@ -32,7 +32,7 @@ namespace pyrowave {
    */
   struct api_t {
     decltype(&::pyrowave_get_api_version) get_api_version;  ///< pyrowave_get_api_version
-    decltype(&::pyrowave_create_device_by_compat2) create_device_by_compat2;  ///< pyrowave_create_device_by_compat2
+    decltype(&::pyrowave_create_device_by_compat) create_device_by_compat;  ///< pyrowave_create_device_by_compat
     decltype(&::pyrowave_device_get_global_priority) device_get_global_priority;  ///< pyrowave_device_get_global_priority
     decltype(&::pyrowave_device_report_performance_stats) device_report_performance_stats;  ///< pyrowave_device_report_performance_stats
     decltype(&::pyrowave_device_destroy) device_destroy;  ///< pyrowave_device_destroy
@@ -43,7 +43,7 @@ namespace pyrowave {
     decltype(&::pyrowave_image_get_image_view) image_get_image_view;  ///< pyrowave_image_get_image_view
     decltype(&::pyrowave_image_destroy) image_destroy;  ///< pyrowave_image_destroy
     decltype(&::pyrowave_encoder_create) encoder_create;  ///< pyrowave_encoder_create
-    decltype(&::pyrowave_encoder_encode_gpu_synchronous) encoder_encode_gpu_synchronous;  ///< pyrowave_encoder_encode_gpu_synchronous
+    decltype(&::pyrowave_encoder_encode_gpu) encoder_encode_gpu;  ///< pyrowave_encoder_encode_gpu
     decltype(&::pyrowave_encoder_compute_num_packets) encoder_compute_num_packets;  ///< pyrowave_encoder_compute_num_packets
     decltype(&::pyrowave_encoder_packetize) encoder_packetize;  ///< pyrowave_encoder_packetize
     decltype(&::pyrowave_encoder_destroy) encoder_destroy;  ///< pyrowave_encoder_destroy
@@ -62,9 +62,9 @@ namespace pyrowave {
 
       std::call_once(once, []() {
         // Kept loaded for the life of the process
-        HMODULE dll = LoadLibraryExW(L"libpyrowave-shared-0.dll", nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        HMODULE dll = LoadLibraryExW(L"libpyrowave-shared-1.dll", nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
         if (!dll) {
-          BOOST_LOG(info) << "PyroWave: libpyrowave-shared-0.dll not found, the codec is unavailable"sv;
+          BOOST_LOG(info) << "PyroWave: libpyrowave-shared-1.dll not found, the codec is unavailable"sv;
           return;
         }
 
@@ -78,7 +78,7 @@ namespace pyrowave {
         };
 
         resolve(api.get_api_version, "pyrowave_get_api_version");
-        resolve(api.create_device_by_compat2, "pyrowave_create_device_by_compat2");
+        resolve(api.create_device_by_compat, "pyrowave_create_device_by_compat");
         resolve(api.device_get_global_priority, "pyrowave_device_get_global_priority");
         resolve(api.device_report_performance_stats, "pyrowave_device_report_performance_stats");
         resolve(api.device_destroy, "pyrowave_device_destroy");
@@ -89,7 +89,7 @@ namespace pyrowave {
         resolve(api.image_get_image_view, "pyrowave_image_get_image_view");
         resolve(api.image_destroy, "pyrowave_image_destroy");
         resolve(api.encoder_create, "pyrowave_encoder_create");
-        resolve(api.encoder_encode_gpu_synchronous, "pyrowave_encoder_encode_gpu_synchronous");
+        resolve(api.encoder_encode_gpu, "pyrowave_encoder_encode_gpu");
         resolve(api.encoder_compute_num_packets, "pyrowave_encoder_compute_num_packets");
         resolve(api.encoder_packetize, "pyrowave_encoder_packetize");
         resolve(api.encoder_destroy, "pyrowave_encoder_destroy");
@@ -97,12 +97,12 @@ namespace pyrowave {
           return;
         }
 
-        // The API and ABI can change between minor versions until 1.0
+        // The API and ABI are stable within a major version, and minor versions only add to them
         uint32_t major, minor, patch;
         api.get_api_version(&major, &minor, &patch);
-        if (major != PYROWAVE_API_VERSION_MAJOR || minor != PYROWAVE_API_VERSION_MINOR) {
+        if (major != PYROWAVE_API_VERSION_MAJOR || minor < PYROWAVE_API_VERSION_MINOR) {
           BOOST_LOG(error) << "PyroWave: library version "sv << major << '.' << minor << '.' << patch
-                           << " doesn't match the "sv << PYROWAVE_API_VERSION_MAJOR << '.' << PYROWAVE_API_VERSION_MINOR
+                           << " isn't compatible with the "sv << PYROWAVE_API_VERSION_MAJOR << '.' << PYROWAVE_API_VERSION_MINOR
                            << " API Sunshine was built with"sv;
           return;
         }
@@ -263,7 +263,7 @@ namespace pyrowave {
     // High priority puts PyroWave on an async compute queue, so a busy graphics queue
     // doesn't hold up encoding. Without the privilege for it, the driver gives a lower one.
     constexpr auto requested_priority = VK_QUEUE_GLOBAL_PRIORITY_HIGH;
-    auto result = api->create_device_by_compat2(0, 0, nullptr, nullptr, &pyro_luid, requested_priority, &handles->device);
+    auto result = api->create_device_by_compat(0, 0, nullptr, nullptr, &pyro_luid, requested_priority, &handles->device);
     if (result != PYROWAVE_SUCCESS) {
       BOOST_LOG(error) << "PyroWave: couldn't create a Vulkan device for this GPU ("sv << result << ')';
       return false;
@@ -595,7 +595,7 @@ namespace pyrowave {
     release.sync = {semaphore, read_value};
 
     pyrowave_rate_control rate_control {max_frame_size};
-    auto result = api->encoder_encode_gpu_synchronous(handles->encoder, &acquire, &release, &handles->buffers, &rate_control);
+    auto result = api->encoder_encode_gpu(handles->encoder, &acquire, &release, &handles->buffers, &rate_control);
     if (trace) {
       trace->mark(frame_trace::point_e::encode_submitted);
     }

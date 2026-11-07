@@ -52,7 +52,7 @@ include_directories(SYSTEM
         "${CMAKE_SOURCE_DIR}/third-party/pyrowave/include"
         "${CMAKE_SOURCE_DIR}/third-party/build-deps/third-party/FFmpeg/Vulkan-Headers/include")
 set(SUNSHINE_PYROWAVE_DLL "" CACHE FILEPATH
-        "Path to libpyrowave-shared-0.dll, copied next to sunshine.exe and packaged when set")
+        "Path to libpyrowave-shared-1.dll, copied next to sunshine.exe and packaged when set")
 
 # sunshine icon
 if(NOT DEFINED SUNSHINE_ICON_PATH)
