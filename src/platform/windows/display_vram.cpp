@@ -31,6 +31,7 @@ extern "C" {
 #include "src/nvenc/nvenc_dynamic_factory.h"
 #include "src/pyrowave/pyrowave_d3d11.h"
 #include "src/video.h"
+#include "src/video_subframe.h"
 #include "utf_utils.h"
 
 #if !defined(SUNSHINE_SHADERS_DIR)  // for testing this needs to be defined in cmake as we don't do an install
@@ -1386,6 +1387,8 @@ namespace platf::dxgi {
         settings.rate_control = amd.amd_rc_av1.value_or(settings.rate_control);
         settings.parts = amd.amd_av1_tiles;
       }
+      // A client that can't take more slices or tiles than it asked for gets its own count
+      settings.parts = ::video::subframe::encoder_parts(settings.parts, client_config.slicesPerFrame, client_config.exactSlices);
       settings.preanalysis = amd.amd_preanalysis.value_or(0) != 0;
       settings.enforce_hrd = amd.amd_enforce_hrd.value_or(0) != 0;
       settings.ltr_frames = ltr_frames;

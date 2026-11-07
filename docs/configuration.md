@@ -2625,7 +2625,9 @@ supported on the current platform.
             frame, so sending overlaps encoding. Frames are encoded in at least 8 slices, sent as the frame's four
             FEC blocks while the rest is still encoding: after the first, fourth and seventh of 8 slices, and the
             last when the frame finishes. This cuts latency most at high bitrates, where sending a frame takes
-            several milliseconds. Clients need no changes.
+            several milliseconds. Clients need no changes, but a client whose decoder can't take the extra
+            slices can ask for exactly its own slice count (Moonlight X does on Amlogic devices, whose HEVC
+            decoder hangs or crashes on them); its frames are then encoded in that many slices and sent whole.
             @note{This option only applies when using NVENC [encoder](#encoder) with H.264 or HEVC, on GPUs that
             support sub-frame readback. It turns off asynchronous encoding and
             [split frame encoding](#nvenc_split_encode). Encoding in more slices costs a little compression

@@ -1143,6 +1143,7 @@ namespace rtsp_stream {
     args.try_emplace("x-ml-video.configuredBitrateKbps"sv, "0"sv);
     args.try_emplace("x-ml-video.fecPercent"sv, "-1"sv);
     args.try_emplace("x-ml-video.sendRateMbps"sv, "0"sv);
+    args.try_emplace("x-ml-video.exactSlices"sv, "0"sv);
     args.try_emplace("x-ss-general.encryptionEnabled"sv, "0"sv);
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
@@ -1203,6 +1204,7 @@ namespace rtsp_stream {
       config.monitor.framerateUhz = std::max(0, (int) util::from_view(args.at("x-ml-video.clientRefreshRateUhz"sv)));
       config.monitor.bitrate = (int) util::from_view(args.at("x-nv-vqos[0].bw.maximumBitrateKbps"sv));
       config.monitor.slicesPerFrame = (int) util::from_view(args.at("x-nv-video[0].videoEncoderSlicesPerFrame"sv));
+      config.monitor.exactSlices = util::from_view(args.at("x-ml-video.exactSlices"sv)) != 0;
       config.monitor.numRefFrames = (int) util::from_view(args.at("x-nv-video[0].maxNumReferenceFrames"sv));
       config.monitor.encoderCscMode = (int) util::from_view(args.at("x-nv-video[0].encoderCscMode"sv));
       config.monitor.videoFormat = (int) util::from_view(args.at("x-nv-vqos[0].bitStreamFormat"sv));
@@ -1282,6 +1284,10 @@ namespace rtsp_stream {
       } else {
         BOOST_LOG(warning) << "Client requested a video send rate of "sv << requestedSendRateMbps << " Mbps, which is out of range; using "sv << config.monitor.sendRateMbps << " Mbps"sv;
       }
+    }
+
+    if (config.monitor.exactSlices) {
+      BOOST_LOG(info) << "Client requested exactly "sv << config.monitor.slicesPerFrame << " slice(s) per frame"sv;
     }
 
     if (session.continuous_audio) {

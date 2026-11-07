@@ -74,6 +74,34 @@ TEST(VideoSubframeTest, KeepsTheLastPartForWhenTheFrameFinishes) {
   EXPECT_EQ(video::subframe::parts_ready(8, 8), video::subframe::blocks - 1);
 }
 
+TEST(VideoSubframeTest, SendsInPartsToClientsThatTakeExtraSlices) {
+  EXPECT_TRUE(video::subframe::allowed(1, false));
+  EXPECT_TRUE(video::subframe::allowed(4, false));
+}
+
+TEST(VideoSubframeTest, SendsWholeFramesToClientsThatAskForExactlyFewerSlices) {
+  EXPECT_FALSE(video::subframe::allowed(1, true));
+  EXPECT_FALSE(video::subframe::allowed(static_cast<int>(video::subframe::min_slices) - 1, true));
+}
+
+TEST(VideoSubframeTest, SendsInPartsWhenTheExactSlicesAreEnough) {
+  EXPECT_TRUE(video::subframe::allowed(static_cast<int>(video::subframe::min_slices), true));
+  EXPECT_TRUE(video::subframe::allowed(16, true));
+}
+
+TEST(VideoSubframeTest, KeepsTheHostsPartsForClientsThatTakeExtraSlices) {
+  EXPECT_EQ(video::subframe::encoder_parts(4, 1, false), 4);
+}
+
+TEST(VideoSubframeTest, UsesTheClientsSlicesWhenItAsksForExactlyThem) {
+  EXPECT_EQ(video::subframe::encoder_parts(4, 1, true), 1);
+  EXPECT_EQ(video::subframe::encoder_parts(4, 8, true), 8);
+}
+
+TEST(VideoSubframeTest, UsesAtLeastOneSliceForExactClients) {
+  EXPECT_EQ(video::subframe::encoder_parts(4, 0, true), 1);
+}
+
 TEST(VideoSubframeTest, ReportsNoPartsWithoutSlices) {
   EXPECT_EQ(video::subframe::parts_ready(3, 0), 0u);
 }

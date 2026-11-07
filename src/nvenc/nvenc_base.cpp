@@ -973,6 +973,13 @@ namespace NVENC_NAMESPACE {
       return;
     }
 
+    // Sending frames in parts takes more slices than most clients ask for, and some decoders
+    // can't take them
+    if (!video::subframe::allowed(client_config.slicesPerFrame, client_config.exactSlices)) {
+      BOOST_LOG(info) << "NvEnc: sub-frame readback off, the client asked for exactly " << encoder_params.slices << " slice(s) per frame";
+      return;
+    }
+
     // Codecs that need the exact frame size up front are sent whole
     if (client_config.videoFormat != 0 && client_config.videoFormat != 1) {
       BOOST_LOG(info) << "NvEnc: sub-frame readback is only used for H.264 and HEVC";

@@ -48,6 +48,7 @@ namespace video {
     int pyrowavePacketPayload;  ///< PyroWave in record framing: frame bytes per packet, which records are laid out on (see pyrowave_records.h). 0 sends frames as encoded.
     int framerateUhz;  ///< Optional exact framerate in microhertz, e.g. 71.8317 as 71831700, finer than framerateX100. 0 when not provided.
     int sendRateMbps;  ///< Rate each frame's packets are sent at for this session: the client's request, or the host's video_send_rate. 0 when not set, which means the host's.
+    bool exactSlices = false;  ///< The client asked for exactly slicesPerFrame slices: no extra ones to send frames in parts, which some decoders can't take.
   };
 
   namespace amf {

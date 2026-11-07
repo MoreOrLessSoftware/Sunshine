@@ -53,6 +53,34 @@ namespace video::subframe {
   }
 
   /**
+   * @brief Work out whether frames can be sent in parts to a client.
+   *
+   * @details Sending in parts takes at least min_slices slices per frame, which may be more than
+   *          the client asked for. Most decoders take any number, but some can't: Amlogic's HEVC
+   *          driver hangs, or kernel-panics the device. Clients like that ask for exactly their
+   *          own slice count (x-ml-video.exactSlices).
+   *
+   * @param client_slices Slices per frame the client asked for.
+   * @param exact_slices Whether the client asked for exactly that many.
+   * @return Whether frames can be encoded in the slices sending in parts needs.
+   */
+  inline bool allowed(int client_slices, bool exact_slices) {
+    return !exact_slices || client_slices >= static_cast<int>(min_slices);
+  }
+
+  /**
+   * @brief Work out how many slices or tiles an encoder that hands frames over in parts uses.
+   *
+   * @param configured Slices or tiles the host is set to encode in.
+   * @param client_slices Slices per frame the client asked for.
+   * @param exact_slices Whether the client asked for exactly that many, see allowed().
+   * @return The client's count, at least 1, when it asked for exactly that; otherwise the host's.
+   */
+  inline int encoder_parts(int configured, int client_slices, bool exact_slices) {
+    return exact_slices ? std::max(client_slices, 1) : configured;
+  }
+
+  /**
    * @brief Work out how many parts of a frame can be sent before it finishes encoding.
    *
    * @param slices_done Slices encoded so far.
