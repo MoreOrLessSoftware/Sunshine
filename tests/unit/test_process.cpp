@@ -293,6 +293,7 @@ namespace {
 
   constexpr auto FAIL_CMD = "cmd /c exit 1";  ///< A command that exits with code 1.
   constexpr auto ECHO_CLIENT_CMD = "cmd /c echo client=%SUNSHINE_CLIENT_NAME%";  ///< Prints the client name variable.
+  constexpr auto ECHO_EXTRA_CMD = "cmd /c echo extra=%SUNSHINE_TEST_EXTRA%";  ///< Prints a variable set on the command only.
 #else
   /**
    * @brief Build a command that prints a line to the app's output.
@@ -306,6 +307,7 @@ namespace {
 
   constexpr auto FAIL_CMD = "sh -c \"exit 1\"";  ///< A command that exits with code 1.
   constexpr auto ECHO_CLIENT_CMD = "sh -c \"echo client=$SUNSHINE_CLIENT_NAME\"";  ///< Prints the client name variable.
+  constexpr auto ECHO_EXTRA_CMD = "sh -c \"echo extra=$SUNSHINE_TEST_EXTRA\"";  ///< Prints a variable set on the command only.
 #endif
 
   /**
@@ -474,6 +476,18 @@ TEST_F(ProcessConnectCmdTest, ResumeSeesTheResumingClient) {
 
   process->connect(*make_session("resumer"));
   EXPECT_EQ(take_output(), (std::vector<std::string> {"client=resumer"}));
+}
+
+TEST_F(ProcessConnectCmdTest, CommandsSeeTheirOwnVariables) {
+  auto cmd = connect_cmd(ECHO_EXTRA_CMD, ECHO_EXTRA_CMD);
+  cmd.env = {{"SUNSHINE_TEST_EXTRA", "plugin"}};
+  launch({}, {std::move(cmd)});
+
+  process->disconnect();
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"extra=plugin"}));
+
+  process->connect(*make_session("resumer"));
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"extra=plugin"}));
 }
 
 TEST_F(ProcessConnectCmdTest, CommandThatCannotStartCountsAsFailed) {

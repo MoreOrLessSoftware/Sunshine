@@ -225,6 +225,8 @@ TEST_F(PluginsTest, ParseManifestReadsEveryField) {
   EXPECT_EQ(manifest->scripts.uninstall, "uninstall.ps1");
   EXPECT_EQ(manifest->scripts.do_script, "do.ps1");
   EXPECT_EQ(manifest->scripts.undo_script, "undo.ps1");
+  EXPECT_TRUE(manifest->scripts.connect_script.empty());
+  EXPECT_TRUE(manifest->scripts.disconnect_script.empty());
 
   ASSERT_EQ(manifest->options.size(), 4);
   EXPECT_EQ(manifest->options[0].type, plugins::option_type_e::boolean);
@@ -757,6 +759,55 @@ TEST_F(PluginsTest, PrepCmdsIncludeActivePluginsInOrder) {
   EXPECT_EQ(plugins::prep_cmds({}).size(), 3);
 }
 
+TEST_F(PluginsTest, ParsesConnectAndDisconnectScripts) {
+  const json node = {{"id", "c"}, {"scripts", {{"connect", "resume.ps1"}, {"disconnect", "leave.ps1"}}}};
+  const auto dir = write_plugin(builtin_dir, "c", node);
+  std::string error;
+  const auto manifest = plugins::parse_manifest(node, dir, false, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->scripts.connect_script, "resume.ps1");
+  EXPECT_EQ(manifest->scripts.disconnect_script, "leave.ps1");
+}
+
+TEST_F(PluginsTest, RejectsMissingConnectScript) {
+  const auto dir = write_plugin(builtin_dir, "c", {{"id", "c"}});
+  std::string error;
+  EXPECT_FALSE(plugins::parse_manifest({{"id", "c"}, {"scripts", {{"connect", "missing.ps1"}}}}, dir, false, error));
+  EXPECT_EQ(error, "script 'missing.ps1' does not exist");
+}
+
+TEST_F(PluginsTest, PrepCmdsAddConnectCommandsAfterAppCommands) {
+  auto both_manifest = full_manifest("both");
+  both_manifest["scripts"]["connect"] = "resume.ps1";
+  const auto both = write_plugin(builtin_dir, "both", both_manifest);
+  const auto resume_only = write_plugin(builtin_dir, "resume-only", {
+                                                                       {"id", "resume-only"},
+                                                                       {"order", 300},
+                                                                       {"scripts", {{"disconnect", "leave.ps1"}}},
+                                                                     });
+  write_text(state_file, R"({"plugins":{
+    "both":{"installed":true,"active":true,"options":{"multiplier":3}},
+    "resume-only":{"installed":true,"active":true}
+  }})");
+  plugins::load(paths());
+
+  const auto cmds = plugins::prep_cmds({});
+  ASSERT_EQ(cmds.size(), 3);
+  EXPECT_EQ(cmds[0].type, config::prep_cmd_t::type_e::app);
+  EXPECT_EQ(cmds[0].do_cmd, plugins::script_command(both / "do.ps1"));
+
+  EXPECT_EQ(cmds[1].type, config::prep_cmd_t::type_e::connect);
+  EXPECT_EQ(cmds[1].do_cmd, plugins::script_command(both / "resume.ps1"));
+  EXPECT_TRUE(cmds[1].undo_cmd.empty());
+  EXPECT_TRUE(cmds[1].elevated);
+  EXPECT_EQ(cmds[1].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "3");
+
+  EXPECT_EQ(cmds[2].type, config::prep_cmd_t::type_e::connect);
+  EXPECT_TRUE(cmds[2].do_cmd.empty());
+  EXPECT_EQ(cmds[2].undo_cmd, plugins::script_command(resume_only / "leave.ps1"));
+  EXPECT_EQ(cmds[2].env.at("SUNSHINE_PLUGIN_ID"), "resume-only");
+}
+
 TEST_F(PluginsTest, InstallSucceedsWhenLogCannotBeWritten) {
   write_plugin(builtin_dir, "p", full_manifest("p"));
   fs::create_directories(data_dir / "p.log");
@@ -836,6 +887,33 @@ TEST_F(PluginsTest, ParseAddsPluginCommandsBeforeGlobalCommands) {
   ASSERT_EQ(apps[2].prep_cmds.size(), 2);
   EXPECT_EQ(apps[2].prep_cmds[0].env.at("SUNSHINE_PLUGIN_ID"), "p");
   EXPECT_EQ(apps[2].prep_cmds[1].do_cmd, "app-do");
+}
+
+TEST_F(PluginsTest, ParseRoutesPluginConnectCommandsToConnectCommands) {
+  auto manifest = full_manifest("p");
+  manifest["scripts"]["connect"] = "resume.ps1";
+  const auto dir = write_plugin(builtin_dir, "p", manifest);
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto saved_prep_cmds = config::sunshine.prep_cmds;
+  config::sunshine.prep_cmds.clear();
+  config::sunshine.prep_cmds.emplace_back("global-connect", "", false, config::prep_cmd_t::type_e::connect);
+
+  const auto apps_file = root / "apps.json";
+  write_text(apps_file, R"({"env":{},"apps":[{"name":"Default"}]})");
+  auto proc = proc::parse(apps_file.string());
+  config::sunshine.prep_cmds = saved_prep_cmds;
+  ASSERT_TRUE(proc);
+
+  const auto &app = proc->get_apps().at(0);
+  ASSERT_EQ(app.prep_cmds.size(), 1);
+  EXPECT_EQ(app.prep_cmds[0].do_cmd, plugins::script_command(dir / "do.ps1"));
+
+  ASSERT_EQ(app.connect_cmds.size(), 2);
+  EXPECT_EQ(app.connect_cmds[0].do_cmd, plugins::script_command(dir / "resume.ps1"));
+  EXPECT_EQ(app.connect_cmds[0].env.at("SUNSHINE_PLUGIN_ID"), "p");
+  EXPECT_EQ(app.connect_cmds[1].do_cmd, "global-connect");
 }
 
 TEST(PrepCmdEnvTest, AddsCommandVariables) {

@@ -206,14 +206,14 @@ namespace proc {
     void set_client_env(const rtsp_stream::launch_session_t &launch_session);
 
     /**
-     * @brief Run a prep command and wait for it to exit.
+     * @brief Run one side of a prep command and wait for it to exit.
      *
-     * @param cmd The command line to run.
-     * @param elevated Whether to run it elevated.
+     * @param prep_cmd The prep command, whose elevation and extra variables apply.
+     * @param cmd The command line to run: the Do or Undo command of `prep_cmd`.
      * @param label What kind of command it is, for the log.
      * @return `true` when it ran and exited with code 0.
      */
-    bool run_prep(const std::string &cmd, bool elevated, std::string_view label);
+    bool run_prep(const cmd_t &prep_cmd, const std::string &cmd, std::string_view label);
   };
 
   /**

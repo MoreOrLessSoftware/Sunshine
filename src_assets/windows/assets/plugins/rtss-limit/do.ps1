@@ -5,21 +5,9 @@ $ErrorActionPreference = 'Stop'
 
 Initialize-Rtss
 
-# RTSS stores fractional limits as an integer over a denominator, e.g. 5994/100 for 59.94 FPS.
-if ($env:SUNSHINE_CLIENT_FPS_X100) {
-    $fpsX100 = [int]$env:SUNSHINE_CLIENT_FPS_X100
-}
-else {
-    $fpsX100 = [int]$env:SUNSHINE_CLIENT_FPS * 100
-}
-if ($fpsX100 % 100 -eq 0) {
-    $limit = $fpsX100 / 100
-    $denominator = 1
-}
-else {
-    $limit = $fpsX100
-    $denominator = 100
-}
+$clientLimit = Get-RtssClientLimit
+$limit = $clientLimit.limit
+$denominator = $clientLimit.denominator
 
 $stateFile = Get-RtssStateFile
 $previous = @{}

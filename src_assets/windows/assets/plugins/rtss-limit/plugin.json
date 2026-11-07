@@ -1,7 +1,7 @@
 {
   "id": "rtss-limit",
   "name": "RTSS Frame Limit",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Sets the RivaTuner Statistics Server frame rate limit to the client's frame rate for the length of the stream, then restores the previous limit. Requires RTSS 7.3.7 or newer.",
   "author": "Sunshine",
   "homepage": "https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/",
@@ -10,7 +10,8 @@
   "scripts": {
     "install": "install.ps1",
     "do": "do.ps1",
-    "undo": "undo.ps1"
+    "undo": "undo.ps1",
+    "connect": "resume.ps1"
   },
   "options": [
     {
@@ -25,6 +26,13 @@
       "type": "boolean",
       "label": "Start RTSS if it isn't running",
       "description": "Start RivaTuner Statistics Server for the stream if it isn't already running, and close it again afterwards. An RTSS you started yourself is left running.",
+      "default": true
+    },
+    {
+      "id": "reapply_on_resume",
+      "type": "boolean",
+      "label": "Re-apply the limit when a client resumes",
+      "description": "Set the limit again when a client resumes the running application, using that client's frame rate. Turn this off to keep the limit from when the stream started.",
       "default": true
     }
   ]

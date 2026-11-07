@@ -309,13 +309,13 @@ namespace proc {
     _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session.surround_params;
   }
 
-  bool proc_t::run_prep(const std::string &cmd, bool elevated, std::string_view label) {
+  bool proc_t::run_prep(const cmd_t &prep_cmd, const std::string &cmd, std::string_view label) {
     std::error_code ec;
     boost::filesystem::path working_dir = _app.working_dir.empty() ?
                                             find_working_directory(cmd, _env) :
                                             boost::filesystem::path(_app.working_dir);
     BOOST_LOG(info) << "Executing "sv << label << ": ["sv << cmd << ']';
-    auto child = platf::run_command(elevated, true, cmd, working_dir, _env, _pipe.get(), ec, nullptr);
+    auto child = platf::run_command(prep_cmd.elevated, true, cmd, working_dir, prep_cmd_env(_env, prep_cmd), _pipe.get(), ec, nullptr);
     if (ec) {
       BOOST_LOG(error) << "Couldn't run ["sv << cmd << "]: System: "sv << ec.message();
       return false;
@@ -346,7 +346,7 @@ namespace proc {
 
     for (; _connect_cmds_in_effect < _app.connect_cmds.size(); ++_connect_cmds_in_effect) {
       const auto &cmd = _app.connect_cmds[_connect_cmds_in_effect];
-      if (!cmd.do_cmd.empty() && !run_prep(cmd.do_cmd, cmd.elevated, "Connect Do Cmd"sv)) {
+      if (!cmd.do_cmd.empty() && !run_prep(cmd, cmd.do_cmd, "Connect Do Cmd"sv)) {
         // Don't keep the client from its game; the commands that ran are undone when it leaves
         BOOST_LOG(warning) << "Skipping the remaining connect commands"sv;
         return;
@@ -358,7 +358,7 @@ namespace proc {
     for (; _connect_cmds_in_effect > 0; --_connect_cmds_in_effect) {
       const auto &cmd = _app.connect_cmds[_connect_cmds_in_effect - 1];
       if (!cmd.undo_cmd.empty()) {
-        run_prep(cmd.undo_cmd, cmd.elevated, "Disconnect Undo Cmd"sv);
+        run_prep(cmd, cmd.undo_cmd, "Disconnect Undo Cmd"sv);
       }
     }
   }
@@ -794,12 +794,19 @@ namespace proc {
 
         // Plugins run first so global and app commands see their changes, and undo last.
         // Global commands run before the app's own, for both types.
-        std::vector<proc::cmd_t> prep_cmds = plugins::prep_cmds(exclude_plugins);
+        std::vector<proc::cmd_t> prep_cmds;
         std::vector<proc::cmd_t> connect_cmds;
-        auto add_prep_cmd = [&](std::string &&do_cmd, std::string &&undo_cmd, bool elevated, proc::cmd_t::type_e type) {
-          auto &cmds = type == proc::cmd_t::type_e::connect ? connect_cmds : prep_cmds;
-          cmds.emplace_back(std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type);
+        auto add_cmd = [&](proc::cmd_t &&cmd) {
+          auto &cmds = cmd.type == proc::cmd_t::type_e::connect ? connect_cmds : prep_cmds;
+          cmds.emplace_back(std::move(cmd));
         };
+        auto add_prep_cmd = [&](std::string &&do_cmd, std::string &&undo_cmd, bool elevated, proc::cmd_t::type_e type) {
+          add_cmd(proc::cmd_t {std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type});
+        };
+
+        for (auto &plugin_cmd : plugins::prep_cmds(exclude_plugins)) {
+          add_cmd(std::move(plugin_cmd));
+        }
 
         if (!exclude_global_prep.value_or(false)) {
           for (auto &prep_cmd : config::sunshine.prep_cmds) {

@@ -71,6 +71,8 @@ namespace plugins {
     std::string uninstall;  ///< Removes dependencies. Always runs elevated.
     std::string do_script;  ///< Runs before the application starts.
     std::string undo_script;  ///< Runs after the application exits.
+    std::string connect_script;  ///< Runs when a client resumes the running application.
+    std::string disconnect_script;  ///< Runs when the last client leaves the application running.
   };
 
   /**
@@ -291,7 +293,8 @@ namespace plugins {
    * @brief Build the preparation commands of the active plugins.
    *
    * @param excluded IDs of plugins the application opted out of.
-   * @return One command per active plugin with a do or undo script, in plugin order.
+   * @return In plugin order, an app command for each active plugin with a do or undo script,
+   *         followed by a connect command when the plugin also has a connect or disconnect script.
    */
   std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded);
 

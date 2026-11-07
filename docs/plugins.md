@@ -22,12 +22,17 @@ Active plugins run before the global and application preparation commands, in pl
 run after the preparation commands are undone, in reverse order. If a plugin's do script fails, the application is
 not started, just as with a failing preparation command.
 
+A plugin can also have connect and disconnect scripts, which run like preparation commands with the `connect`
+type: the connect script runs when a client resumes the running application, and the disconnect script runs when
+the last client leaves it running. They see the frame rate and other `SUNSHINE_CLIENT_*` values of the client that
+is resuming.
+
 ## Bundled plugins
 
 | Plugin           | What it does                                                                                                                                                                                                                                          |
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Virtual Display  | Creates a virtual display matching the client's resolution and frame rate using [sunshine-vdisplay](https://github.com/Zayrick/sunshine-vdisplay), and removes it when the stream ends. The refresh rate can be a multiple of the client frame rate. Each client gets its own virtual monitor unless *Shared virtual monitor for all clients* is on. |
-| RTSS Frame Limit | Sets the [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) frame rate limit to the client frame rate and restores the previous limit afterwards. RTSS 7.3.7 or newer must already be installed. If RTSS isn't running, it is started for the stream and closed afterwards. |
+| RTSS Frame Limit | Sets the [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) frame rate limit to the client frame rate and restores the previous limit afterwards. RTSS 7.3.7 or newer must already be installed. If RTSS isn't running, it is started for the stream and closed afterwards. The limit is set again when a client resumes, using that client's frame rate, unless *Re-apply the limit when a client resumes* is off. |
 | V-Sync Toggle    | Changes the graphics driver's global V-Sync setting and restores the previous setting afterwards. On NVIDIA GPUs it uses [vsync-toggle](https://github.com/xanderfrangos/vsync-toggle). On AMD GPUs it sets the driver's *Wait for Vertical Refresh* setting, which applies to games started after the change. |
 
 Using *Virtual Display* with a refresh rate multiplier together with *RTSS Frame Limit* runs the display faster than
@@ -80,8 +85,8 @@ in the `plugins` folder inside the Sunshine config directory (the Plugins page s
 | `author`      | No       | Shown in the web UI.                                                                                                |
 | `homepage`    | No       | Linked from the web UI.                                                                                             |
 | `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 100, 200 and 300.                   |
-| `elevated`    | No       | Run the do and undo scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
-| `scripts`     | No       | Any of `install`, `uninstall`, `do` and `undo`. Each must be a `.ps1` file directly inside the plugin folder.        |
+| `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
+| `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect` and `disconnect`. Each must be a `.ps1` file directly inside the plugin folder. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 
 Each option has an `id` (lowercase letters, digits and `_`, starting with a letter), a `type`, and optionally a

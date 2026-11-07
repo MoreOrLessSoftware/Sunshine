@@ -638,10 +638,12 @@ namespace plugins {
       if (!read_string(scripts, "install", manifest.scripts.install, error) ||
           !read_string(scripts, "uninstall", manifest.scripts.uninstall, error) ||
           !read_string(scripts, "do", manifest.scripts.do_script, error) ||
-          !read_string(scripts, "undo", manifest.scripts.undo_script, error)) {
+          !read_string(scripts, "undo", manifest.scripts.undo_script, error) ||
+          !read_string(scripts, "connect", manifest.scripts.connect_script, error) ||
+          !read_string(scripts, "disconnect", manifest.scripts.disconnect_script, error)) {
         return std::nullopt;
       }
-      for (const auto *script : {&manifest.scripts.install, &manifest.scripts.uninstall, &manifest.scripts.do_script, &manifest.scripts.undo_script}) {
+      for (const auto *script : {&manifest.scripts.install, &manifest.scripts.uninstall, &manifest.scripts.do_script, &manifest.scripts.undo_script, &manifest.scripts.connect_script, &manifest.scripts.disconnect_script}) {
         if (!is_valid_script(*script, dir, error)) {
           return std::nullopt;
         }
@@ -981,15 +983,19 @@ namespace plugins {
       if (std::ranges::find(excluded, manifest.id) != excluded.end()) {
         continue;
       }
-      if (manifest.scripts.do_script.empty() && manifest.scripts.undo_script.empty()) {
-        continue;
-      }
-
-      auto do_cmd = manifest.scripts.do_script.empty() ? std::string {} : script_command(manifest.dir / manifest.scripts.do_script);
-      auto undo_cmd = manifest.scripts.undo_script.empty() ? std::string {} : script_command(manifest.dir / manifest.scripts.undo_script);
-      auto elevated = manifest.elevated;
-      auto &cmd = cmds.emplace_back(std::move(do_cmd), std::move(undo_cmd), std::move(elevated));
-      cmd.env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
+      const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
+      auto add = [&](const std::string &do_script, const std::string &undo_script, config::prep_cmd_t::type_e type) {
+        if (do_script.empty() && undo_script.empty()) {
+          return;
+        }
+        auto do_cmd = do_script.empty() ? std::string {} : script_command(manifest.dir / do_script);
+        auto undo_cmd = undo_script.empty() ? std::string {} : script_command(manifest.dir / undo_script);
+        auto elevated = manifest.elevated;
+        auto &cmd = cmds.emplace_back(std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type);
+        cmd.env = env;
+      };
+      add(manifest.scripts.do_script, manifest.scripts.undo_script, config::prep_cmd_t::type_e::app);
+      add(manifest.scripts.connect_script, manifest.scripts.disconnect_script, config::prep_cmd_t::type_e::connect);
     }
     return cmds;
   }

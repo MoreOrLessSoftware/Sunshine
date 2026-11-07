@@ -121,6 +121,29 @@ function Set-RtssLimit([string]$name, [int]$limit, [int]$denominator) {
     }
 }
 
+# Returns the client's frame rate as an RTSS limit: an integer over a denominator, e.g. 5994/100 for 59.94 FPS.
+# Uses the thousandths Sunshine passes when it has them, otherwise hundredths, otherwise whole frames.
+function Get-RtssClientLimit {
+    if ($env:SUNSHINE_CLIENT_FPS_X1000) {
+        $fpsX1000 = [long]$env:SUNSHINE_CLIENT_FPS_X1000
+    }
+    elseif ($env:SUNSHINE_CLIENT_FPS_X100) {
+        $fpsX1000 = [long]$env:SUNSHINE_CLIENT_FPS_X100 * 10
+    }
+    else {
+        $fpsX1000 = [long]$env:SUNSHINE_CLIENT_FPS * 1000
+    }
+
+    # Use the coarsest denominator that is exact, so whole and hundredths rates are stored as before.
+    if ($fpsX1000 % 1000 -eq 0) {
+        return @{ limit = [int]($fpsX1000 / 1000); denominator = 1 }
+    }
+    if ($fpsX1000 % 10 -eq 0) {
+        return @{ limit = [int]($fpsX1000 / 10); denominator = 100 }
+    }
+    return @{ limit = [int]$fpsX1000; denominator = 1000 }
+}
+
 function Get-RtssStateFile {
     return Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'previous-limits.json'
 }
