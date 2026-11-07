@@ -46,6 +46,9 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## POST /api/apps/close
 @copydoc confighttp::closeApp()
 
+## POST /api/apps/plugins
+@copydoc confighttp::saveAppPlugins()
+
 ## DELETE /api/apps/{index}
 @copydoc confighttp::deleteApp()
 

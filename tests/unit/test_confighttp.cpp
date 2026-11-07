@@ -2195,3 +2195,103 @@ TEST_F(PluginsConfigHttpTest, SaveAppKeepsOnlyNonEmptyPluginExclusions) {
   EXPECT_FALSE(apps[0].contains("exclude-plugins"));
   EXPECT_EQ(apps[1]["exclude-plugins"], nlohmann::json::array({"p"}));
 }
+
+/**
+ * @brief Runs `saveAppPlugins` against a temporary applications file.
+ */
+class SaveAppPluginsTest: public PluginsConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::string saved_file_apps;  ///< The applications file to restore after the test.
+
+  void SetUp() override {
+    PluginsConfigHttpTest::SetUp();
+    saved_file_apps = config::stream.file_apps;
+    config::stream.file_apps = (plugins_root / "apps.json").string();
+    std::ofstream(config::stream.file_apps) << R"({"env":{},"apps":[
+      {"name":"A","cmd":"a.exe"},
+      {"name":"B","exclude-plugins":["p","gone"]},
+      {"name":"C","exclude-plugins":["p"]}
+    ]})";
+    server->resource["^/app-plugins-test$"]["POST"] = confighttp::saveAppPlugins;
+  }
+
+  void TearDown() override {
+    config::stream.file_apps = saved_file_apps;
+    PluginsConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Read the applications back from the file.
+   *
+   * @return The `apps` array.
+   */
+  nlohmann::json read_apps() const {
+    std::ifstream in(config::stream.file_apps);
+    return nlohmann::json::parse(in).at("apps");
+  }
+
+  /**
+   * @brief Post a body to the endpoint and expect it to be rejected without changing the file.
+   *
+   * @param body Request body.
+   * @param error Expected error message.
+   */
+  void expect_rejected(const std::string &body, const std::string &error) {
+    const auto before = read_apps();
+    const auto response = send("POST", "/app-plugins-test", body);
+    EXPECT_EQ(response->status_code, "400 Bad Request") << body;
+    EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("error"), error) << body;
+    EXPECT_EQ(read_apps(), before) << body;
+  }
+};
+
+TEST_F(SaveAppPluginsTest, SetsAndClearsExclusionsOfListedAppsOnly) {
+  const auto response = send("POST", "/app-plugins-test", R"({"apps":[
+    {"index":0,"name":"A","exclude-plugins":["p"]},
+    {"index":1,"name":"B","exclude-plugins":[]}
+  ]})");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("status"), true);
+
+  const auto apps = read_apps();
+  ASSERT_EQ(apps.size(), 3);
+  EXPECT_EQ(apps[0]["exclude-plugins"], nlohmann::json::array({"p"}));
+  EXPECT_EQ(apps[0]["cmd"], "a.exe");
+  EXPECT_FALSE(apps[1].contains("exclude-plugins"));
+  EXPECT_EQ(apps[2]["exclude-plugins"], nlohmann::json::array({"p"}));
+}
+
+TEST_F(SaveAppPluginsTest, MissingExclusionsClearThem) {
+  ASSERT_EQ(send("POST", "/app-plugins-test", R"({"apps":[{"index":2,"name":"C"}]})")->status_code, "200 OK");
+  EXPECT_FALSE(read_apps()[2].contains("exclude-plugins"));
+}
+
+TEST_F(SaveAppPluginsTest, RejectsChangedApps) {
+  constexpr auto changed = "the applications have changed; reload and try again";
+  // A valid change listed first must not be written when a later entry is rejected
+  expect_rejected(R"({"apps":[{"index":0,"name":"A","exclude-plugins":["p"]},{"index":1,"name":"Renamed"}]})", changed);
+  expect_rejected(R"({"apps":[{"index":3,"name":"D"}]})", changed);
+  expect_rejected(R"({"apps":[{"index":-1,"name":"A"}]})", changed);
+}
+
+TEST_F(SaveAppPluginsTest, RejectsMalformedRequests) {
+  expect_rejected(R"([])", "'apps' must be an array");
+  expect_rejected(R"({})", "'apps' must be an array");
+  expect_rejected(R"({"apps":{}})", "'apps' must be an array");
+
+  constexpr auto bad_entry = "each app needs an integer 'index' and a string 'name'";
+  expect_rejected(R"({"apps":[1]})", bad_entry);
+  expect_rejected(R"({"apps":[{"name":"A"}]})", bad_entry);
+  expect_rejected(R"({"apps":[{"index":"0","name":"A"}]})", bad_entry);
+  expect_rejected(R"({"apps":[{"index":0}]})", bad_entry);
+  expect_rejected(R"({"apps":[{"index":0,"name":1}]})", bad_entry);
+
+  constexpr auto bad_exclusions = "'exclude-plugins' must be an array of strings";
+  expect_rejected(R"({"apps":[{"index":0,"name":"A","exclude-plugins":"p"}]})", bad_exclusions);
+  expect_rejected(R"({"apps":[{"index":0,"name":"A","exclude-plugins":[1]}]})", bad_exclusions);
+}
+
+TEST_F(SaveAppPluginsTest, RejectsInvalidJson) {
+  const auto response = send("POST", "/app-plugins-test", "{");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+}

@@ -111,6 +111,14 @@ namespace confighttp {
   void saveApp(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Set which plugins several applications opt out of, in one write of the applications file.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void saveAppPlugins(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief List plugins with their state and options.
    *
    * @param response HTTP response object to populate.

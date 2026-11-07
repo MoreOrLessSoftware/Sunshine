@@ -14,7 +14,8 @@ Open the **Plugins** page in the web UI. Each plugin can be:
   activates the plugin once the script succeeds. The output is shown under *View log*.
 * **Activated** — an active plugin runs for every application. Use the *Active* switch to turn it off or back on
   without uninstalling. To skip a plugin for one application, uncheck it under *Plugins* when editing that
-  application.
+  application, or select *Apps & plugins* to see every application against every active plugin. In that grid,
+  the checkbox next to an application or under a plugin changes the whole row or column.
 * **Configured** — change the plugin's options and select *Save options*. The new values apply to the next stream.
 * **Uninstalled** — deactivates the plugin, runs its uninstall script, and deletes the files it downloaded.
 
@@ -40,8 +41,8 @@ the stream while keeping games capped at the client frame rate.
 
 ## Writing a plugin
 A plugin is a folder containing a `plugin.json` manifest and the PowerShell scripts it references. Put custom plugins
-in the `plugins` folder inside the Sunshine config directory (the Plugins page shows the exact path), then select
-*Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
+in the `plugins` folder inside the Sunshine config directory (by default `C:\Program Files\Sunshine\config\plugins`),
+then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 
 ### Manifest
 

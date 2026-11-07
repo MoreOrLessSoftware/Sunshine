@@ -1437,6 +1437,20 @@ p {
     vertical-align: -0.125em;
 }
 
+/* Application and plugin grid on the Plugins page: keep the application column readable and
+   mark cells that differ from what is saved. */
+.plugin-matrix th[scope="row"] {
+    min-width: 12rem;
+}
+
+.plugin-matrix thead th {
+    vertical-align: bottom;
+}
+
+.plugin-matrix .plugin-matrix-changed {
+    background-color: var(--bs-warning-bg-subtle);
+}
+
 /* Install and uninstall output on the Plugins page. */
 .plugin-log {
     max-height: 300px;

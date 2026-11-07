@@ -13,15 +13,85 @@
         <h1>{{ $t('plugins.title') }}</h1>
         <p class="mb-0">{{ $t('plugins.description') }}</p>
       </div>
-      <button type="button" class="btn btn-outline-secondary" @click="rescan" :disabled="loading">
-        <refresh-cw :size="18" class="icon"></refresh-cw>
-        {{ $t('plugins.rescan') }}
-      </button>
+      <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="btn" :class="matrix.open ? 'btn-secondary' : 'btn-outline-secondary'"
+                :aria-expanded="matrix.open" aria-controls="plugin-app-matrix" @click="toggleMatrix">
+          <layout-grid :size="18" class="icon"></layout-grid>
+          {{ $t('plugins.matrix_button') }}
+        </button>
+        <button type="button" class="btn btn-outline-secondary" @click="rescan" :disabled="loading">
+          <refresh-cw :size="18" class="icon"></refresh-cw>
+          {{ $t('plugins.rescan') }}
+        </button>
+      </div>
     </div>
 
-    <div class="alert alert-info" v-if="customDir">
-      {{ $t('plugins.custom_dir_desc') }}
-      <code class="d-block mt-1">{{ customDir }}</code>
+    <!-- Which active plugins run for which applications -->
+    <div class="card mb-4" id="plugin-app-matrix" v-if="matrix.open">
+      <div class="card-body">
+        <h5 class="card-title">{{ $t('plugins.matrix_title') }}</h5>
+        <p class="card-text">{{ $t('plugins.matrix_desc') }}</p>
+
+        <div v-if="matrix.loading" class="text-center py-3">
+          <div class="spinner-border" role="status">
+            <span class="visually-hidden">{{ $t('_common.loading') }}</span>
+          </div>
+        </div>
+        <div v-else-if="matrix.loadError" class="alert alert-danger mb-0" role="alert">{{ matrix.loadError }}</div>
+        <div v-else-if="activePlugins.length === 0" class="alert alert-secondary mb-0">{{ $t('plugins.matrix_no_plugins') }}</div>
+        <div v-else-if="matrix.apps.length === 0" class="alert alert-secondary mb-0">{{ $t('plugins.matrix_no_apps') }}</div>
+        <template v-else>
+          <div class="table-responsive plugin-matrix">
+            <table class="table table-sm table-hover align-middle mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">{{ $t('plugins.matrix_apps') }}</th>
+                  <th scope="col" class="text-center" v-for="plugin in activePlugins" :key="plugin.id">
+                    <label class="d-flex flex-column align-items-center gap-1 mb-0">
+                      <span>{{ plugin.name }}</span>
+                      <input class="form-check-input m-0" type="checkbox"
+                             :checked="columnState(plugin) === 'all'" :indeterminate="columnState(plugin) === 'some'"
+                             :title="$t('plugins.matrix_toggle_plugin', {name: plugin.name})"
+                             :aria-label="$t('plugins.matrix_toggle_plugin', {name: plugin.name})"
+                             :disabled="matrix.saving" @change="setColumn(plugin, $event.target.checked)">
+                    </label>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="app in matrix.apps" :key="app.index">
+                  <th scope="row" class="fw-normal">
+                    <div class="form-check mb-0">
+                      <input class="form-check-input" type="checkbox" :id="'matrix-app-' + app.index"
+                             :checked="rowState(app) === 'all'" :indeterminate="rowState(app) === 'some'"
+                             :title="$t('plugins.matrix_toggle_app', {name: app.name})"
+                             :disabled="matrix.saving" @change="setRow(app, $event.target.checked)">
+                      <label class="form-check-label" :for="'matrix-app-' + app.index">{{ app.name }}</label>
+                    </div>
+                  </th>
+                  <td class="text-center" v-for="plugin in activePlugins" :key="plugin.id"
+                      :class="{'plugin-matrix-changed': isCellChanged(app, plugin)}">
+                    <input class="form-check-input m-0" type="checkbox"
+                           :checked="isEnabled(app, plugin)"
+                           :aria-label="$t('plugins.matrix_toggle_cell', {plugin: plugin.name, app: app.name})"
+                           :disabled="matrix.saving" @change="setEnabled(app, plugin, $event.target.checked)">
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="d-flex flex-wrap align-items-center gap-2 mt-3">
+            <button type="button" class="btn btn-success" :disabled="!matrixDirty || matrix.saving" @click="saveMatrix">
+              <save :size="18" class="icon"></save>
+              {{ $t('plugins.matrix_save') }}
+            </button>
+            <button type="button" class="btn btn-outline-secondary" v-if="matrixDirty" :disabled="matrix.saving" @click="resetMatrix">
+              {{ $t('_common.cancel') }}
+            </button>
+          </div>
+        </template>
+        <div v-if="matrix.error" class="alert alert-danger py-2 mt-3 mb-0">{{ matrix.error }}</div>
+      </div>
     </div>
 
     <div v-if="loading && plugins.length === 0" class="text-center py-5">
@@ -159,13 +229,14 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { Download, FileText, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
+  import { Download, FileText, LayoutGrid, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
 
   const app = createApp({
     components: {
       Navbar,
       Download,
       FileText,
+      LayoutGrid,
       RefreshCw,
       Save,
       Shield,
@@ -175,7 +246,6 @@
     data() {
       return {
         plugins: [],
-        customDir: '',
         loading: true,
         loadError: null,
         drafts: {},
@@ -183,11 +253,27 @@
         errors: {},
         saving: {},
         pollTimer: null,
+        matrix: {
+          open: false,
+          loading: false,
+          loadError: null,
+          saving: false,
+          error: null,
+          // One entry per application, in the order of the applications file:
+          // {index, name, saved: IDs excluded on the server, excluded: IDs excluded in the grid}
+          apps: [],
+        },
       };
     },
     computed: {
       anyRunning() {
         return this.plugins.some((plugin) => this.isBusy(plugin));
+      },
+      activePlugins() {
+        return this.plugins.filter((plugin) => plugin.active);
+      },
+      matrixDirty() {
+        return this.matrix.apps.some((app) => this.isAppChanged(app));
       },
     },
     mounted() {
@@ -209,7 +295,6 @@
           }
           const body = await response.json();
           this.applyPlugins(body.plugins || []);
-          this.customDir = body.custom_dir || '';
           this.loadError = null;
         } catch (error) {
           console.error('Failed to load plugins', error);
@@ -355,6 +440,128 @@
         } else {
           this.logs[plugin.id] = '';
           this.loadLog(plugin);
+        }
+      },
+
+      async toggleMatrix() {
+        if (this.matrix.open && this.matrixDirty && !window.confirm(this.i18n.t('plugins.matrix_discard_confirm'))) {
+          return;
+        }
+        this.matrix.open = !this.matrix.open;
+        if (this.matrix.open) {
+          await this.loadMatrixApps();
+        }
+      },
+
+      /**
+       * Fetch the applications and reset the grid to their saved plugin exclusions.
+       */
+      async loadMatrixApps() {
+        this.matrix.loading = true;
+        this.matrix.error = null;
+        try {
+          const response = await apiFetch('./api/apps', {method: 'GET'});
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const body = await response.json();
+          this.matrix.apps = (body.apps || []).map((app, index) => {
+            const saved = Array.isArray(app['exclude-plugins']) ? [...app['exclude-plugins']] : [];
+            return {index, name: app.name, saved, excluded: [...saved]};
+          });
+          this.matrix.loadError = null;
+        } catch (error) {
+          console.error('Failed to load applications', error);
+          this.matrix.loadError = this.i18n.t('plugins.matrix_load_failure');
+        } finally {
+          this.matrix.loading = false;
+        }
+      },
+
+      isEnabled(app, plugin) {
+        return !app.excluded.includes(plugin.id);
+      },
+
+      setEnabled(app, plugin, enabled) {
+        const others = app.excluded.filter((id) => id !== plugin.id);
+        app.excluded = enabled ? others : [...others, plugin.id];
+      },
+
+      isCellChanged(app, plugin) {
+        return app.saved.includes(plugin.id) !== app.excluded.includes(plugin.id);
+      },
+
+      isAppChanged(app) {
+        return app.saved.length !== app.excluded.length || app.saved.some((id) => !app.excluded.includes(id));
+      },
+
+      /**
+       * Summarize the cells of a row or column: 'all', 'some' or 'none' enabled.
+       */
+      summarize(states) {
+        const enabled = states.filter(Boolean).length;
+        if (enabled === 0) {
+          return 'none';
+        }
+        return enabled === states.length ? 'all' : 'some';
+      },
+
+      rowState(app) {
+        return this.summarize(this.activePlugins.map((plugin) => this.isEnabled(app, plugin)));
+      },
+
+      columnState(plugin) {
+        return this.summarize(this.matrix.apps.map((app) => this.isEnabled(app, plugin)));
+      },
+
+      setRow(app, enabled) {
+        for (const plugin of this.activePlugins) {
+          this.setEnabled(app, plugin, enabled);
+        }
+      },
+
+      setColumn(plugin, enabled) {
+        for (const app of this.matrix.apps) {
+          this.setEnabled(app, plugin, enabled);
+        }
+      },
+
+      resetMatrix() {
+        for (const app of this.matrix.apps) {
+          app.excluded = [...app.saved];
+        }
+      },
+
+      /**
+       * Save the changed rows in one request. Exclusions of plugins not shown in the grid are kept.
+       */
+      async saveMatrix() {
+        const apps = this.matrix.apps.filter((app) => this.isAppChanged(app)).map((app) => ({
+          index: app.index,
+          name: app.name,
+          'exclude-plugins': app.excluded,
+        }));
+
+        this.matrix.saving = true;
+        this.matrix.error = null;
+        try {
+          const response = await apiFetch('./api/apps/plugins', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({apps}),
+          });
+          const result = await response.json();
+          if (!response.ok || result.status !== true) {
+            this.matrix.error = result.error || this.i18n.t('plugins.action_failure');
+            return;
+          }
+          notifyKey.success('plugins.matrix_saved');
+          await this.loadMatrixApps();
+        } catch (error) {
+          console.error('Failed to save plugin assignments', error);
+          this.matrix.error = this.i18n.t('plugins.action_failure');
+        } finally {
+          this.matrix.saving = false;
         }
       },
 

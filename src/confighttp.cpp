@@ -1195,6 +1195,97 @@ namespace confighttp {
   }
 
   /**
+   * @brief Set which plugins several applications opt out of, in one write of the applications file.
+   * Each entry names an application by its current index and name; the request fails without changing
+   * anything when an index is out of range or the name no longer matches, such as after another edit.
+   * Applications that are not listed are left as they are.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "apps": [
+   *     {
+   *       "index": 0,
+   *       "name": "Desktop",
+   *       "exclude-plugins": [
+   *         "plugin-id"
+   *       ]
+   *     }
+   *   ]
+   * }
+   * @endcode
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/apps/plugins| POST| {"apps":[{"index":0,"name":"Desktop","exclude-plugins":["rtss-limit"]}]}}
+   */
+  void saveAppPlugins(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss);
+      if (!input_tree.is_object() || !input_tree.contains("apps") || !input_tree["apps"].is_array()) {
+        bad_request(response, request, "'apps' must be an array");
+        return;
+      }
+
+      nlohmann::json file_tree = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+      auto &apps_node = file_tree["apps"];
+
+      for (const auto &entry : input_tree["apps"]) {
+        if (!entry.is_object() || !entry.contains("index") || !entry["index"].is_number_integer() || !entry.contains("name") || !entry["name"].is_string()) {
+          bad_request(response, request, "each app needs an integer 'index' and a string 'name'");
+          return;
+        }
+        const auto index = entry["index"].get<std::int64_t>();
+        if (index < 0 || std::cmp_greater_equal(index, apps_node.size()) || apps_node[index].value("name", "") != entry["name"].get<std::string>()) {
+          bad_request(response, request, "the applications have changed; reload and try again");
+          return;
+        }
+
+        const auto exclusions = entry.value("exclude-plugins", nlohmann::json::array());
+        if (!exclusions.is_array() || !std::ranges::all_of(exclusions, [](const nlohmann::json &id) {
+              return id.is_string();
+            })) {
+          bad_request(response, request, "'exclude-plugins' must be an array of strings");
+          return;
+        }
+
+        auto &app = apps_node[index];
+        if (exclusions.empty()) {
+          app.erase("exclude-plugins");
+        } else {
+          app["exclude-plugins"] = exclusions;
+        }
+      }
+
+      file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+      proc::refresh(config::stream.file_apps);
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SaveAppPlugins: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
    * @brief Close the currently running application.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -2657,6 +2748,7 @@ namespace confighttp {
     server.resource["^/api/apps$"]["POST"] = saveApp;
     server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
+    server.resource["^/api/apps/plugins$"]["POST"] = saveAppPlugins;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
