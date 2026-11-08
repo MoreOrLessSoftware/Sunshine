@@ -1,0 +1,80 @@
+{
+  "id": "stadia-controller",
+  "name": "Stadia Controller",
+  "version": "1.0.0",
+  "description": "Runs the Stadiacast receiver while a stream is running, so a Stadia Controller in Wi-Fi mode becomes a virtual Xbox controller on this PC. Wake the controller once the stream has started. Uses Stadiacast and the xgpad driver (or ViGEmBus).",
+  "author": "Sunshine",
+  "homepage": "https://github.com/MoreOrLessSoftware/stadiacast",
+  "order": 400,
+  "elevated": true,
+  "scripts": {
+    "install": "install.ps1",
+    "uninstall": "uninstall.ps1",
+    "do": "do.ps1",
+    "undo": "undo.ps1"
+  },
+  "actions": [
+    {
+      "id": "test_start",
+      "label": "Start test",
+      "description": "Start the receiver now, without a stream, then wake the controller to see it connect and try its buttons below.",
+      "script": "test-start.ps1"
+    },
+    {
+      "id": "test_stop",
+      "label": "Stop test",
+      "description": "Stop the receiver and remove the virtual controller.",
+      "script": "test-stop.ps1"
+    }
+  ],
+  "panel": {
+    "file": "panel.html",
+    "port": 8008,
+    "height": 440
+  },
+  "options": [
+    {
+      "id": "gamepad",
+      "type": "choice",
+      "label": "Virtual controller",
+      "description": "The controller games see. The Xbox Series controller uses the xgpad driver (Sunshine's Xbox Series Controller Driver component) and maps Capture to Share. The Xbox 360 controller needs the ViGEmBus driver.",
+      "default": "xgpad",
+      "choices": [
+        {"value": "xgpad", "label": "Xbox Series controller (xgpad)"},
+        {"value": "vigem", "label": "Xbox 360 controller (ViGEmBus)"},
+        {"value": "off", "label": "None (receiver only)"}
+      ]
+    },
+    {
+      "id": "dns_upstream",
+      "type": "string",
+      "label": "DNS upstream",
+      "description": "Where the receiver's DNS server forwards the names it does not answer itself, usually your router. Leave empty to use this PC's own DNS server. The controller must use this PC as its DNS server, for example through a DHCP option on your router.",
+      "default": ""
+    },
+    {
+      "id": "deadzone",
+      "type": "boolean",
+      "label": "Stick deadzones",
+      "description": "Apply XInput's standard stick deadzones. Turn off for raw sticks.",
+      "default": true
+    },
+    {
+      "id": "stop_windows_time",
+      "type": "boolean",
+      "label": "Pause Windows Time while running",
+      "description": "The receiver answers the controller's time requests on UDP 123, which the Windows Time service holds. Stop the service while the receiver runs and start it again afterwards.",
+      "default": true
+    },
+    {
+      "id": "keep_logs",
+      "type": "number",
+      "label": "Receiver logs to keep",
+      "description": "How many receiver run directories to keep in the plugin's data folder.",
+      "default": 10,
+      "min": 1,
+      "max": 100,
+      "step": 1
+    }
+  ]
+}
