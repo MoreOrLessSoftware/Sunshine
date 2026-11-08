@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -84,6 +85,11 @@ namespace plugins {
       static registry_t instance;
       return instance;
     }
+
+    /**
+     * @brief Set by `stop_proxy_streams()` so running panel streams end when Sunshine shuts down; cleared by `load()`.
+     */
+    std::atomic<bool> proxy_streams_stopping {false};
 
     /**
      * @brief Convert a path to UTF-8 text.
@@ -1011,6 +1017,7 @@ namespace plugins {
 
   void load(const paths_t &paths) {
     wait_for_task();
+    proxy_streams_stopping = false;
 
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
@@ -1028,11 +1035,12 @@ namespace plugins {
 
   std::unique_ptr<platf::deinit_t> init() {
     /**
-     * @brief Stops a running install or uninstall when Sunshine exits.
+     * @brief Ends running panel streams and stops a running install or uninstall when Sunshine exits.
      */
     class deinit_t: public platf::deinit_t {
     public:
       ~deinit_t() override {
+        stop_proxy_streams();
         cancel_task();
       }
     };
@@ -1309,35 +1317,152 @@ namespace plugins {
     });
   }
 
-  result_e proxy_get(const std::string &id, const std::string &path, proxy_response_t &out, std::string &error) {
-    int port = 0;
-    {
-      auto &reg = registry();
-      std::scoped_lock lock {reg.mutex};
-      const auto *manifest = find_manifest(reg, id);
-      if (!manifest) {
-        error = std::format("plugin '{}' not found", id);
-        return result_e::not_found;
+  namespace {
+    /**
+     * @brief Find the port a plugin panel may read from and check the requested path.
+     *
+     * @param id Plugin ID.
+     * @param path Path and query to request.
+     * @param port Receives the port.
+     * @param error Receives the reason when the request is rejected.
+     * @return `ok`, `not_found` or `invalid`.
+     */
+    result_e resolve_proxy(const std::string &id, const std::string &path, int &port, std::string &error) {
+      {
+        auto &reg = registry();
+        std::scoped_lock lock {reg.mutex};
+        const auto *manifest = find_manifest(reg, id);
+        if (!manifest) {
+          error = std::format("plugin '{}' not found", id);
+          return result_e::not_found;
+        }
+        if (!manifest->panel || manifest->panel->port == 0) {
+          error = std::format("plugin '{}' has no panel port", id);
+          return result_e::invalid;
+        }
+        port = manifest->panel->port;
       }
-      if (!manifest->panel || manifest->panel->port == 0) {
-        error = std::format("plugin '{}' has no panel port", id);
+      if (!is_valid_proxy_path(path)) {
+        error = "invalid proxy path";
         return result_e::invalid;
       }
-      port = manifest->panel->port;
-    }
-    if (!is_valid_proxy_path(path)) {
-      error = "invalid proxy path";
-      return result_e::invalid;
+      return result_e::ok;
     }
 
-    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl {curl_easy_init(), &curl_easy_cleanup};
+    /**
+     * @brief Create a curl handle for a request to a plugin's local service, with the options every proxy request uses.
+     *
+     * @param url Address to request.
+     * @return Handle, or an empty pointer when curl could not start.
+     */
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> local_request(const std::string &url) {
+      std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl {curl_easy_init(), &curl_easy_cleanup};
+      if (curl) {
+        curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl.get(), CURLOPT_PROXY, "");  // never through a configured proxy
+        curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 1000L);
+        curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
+      }
+      return curl;
+    }
+
+    /**
+     * @brief Read the status and content type of a finished or running curl transfer.
+     *
+     * @param curl Transfer to read.
+     * @param status Receives the HTTP status.
+     * @param content_type Receives the content type, or an empty string.
+     */
+    void response_head(CURL *curl, int &status, std::string &content_type) {
+      long code = 0;
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+      status = static_cast<int>(code);
+      content_type.clear();
+      if (char *type = nullptr; curl_easy_getinfo(curl, CURLINFO_CONTENT_TYPE, &type) == CURLE_OK && type) {
+        content_type = type;
+      }
+    }
+  }  // namespace
+
+  result_e proxy_stream(const std::string &id, const std::string &path, const proxy_head_t &on_head, const proxy_data_t &on_data, std::chrono::milliseconds max_duration, std::string &error) {
+    int port = 0;
+    if (const auto result = resolve_proxy(id, path, port, error); result != result_e::ok) {
+      return result;
+    }
+    auto curl = local_request(std::format("http://127.0.0.1:{}{}", port, path));
+    if (!curl) {
+      error = "could not start the request";
+      return result_e::unavailable;
+    }
+
+    /**
+     * @brief What the curl callbacks share with this call.
+     */
+    struct stream_t {
+      CURL *curl;  ///< The transfer.
+      const proxy_head_t *on_head;  ///< Head callback.
+      const proxy_data_t *on_data;  ///< Body callback.
+      std::chrono::steady_clock::time_point deadline;  ///< When to end the request.
+      bool head_sent = false;  ///< Whether `on_head` was called.
+    } stream {curl.get(), &on_head, &on_data, std::chrono::steady_clock::now() + max_duration};
+
+    const auto write = +[](char *data, std::size_t size, std::size_t count, void *user) -> std::size_t {
+      auto *s = static_cast<stream_t *>(user);
+      if (!s->head_sent) {
+        int status = 0;
+        std::string content_type;
+        response_head(s->curl, status, content_type);
+        (*s->on_head)(status, content_type);
+        s->head_sent = true;
+      }
+      return (*s->on_data)(std::string_view {data, size * count}) ? size * count : 0;  // 0 aborts the transfer
+    };
+    // Called at least once a second while the transfer runs, also while no data arrives.
+    const auto progress = +[](void *user, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+      const auto *s = static_cast<stream_t *>(user);
+      return proxy_streams_stopping || std::chrono::steady_clock::now() >= s->deadline ? 1 : 0;  // non-zero aborts
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &stream);
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, progress);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &stream);
+    // A service that stops sending altogether (server-sent events send a heartbeat) is given up on.
+    curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_LOW_SPEED_TIME, 15L);
+
+    const auto code = curl_easy_perform(curl.get());
+    if (stream.head_sent) {
+      return result_e::ok;  // ended by the service, by on_data, by the deadline or at shutdown
+    }
+    if (code != CURLE_OK) {
+      error = std::format("nothing answered on local port {}: {}", port, curl_easy_strerror(code));
+      return result_e::unavailable;
+    }
+    int status = 0;
+    std::string content_type;
+    response_head(curl.get(), status, content_type);
+    on_head(status, content_type);  // a response without a body
+    return result_e::ok;
+  }
+
+  void stop_proxy_streams() {
+    proxy_streams_stopping = true;
+  }
+
+  result_e proxy_get(const std::string &id, const std::string &path, proxy_response_t &out, std::string &error) {
+    int port = 0;
+    if (const auto result = resolve_proxy(id, path, port, error); result != result_e::ok) {
+      return result;
+    }
+    auto curl = local_request(std::format("http://127.0.0.1:{}{}", port, path));
     if (!curl) {
       error = "could not start the request";
       return result_e::unavailable;
     }
 
     constexpr std::size_t max_body = 4 * 1024 * 1024;
-    const auto url = std::format("http://127.0.0.1:{}{}", port, path);
     out = {};
     const auto write = +[](char *data, std::size_t size, std::size_t count, void *user) -> std::size_t {
       auto *body = static_cast<std::string *>(user);
@@ -1347,12 +1472,7 @@ namespace plugins {
       body->append(data, size * count);
       return size * count;
     };
-    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl.get(), CURLOPT_PROXY, "");  // never through a configured proxy
-    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 1000L);
     curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, 3000L);
-    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write);
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &out.body);
 
@@ -1360,12 +1480,7 @@ namespace plugins {
       error = std::format("nothing answered on local port {}: {}", port, curl_easy_strerror(code));
       return result_e::unavailable;
     }
-    long status = 0;
-    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
-    out.status = static_cast<int>(status);
-    if (char *type = nullptr; curl_easy_getinfo(curl.get(), CURLINFO_CONTENT_TYPE, &type) == CURLE_OK && type) {
-      out.content_type = type;
-    }
+    response_head(curl.get(), out.status, out.content_type);
     return result_e::ok;
   }
 

@@ -2260,6 +2260,64 @@ TEST_F(PluginsConfigHttpTest, ProxyForwardsTheServiceResponse) {
   EXPECT_EQ(response->header.find("X-Content-Type-Options")->second, "nosniff");
 }
 
+/**
+ * @brief Fixture with a custom plugin whose panel reads from a one-connection local service.
+ */
+class PluginsProxyStreamTest: public PluginsConfigHttpTest {
+protected:
+  /**
+   * @brief Serve `reply` to the first connection on an ephemeral port, then register a plugin reading from it.
+   *
+   * @param reply Raw HTTP response the service sends.
+   */
+  void serve(const std::string &reply) {
+    service = std::jthread([this, reply]() {
+      boost::asio::ip::tcp::socket socket {acceptor.get_executor()};
+      boost::system::error_code ec;
+      acceptor.accept(socket, ec);
+      if (ec) {
+        return;
+      }
+      boost::asio::streambuf buffer;
+      boost::asio::read_until(socket, buffer, "\r\n\r\n", ec);
+      boost::asio::write(socket, boost::asio::buffer(reply), ec);
+    });
+    const auto plugin_dir = plugins_root / "custom" / "live";
+    std::filesystem::create_directories(plugin_dir);
+    std::ofstream(plugin_dir / "panel.html") << "<!doctype html>";
+    std::ofstream(plugin_dir / "plugin.json") << std::format(R"({{"id":"live","panel":{{"file":"panel.html","port":{}}}}})", acceptor.local_endpoint().port());
+    ASSERT_EQ(send("POST", "/plugins-rescan-test")->status_code, "200 OK");
+  }
+
+  boost::asio::io_context io;  ///< I/O context of the acceptor.
+  boost::asio::ip::tcp::acceptor acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}};  ///< The service's socket.
+  std::jthread service;  ///< Serves the one connection.
+};
+
+TEST_F(PluginsProxyStreamTest, RelaysAnEventStream) {
+  serve("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\nretry: 250\n\nevent: input\ndata: {}\n\n");
+  const auto response = send("GET", "/plugins-proxy-test?id=live&path=/_events&stream=1");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(response->header.find("Content-Type")->second, "text/event-stream");
+  EXPECT_EQ(response->header.find("Connection")->second, "close");
+  EXPECT_EQ(response->content.string(), "retry: 250\n\nevent: input\ndata: {}\n\n");
+}
+
+TEST_F(PluginsProxyStreamTest, PassesOtherResponsesThroughWhole) {
+  serve("HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+  const auto response = send("GET", "/plugins-proxy-test?id=live&path=/_events&stream=1");
+  EXPECT_EQ(response->status_code, "404 Not Found");
+  EXPECT_EQ(response->content.string(), "{}");
+  EXPECT_EQ(response->header.find("Content-Type")->second, "application/json");
+}
+
+TEST_F(PluginsConfigHttpTest, ProxyStreamReportsAServiceThatIsNotRunning) {
+  const auto response = send("GET", "/plugins-proxy-test?id=p&path=/_events&stream=1");
+  ASSERT_EQ(response->status_code, "502 Bad Gateway");
+  EXPECT_TRUE(response->content.string().contains(std::format("nothing answered on local port {}", closed_port)));
+  EXPECT_EQ(send("GET", "/plugins-proxy-test?id=missing&path=/_events&stream=1")->status_code, "404 Not Found");
+}
+
 TEST_F(PluginsConfigHttpTest, RescanFindsNewPlugins) {
   const auto plugin_dir = plugins_root / "custom" / "extra";
   std::filesystem::create_directories(plugin_dir);

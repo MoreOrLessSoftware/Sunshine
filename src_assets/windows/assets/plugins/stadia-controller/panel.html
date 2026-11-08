@@ -10,8 +10,10 @@
       --fg: #212529;
       --muted: #6c757d;
       --line: #dee2e6;
-      --body: #f1f3f5;
-      --button: #ffffff;
+      --outline: #868e96;
+      --dim: #ced4da;
+      --glyph: #495057;
+      --shell: rgba(0, 0, 0, 0.03);
       --on: #fd5e20;
       --on-fg: #ffffff;
       --ok: #198754;
@@ -23,17 +25,19 @@
       --fg: #dee2e6;
       --muted: #adb5bd;
       --line: #495057;
-      --body: #2b3035;
-      --button: #343a40;
+      --outline: #8e918f;
+      --dim: #444746;
+      --glyph: #c4c7c5;
+      --shell: rgba(255, 255, 255, 0.05);
       --on: #ff7a45;
-      --on-fg: #ffffff;
+      --on-fg: #1b1b1b;
       --ok: #75b798;
       --warn: #ffda6a;
       --bad: #ea868f;
     }
     html, body { margin: 0; background: var(--bg); color: var(--fg); }
     body { font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 4px 2px; }
-    .status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+    .status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
     .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
     .dot.ok { background: var(--ok); }
     .dot.warn { background: var(--warn); }
@@ -41,81 +45,178 @@
     .detail { color: var(--muted); }
     .tabs { display: flex; gap: 6px; margin: 4px 0; }
     .tabs button {
-      border: 1px solid var(--line); background: var(--button); color: var(--fg);
+      border: 1px solid var(--line); background: var(--bg); color: var(--fg);
       border-radius: 4px; padding: 2px 10px; cursor: pointer; font: inherit;
     }
     .tabs button.current { border-color: var(--on); color: var(--on); }
-    svg { width: 100%; max-width: 560px; height: auto; display: block; margin: 0 auto; }
-    svg .shell { fill: var(--body); stroke: var(--line); stroke-width: 2; }
-    svg .key { fill: var(--button); stroke: var(--line); stroke-width: 1.5; transition: fill 60ms; }
-    svg .key.on { fill: var(--on); stroke: var(--on); }
-    svg text { fill: var(--muted); font-size: 12px; text-anchor: middle; dominant-baseline: central; pointer-events: none; }
-    svg .key.on + text { fill: var(--on-fg); }
-    svg .well { fill: none; stroke: var(--line); stroke-width: 1.5; }
-    svg .trigger-fill { fill: var(--on); }
+    svg { width: 100%; max-width: 620px; height: auto; display: block; margin: 0 auto; }
     svg.idle { opacity: 0.45; }
+
+    /* Controller artwork: colors come from the theme instead of the original fixed values. */
+    svg .shell { fill: var(--shell); stroke: var(--outline); }
+    svg .outline { stroke: var(--outline); fill: none; transition: fill 60ms, stroke 60ms; }
+    svg .dim { stroke: var(--dim); fill: none; }
+    svg .glyph { fill: var(--glyph); transition: fill 60ms; }
+    svg .bumper { stroke: var(--dim); fill: none; transition: stroke 60ms; }
+    svg .area { fill: transparent; transition: fill 60ms; }
+    svg .trigger { fill: none; stroke: var(--outline); }
+    svg .trigger-fill { fill: var(--on); }
+    svg .label { fill: var(--muted); font: 600 22px system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; }
+    svg .on .outline, svg .outline.on { fill: var(--on); stroke: var(--on); }
+    svg .on .glyph { fill: var(--on-fg); }
+    svg .bumper.on { stroke: var(--on); }
+    svg .area.on { fill: var(--on); }
+
     .values { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; color: var(--muted);
-              font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; margin-top: 2px; }
+              font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; min-height: 1.4em; }
   </style>
 </head>
 <body>
   <div class="status"><span class="dot" id="dot"></span><strong id="headline">Connecting to Sunshine...</strong><span class="detail" id="detail"></span></div>
   <div class="tabs" id="tabs" hidden></div>
 
-  <svg id="pad" class="idle" viewBox="0 0 600 330" role="img" aria-label="Stadia Controller inputs">
-    <!-- triggers (L2 / R2) fill with the analog value -->
-    <rect class="key" x="110" y="8" width="110" height="16" rx="6"></rect>
-    <rect class="trigger-fill" id="l2-fill" x="110" y="8" width="0" height="16" rx="6"></rect>
-    <text x="165" y="16" id="l2-text">L2</text>
-    <rect class="key" x="380" y="8" width="110" height="16" rx="6"></rect>
-    <rect class="trigger-fill" id="r2-fill" x="380" y="8" width="0" height="16" rx="6"></rect>
-    <text x="435" y="16" id="r2-text">R2</text>
+  <!--
+    Controller artwork adapted from "Stadia Controller with the WebHID API and the Gamepad API"
+    (https://googlechrome.github.io/samples/stadia-controller-webhid-gamepad/), part of Google Chrome Samples,
+    Copyright Google LLC, licensed under the Apache License, Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0).
+    Changes: colors follow the Sunshine theme, the bumper outline is split into L1 and R1, the drawing is grouped
+    per button, and D-pad direction areas, L2/R2 trigger bars, labels and movable stick caps were added.
+  -->
+  <svg id="pad" class="idle" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="90 352 1100 768" role="img" aria-label="Stadia Controller inputs">
+    <!-- L2 / R2: fill with the analog trigger value (added) -->
+    <rect class="trigger" x="266" y="360" width="160" height="26" rx="13" stroke-width="4"></rect>
+    <rect class="trigger-fill" id="l2-fill" x="266" y="360" width="0" height="26" rx="13"></rect>
+    <text class="label" x="226" y="373">L2</text>
+    <rect class="trigger" x="854" y="360" width="160" height="26" rx="13" stroke-width="4"></rect>
+    <rect class="trigger-fill" id="r2-fill" x="854" y="360" width="0" height="26" rx="13"></rect>
+    <text class="label" x="1054" y="373">R2</text>
 
-    <!-- shoulders -->
-    <rect class="key" data-button="l1" x="110" y="32" width="110" height="18" rx="7"></rect><text x="165" y="41">L1</text>
-    <rect class="key" data-button="r1" x="380" y="32" width="110" height="18" rx="7"></rect><text x="435" y="41">R1</text>
+    <!-- L1 / R1 -->
+    <path class="bumper" data-button="l1" stroke-width="8" stroke-miterlimit="10"
+          d="M425.775 428.514v-12.073c0-4.16-3.165-7.602-7.322-7.771-23.927-.971-101.054-1.145-149.608 33.048-2.048 1.443-3.21 3.816-3.21 6.322v23.23"/>
+    <text class="label" x="226" y="430">L1</text>
+    <path class="bumper" data-button="r1" stroke-width="8" stroke-miterlimit="10"
+          d="M854.89 428.514v-12.073c0-4.16 3.165-7.602 7.322-7.771 23.928-.971 101.054-1.145 149.608 33.048 2.05 1.443 3.21 3.816 3.21 6.322v23.23"/>
+    <text class="label" x="1054" y="430">R1</text>
 
-    <path class="shell" d="M150,62 C210,48 390,48 450,62 C520,77 560,132 575,212 C590,292 545,322 505,312 C470,304 450,262 420,242 L180,242 C150,262 130,304 95,312 C55,322 10,292 25,212 C40,132 80,77 150,62 Z"></path>
+    <path class="shell" stroke-width="10" stroke-miterlimit="10"
+          d="M1178.45 975.758c-20.37-154.678-63.44-322.57-101.82-422.838-37.59-101.046-137.054-121.255-230.252-121.255H433.64c-93.199 0-192.663 20.209-230.256 121.255-37.592 101.046-80.668 268.16-101.814 422.838-11.747 76.952 44.642 123.592 94.765 129.032 50.124 5.44 110.43-13.22 140.19-89.39 29.761-75.396 42.292-139.91 104.947-139.91h396.291c62.654 0 75.185 64.514 104.946 139.91 29.761 75.4 90.071 94.83 140.191 89.39 50.12-5.44 107.3-52.08 95.55-129.032Z"/>
 
-    <!-- d-pad -->
-    <rect class="key" data-button="dpad_up" x="138" y="104" width="24" height="30" rx="4"></rect><text x="150" y="119">▲</text>
-    <rect class="key" data-button="dpad_down" x="138" y="158" width="24" height="30" rx="4"></rect><text x="150" y="173">▼</text>
-    <rect class="key" data-button="dpad_left" x="108" y="134" width="30" height="24" rx="4"></rect><text x="123" y="146">◀</text>
-    <rect class="key" data-button="dpad_right" x="162" y="134" width="30" height="24" rx="4"></rect><text x="177" y="146">▶</text>
+    <!-- D-pad: one area per direction (added) under the original outline -->
+    <rect class="area" data-button="dpad_up" x="315.6" y="520.2" width="54.8" height="90" rx="27"></rect>
+    <rect class="area" data-button="dpad_down" x="315.6" y="610.2" width="54.8" height="90" rx="27"></rect>
+    <rect class="area" data-button="dpad_left" x="253" y="582.85" width="90" height="54.8" rx="27"></rect>
+    <rect class="area" data-button="dpad_right" x="343" y="582.85" width="90" height="54.8" rx="27"></rect>
+    <path class="outline" stroke-width="6" stroke-miterlimit="10"
+          d="M405.611 582.853h-31.218a4 4 0 0 1-4-4v-31.218c0-14.869-12.522-27.391-27.392-27.391-14.869 0-27.391 12.522-27.391 27.391v31.218a4 4 0 0 1-4 4h-31.218c-14.87 0-27.392 12.521-27.392 27.391 0 14.869 12.522 27.391 27.392 27.391h31.218a4 4 0 0 1 4 4v31.218c0 14.869 12.522 27.391 27.391 27.391 14.87 0 27.392-12.522 27.392-27.391v-31.218a4 4 0 0 1 4-4h31.218c14.87 0 27.392-12.522 27.392-27.391 0-14.87-11.74-27.391-27.392-27.391Z"/>
 
-    <!-- face buttons -->
-    <circle class="key" data-button="y" cx="450" cy="112" r="15"></circle><text x="450" y="112">Y</text>
-    <circle class="key" data-button="a" cx="450" cy="180" r="15"></circle><text x="450" y="180">A</text>
-    <circle class="key" data-button="x" cx="416" cy="146" r="15"></circle><text x="416" y="146">X</text>
-    <circle class="key" data-button="b" cx="484" cy="146" r="15"></circle><text x="484" y="146">B</text>
+    <!-- Left stick: the cap moves with the stick and lights up for L3 -->
+    <path class="dim" stroke-width="2" stroke-miterlimit="10"
+          d="M480.447 829.4c35.347 0 64.001-28.654 64.001-64 0-35.346-28.654-64-64.001-64-35.346 0-64 28.654-64 64 0 35.346 28.654 64 64 64Z"/>
+    <g id="left-stick" data-button="l3">
+      <path class="outline" stroke-width="6" stroke-miterlimit="10"
+            d="M479.995 813.4c26.51 0 48-21.49 48-48s-21.49-48-48-48-48.001 21.49-48.001 48 21.491 48 48.001 48Z"/>
+    </g>
 
-    <!-- center cluster -->
-    <circle class="key" data-button="options" cx="252" cy="104" r="11"></circle><text x="252" y="104">⋯</text>
-    <circle class="key" data-button="menu" cx="348" cy="104" r="11"></circle><text x="348" y="104">≡</text>
-    <circle class="key" data-button="stadia" cx="300" cy="132" r="17"></circle><text x="300" y="132">S</text>
-    <circle class="key" data-button="assistant" cx="276" cy="174" r="10"></circle><text x="276" y="174">✦</text>
-    <circle class="key" data-button="capture" cx="324" cy="174" r="10"></circle><text x="324" y="174">◉</text>
+    <!-- Stadia button -->
+    <g data-button="stadia">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M640 801.4c19.882 0 36-16.118 36-36s-16.118-36-36-36-36 16.118-36 36 16.118 36 36 36Z"/>
+      <path class="glyph"
+            d="M630.799 762.18c11.256-5.076 21.094-2.016 26.349.549a.906.906 0 0 0 1.257-.528l1.537-4.611a1.133 1.133 0 0 0-.58-1.377c-6.486-3.168-21.884-8.221-38.886 3.744-.44.31-.597.89-.378 1.383l3.589 8.075a1.13 1.13 0 0 0 1.423.604c4.106-1.504 10.317-3.083 16.755-2.154-4.357.738-7.858 2.275-10.547 3.925a1.13 1.13 0 0 0-.446 1.413l2.206 5.053a.678.678 0 0 0 1.114.197 11.139 11.139 0 0 1 2.484-1.938c3.477-2.019 8.284-3.515 14.783-3.171.508.026.972-.29 1.132-.772l1.643-4.927a1.133 1.133 0 0 0-.465-1.314c-4.82-3.046-12.243-5.584-22.999-4.138l.029-.013Z"/>
+    </g>
 
-    <!-- sticks: the knob moves with the axes and lights up when clicked (L3 / R3) -->
-    <circle class="well" cx="225" cy="208" r="30"></circle>
-    <circle class="key" data-button="l3" id="left-knob" cx="225" cy="208" r="18"></circle><text id="left-label" x="225" y="208">L3</text>
-    <circle class="well" cx="375" cy="208" r="30"></circle>
-    <circle class="key" data-button="r3" id="right-knob" cx="375" cy="208" r="18"></circle><text id="right-label" x="375" y="208">R3</text>
+    <!-- Right stick: the cap moves with the stick and lights up for R3 -->
+    <path class="dim" stroke-width="2" stroke-miterlimit="10"
+          d="M800 829.398c35.346 0 64-28.653 64-63.999 0-35.346-28.654-63.999-64-63.999-35.346 0-64 28.653-64 63.999 0 35.346 28.654 63.999 64 63.999Z"/>
+    <g id="right-stick" data-button="r3">
+      <path class="outline" stroke-width="6" stroke-miterlimit="10"
+            d="M800.47 813.892c26.509 0 48-21.49 48-47.999 0-26.509-21.491-47.999-48-47.999-26.51 0-48 21.49-48 47.999 0 26.509 21.49 47.999 48 47.999Z"/>
+    </g>
+
+    <!-- Options (⋯) -->
+    <g data-button="options">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M532.4 552.576c10.747 0 19.6-9.12 19.6-20s-8.853-20-19.6-20h-28.8c-10.747 0-19.6 9.12-19.6 20s8.853 20 19.6 20h28.8Z"/>
+      <path class="glyph"
+            d="M510 532.4a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM522 532.4a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM534 532.4a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z"/>
+    </g>
+
+    <!-- Assistant -->
+    <g data-button="assistant">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M564 635.43c13.255 0 24-10.745 24-24s-10.745-24-24-24-24 10.745-24 24 10.745 24 24 24Z"/>
+      <path class="glyph"
+            d="M575.083 607.9c-.486 0-.904-.165-1.254-.496a1.761 1.761 0 0 1-.496-1.254c0-.486.165-.895.496-1.225.35-.35.768-.525 1.254-.525s.895.175 1.225.525c.35.33.525.739.525 1.225 0 .486-.175.904-.525 1.254-.33.331-.739.496-1.225.496Zm-5.25 5.833c-.972 0-1.798-.34-2.479-1.021-.681-.68-1.021-1.507-1.021-2.479 0-.972.34-1.798 1.021-2.479.681-.681 1.507-1.021 2.479-1.021.972 0 1.799.34 2.479 1.021.681.681 1.021 1.507 1.021 2.479 0 .972-.34 1.799-1.021 2.479-.68.681-1.507 1.021-2.479 1.021Zm0 9.333c-1.128 0-2.09-.398-2.887-1.195-.798-.798-1.196-1.76-1.196-2.888s.398-2.09 1.196-2.887c.797-.798 1.759-1.196 2.887-1.196 1.128 0 2.09.398 2.888 1.196.797.797 1.196 1.759 1.196 2.887 0 1.128-.399 2.09-1.196 2.888-.798.797-1.76 1.195-2.888 1.195Zm-11.666-9.333c-1.945 0-3.598-.68-4.959-2.042-1.361-1.361-2.041-3.013-2.041-4.958 0-1.944.68-3.597 2.041-4.958 1.361-1.361 3.014-2.042 4.959-2.042 1.944 0 3.597.681 4.958 2.042 1.361 1.361 2.042 3.014 2.042 4.958 0 1.945-.681 3.597-2.042 4.958-1.361 1.362-3.014 2.042-4.958 2.042Z"/>
+    </g>
+
+    <!-- Capture -->
+    <g data-button="capture">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M715.367 635.43c13.255 0 24-10.746 24-24 0-13.255-10.745-24-24-24s-24 10.745-24 24c0 13.254 10.745 24 24 24Z"/>
+      <path class="glyph"
+            d="M704.5 621.9v-7.388h2.625v4.763h4.762v2.625H704.5Zm0-13.65v-7.35h7.387v2.625h-4.762v4.725H704.5Zm13.65 13.65v-2.625h4.725v-4.763h2.625v7.388h-7.35Zm4.725-13.65v-4.725h-4.725V600.9h7.35v7.35h-2.625Z"/>
+    </g>
+
+    <!-- Menu (≡) -->
+    <g data-button="menu">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M776.275 552.576c10.747 0 19.6-9.12 19.6-20s-8.853-20-19.6-20h-28.8c-10.747 0-19.6 9.12-19.6 20s8.853 20 19.6 20h28.8Z"/>
+      <path class="glyph"
+            d="M749.25 540.9v-2.55h25.5v2.55h-25.5Zm0-7.225v-2.55h25.5v2.55h-25.5Zm0-7.225v-2.55h25.5v2.55h-25.5Z"/>
+    </g>
+
+    <!-- A -->
+    <g data-button="a">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M946.749 711.4c18.778 0 34-15.222 34-34s-15.222-34-34-34c-18.777 0-34 15.222-34 34s15.223 34 34 34Z"/>
+      <path class="glyph"
+            d="m936.84 688.4 8.64-22.912h4l8.672 22.912h-3.872l-2.112-5.888h-9.344l-2.112 5.888h-3.872Zm14.144-9.152-2.528-7.008-.864-2.624h-.192l-.864 2.624-2.528 7.008h6.976Z"/>
+    </g>
+
+    <!-- X -->
+    <g data-button="x">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M879 643.324c18.778 0 34-15.222 34-34 0-18.777-15.222-34-34-34s-34 15.223-34 34c0 18.778 15.222 34 34 34Z"/>
+      <path class="glyph"
+            d="M869.512 597.488h4.32l5.088 8.224h.192l5.12-8.224h4.288l-7.136 11.008 7.648 11.904h-4.288l-5.632-8.928h-.192l-5.632 8.928H869l7.648-11.904-7.136-11.008Z"/>
+    </g>
+
+    <!-- Y -->
+    <g data-button="y">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M946.749 575.4c18.778 0 34-15.222 34-34s-15.222-34-34-34c-18.777 0-34 15.222-34 34s15.223 34 34 34Z"/>
+      <path class="glyph"
+            d="M945.334 552.312v-10.624L937.59 529.4h4.16l5.216 8.64h.192l5.088-8.64h4.192l-7.616 12.288v10.624h-3.488Z"/>
+    </g>
+
+    <!-- B -->
+    <g data-button="b">
+      <path class="outline" stroke-width="4" stroke-miterlimit="10"
+            d="M1015 643.324c18.78 0 34-15.222 34-34 0-18.777-15.22-34-34-34-18.778 0-34 15.222-34 34s15.222 34 34 34Z"/>
+      <path class="glyph"
+            d="M1008.08 620.4v-22.912h8.57c1.26 0 2.4.267 3.43.8 1.02.533 1.83 1.259 2.43 2.176.62.917.93 1.952.93 3.104 0 1.173-.29 2.176-.87 3.008a5.445 5.445 0 0 1-2.24 1.888v.16a5.827 5.827 0 0 1 2.82 1.984c.72.939 1.09 2.059 1.09 3.36 0 1.28-.33 2.4-1 3.36-.64.96-1.51 1.717-2.62 2.272-1.09.533-2.28.8-3.58.8h-8.96Zm3.52-10.144v6.88h5.44c.76 0 1.43-.16 1.98-.48.55-.32.97-.747 1.25-1.28.3-.533.45-1.088.45-1.664 0-.619-.15-1.184-.45-1.696-.3-.533-.74-.96-1.31-1.28-.56-.32-1.24-.48-2.05-.48h-5.31Zm0-3.136h4.89c.75 0 1.38-.149 1.89-.448.53-.32.94-.725 1.22-1.216.27-.512.41-1.035.41-1.568 0-.533-.14-1.035-.41-1.504a2.92 2.92 0 0 0-1.16-1.184c-.51-.32-1.12-.48-1.82-.48h-5.02v6.4Z"/>
+    </g>
   </svg>
   <div class="values" id="values"></div>
 
   <script>
     'use strict';
     const id = new URLSearchParams(location.search).get('id') || 'stadia-controller';
-    const proxy = (path) => `./proxy?id=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}`;
+    const proxy = (path, stream) => `./proxy?id=${encodeURIComponent(id)}&path=${encodeURIComponent(path)}${stream ? '&stream=1' : ''}`;
     const $ = (name) => document.getElementById(name);
-    const keys = [...document.querySelectorAll('[data-button]')];
+    const buttons = [...document.querySelectorAll('#pad [data-button]')];
     const padNames = {xgpad: 'Xbox Series controller', vigem: 'Xbox 360 controller'};
+    const STICK_TRAVEL = 16;  // how far a cap moves inside its well, in drawing units
+    const TRIGGER_WIDTH = 160;
     let selected = null;
+    let source = null;
+    let lastEvent = 0;
+    let retryTimer = null;
 
     // Follow Sunshine's light / dark theme (the page that frames this one).
     function applyTheme() {
-      let theme = 'light';
+      let theme = 'auto';
       try {
         theme = window.parent.document.documentElement.getAttribute('data-bs-theme') || 'auto';
       } catch (e) {
@@ -138,25 +239,17 @@
       $('detail').textContent = detail || '';
     }
 
-    function moveKnob(knob, label, cx, cy, x, y) {
-      const dx = (x / 32768) * 14;
-      const dy = (-y / 32768) * 14;  // the controller reports Y positive = up
-      knob.setAttribute('cx', cx + dx);
-      knob.setAttribute('cy', cy + dy);
-      label.setAttribute('x', cx + dx);
-      label.setAttribute('y', cy + dy);
-    }
-
     function showInput(input) {
       const held = new Set(input ? input.held : []);
-      for (const key of keys) {
-        key.classList.toggle('on', held.has(key.dataset.button));
+      for (const button of buttons) {
+        button.classList.toggle('on', held.has(button.dataset.button));
       }
       const v = input || {lx: 0, ly: 0, rx: 0, ry: 0, l2: 0, r2: 0};
-      $('l2-fill').setAttribute('width', (v.l2 / 255) * 110);
-      $('r2-fill').setAttribute('width', (v.r2 / 255) * 110);
-      moveKnob($('left-knob'), $('left-label'), 225, 208, v.lx, v.ly);
-      moveKnob($('right-knob'), $('right-label'), 375, 208, v.rx, v.ry);
+      $('l2-fill').setAttribute('width', (v.l2 / 255) * TRIGGER_WIDTH);
+      $('r2-fill').setAttribute('width', (v.r2 / 255) * TRIGGER_WIDTH);
+      // The controller reports Y positive = up; SVG y grows downwards.
+      $('left-stick').setAttribute('transform', `translate(${(v.lx / 32768) * STICK_TRAVEL} ${(-v.ly / 32768) * STICK_TRAVEL})`);
+      $('right-stick').setAttribute('transform', `translate(${(v.rx / 32768) * STICK_TRAVEL} ${(-v.ry / 32768) * STICK_TRAVEL})`);
       $('values').textContent = input ?
         `LX ${v.lx}  LY ${v.ly}  RX ${v.rx}  RY ${v.ry}  L2 ${v.l2}  R2 ${v.r2}` + (held.size ? `  [${[...held].join(' ')}]` : '') :
         '';
@@ -173,19 +266,23 @@
         tabs.replaceChildren(...labels.map((label) => {
           const button = document.createElement('button');
           button.type = 'button';
+          button.dataset.label = label;
           button.textContent = `Controller ${label}`;
-          button.onclick = () => { selected = label; };
+          button.onclick = () => { selected = label; render(); };
           return button;
         }));
       }
       for (const button of tabs.children) {
-        button.classList.toggle('current', button.textContent === `Controller ${selected}`);
+        button.classList.toggle('current', button.dataset.label === selected);
       }
     }
 
     function describe(label, c, doc) {
       const online = (c.display_state === 'ready' || c.display_state === 'input') && c.heard_s < 10;
       const parts = [];
+      if (c.ip) {
+        parts.push(`IP ${c.ip}`);
+      }
       if (c.battery_percent !== null && c.battery_percent !== undefined) {
         parts.push(`battery ${c.battery_percent}%`);
       }
@@ -207,45 +304,73 @@
       setStatus(level, headline, parts.join(' · '));
     }
 
-    async function poll() {
-      let delay = 100;
+    let latest = null;
+    function render() {
+      const doc = latest;
+      const labels = Object.keys((doc && doc.controllers) || {});
+      if (!labels.includes(selected)) {
+        selected = labels[0] || null;
+      }
+      showTabs(labels);
+      if (!selected) {
+        setStatus('warn', 'Waiting for the controller.', 'Wake it with a short press of the Stadia button.');
+        $('pad').classList.add('idle');
+        showInput(null);
+        return;
+      }
+      const c = doc.controllers[selected];
+      describe(selected, c, doc);
+      $('pad').classList.toggle('idle', !c.input);
+      showInput(c.input);
+    }
+
+    // The receiver pushes its /_input document as server-sent events through Sunshine.
+    function connect() {
+      window.clearTimeout(retryTimer);
+      if (source) {
+        source.close();
+      }
+      source = new EventSource(proxy('/_events', true));
+      source.addEventListener('input', (event) => {
+        lastEvent = Date.now();
+        latest = JSON.parse(event.data);
+        render();
+      });
+      source.onerror = () => {
+        if (source.readyState === EventSource.CLOSED) {
+          explainFailure();  // not a stream at all, e.g. the receiver is not running
+        }
+        // otherwise the browser reconnects on its own (the stream ends every few minutes by design)
+      };
+    }
+
+    async function explainFailure() {
+      source = null;
+      latest = null;
+      showTabs([]);
+      showInput(null);
+      $('pad').classList.add('idle');
       try {
-        const response = await fetch(proxy('/_input'), {cache: 'no-store'});
+        const response = await fetch(proxy('/_input', false), {cache: 'no-store'});
         if (response.status === 502) {
           setStatus('', 'The receiver is not running.', 'Use Start test above, or start a stream.');
-          $('pad').classList.add('idle');
-          showTabs([]);
-          showInput(null);
-          delay = 2000;
-        } else if (!response.ok) {
-          setStatus('bad', `Sunshine answered HTTP ${response.status}.`, '');
-          delay = 2000;
         } else {
-          const doc = await response.json();
-          const labels = Object.keys(doc.controllers || {});
-          if (!labels.includes(selected)) {
-            selected = labels[0] || null;
-          }
-          showTabs(labels);
-          if (!selected) {
-            setStatus('warn', 'Waiting for the controller.', 'Wake it with a short press of the Stadia button.');
-            $('pad').classList.add('idle');
-            showInput(null);
-            delay = 500;
-          } else {
-            const c = doc.controllers[selected];
-            describe(selected, c, doc);
-            $('pad').classList.toggle('idle', !c.input);
-            showInput(c.input);
-          }
+          setStatus('bad', `Sunshine answered HTTP ${response.status}.`, '');
         }
       } catch (e) {
         setStatus('bad', 'Sunshine did not answer.', String(e));
-        delay = 2000;
       }
-      window.setTimeout(poll, document.hidden ? Math.max(delay, 1000) : delay);
+      retryTimer = window.setTimeout(connect, 2000);
     }
-    poll();
+
+    // The receiver sends at least one event every 2 seconds; silence means the stream is stuck.
+    window.setInterval(() => {
+      if (source && source.readyState === EventSource.OPEN && Date.now() - lastEvent > 6000) {
+        connect();
+      }
+    }, 1000);
+
+    connect();
   </script>
 </body>
 </html>

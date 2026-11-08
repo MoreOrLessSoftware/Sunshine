@@ -8,13 +8,17 @@
 
 // standard includes
 #include <algorithm>
+#include <atomic>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <memory>
 #include <new>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -2758,29 +2762,23 @@ namespace confighttp {
   }
 
   /**
-   * @brief Forward a GET request from a plugin panel to the local port the plugin declares.
+   * @brief How long a streamed panel request stays open before Sunshine ends it.
    *
-   * Lets a panel read the state of a local service the plugin started without leaving Sunshine's origin.
-   * Only GET is forwarded, only to 127.0.0.1, and only to the port in the plugin's manifest.
-   *
-   * @api_examples{/api/plugins/proxy?id=stadia-controller&path=/_input| GET| null}
+   * The web server closes a response once its content timeout (300 s) passes, so streams end a little
+   * earlier on their own terms; an `EventSource` in the panel reconnects by itself.
    */
-  void proxyPluginRequest(const resp_https_t &response, const req_https_t &request) {
-    if (!authenticate(response, request)) {
-      return;
-    }
+  constexpr auto plugin_stream_duration = std::chrono::minutes(4);
 
-    const auto query_params = request->parse_query_string();
-    const auto id_it = query_params.find("id");
-    const auto path_it = query_params.find("path");
-    if (id_it == query_params.end() || path_it == query_params.end()) {
-      bad_request(response, request, "Plugin id and path are required");
-      return;
-    }
-
-    plugins::proxy_response_t proxied;
-    std::string error;
-    const auto result = plugins::proxy_get(id_it->second, path_it->second, proxied, error);
+  /**
+   * @brief Send the outcome of a collected panel request: the service's response, or why there is none.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @param result Outcome of the request.
+   * @param proxied The service's response when `result` is `ok`.
+   * @param error Reason when `result` is not `ok`.
+   */
+  void write_proxied_response(const resp_https_t &response, const req_https_t &request, plugins::result_e result, const plugins::proxy_response_t &proxied, const std::string &error) {
     if (result == plugins::result_e::unavailable) {
       nlohmann::json tree;
       tree["status_code"] = 502;
@@ -2811,6 +2809,105 @@ namespace confighttp {
     headers.emplace("X-Content-Type-Options", "nosniff");
     headers.emplace("Cache-Control", "no-store");
     response->write(code, proxied.body, headers);
+  }
+
+  /**
+   * @brief Forward a panel request on its own thread and pass a server-sent event stream on as it arrives.
+   *
+   * A `text/event-stream` response with status 200 is relayed piece by piece and the connection closes when it
+   * ends. Any other response is collected and sent as `proxyPluginRequest()` would.
+   *
+   * @param response The HTTP response object, kept alive by the thread.
+   * @param request The HTTP request object.
+   * @param id Plugin ID.
+   * @param path Path and query to request.
+   */
+  void stream_plugin_request(const resp_https_t &response, const req_https_t &request, const std::string &id, const std::string &path) {
+    std::thread([response, request, id, path]() {
+      auto gone = std::make_shared<std::atomic<bool>>(false);  // the browser went away
+      const auto on_sent = [gone](const SimpleWeb::error_code &ec) {
+        if (ec) {
+          *gone = true;
+        }
+      };
+      bool streaming = false;
+      plugins::proxy_response_t collected;
+      constexpr std::size_t max_collected = 4 * 1024 * 1024;
+
+      const plugins::proxy_head_t on_head = [&](int status, const std::string &content_type) {
+        collected.status = status;
+        collected.content_type = content_type;
+        streaming = status == 200 && content_type.starts_with("text/event-stream");
+        if (streaming) {
+          SimpleWeb::CaseInsensitiveMultimap headers;
+          headers.emplace("Content-Type", "text/event-stream");
+          headers.emplace("Cache-Control", "no-store");
+          headers.emplace("Connection", "close");
+          headers.emplace("X-Frame-Options", "DENY");
+          headers.emplace("Content-Security-Policy", "frame-ancestors 'none'; sandbox;");
+          headers.emplace("X-Content-Type-Options", "nosniff");
+          response->close_connection_after_response = true;
+          response->write(SimpleWeb::StatusCode::success_ok, headers);
+          response->send(on_sent);
+        }
+      };
+      const plugins::proxy_data_t on_data = [&](std::string_view data) {
+        if (*gone) {
+          return false;
+        }
+        if (!streaming) {
+          if (collected.body.size() + data.size() > max_collected) {
+            return false;
+          }
+          collected.body.append(data);
+          return true;
+        }
+        response->write(data.data(), static_cast<std::streamsize>(data.size()));
+        response->send(on_sent);
+        return true;
+      };
+
+      std::string error;
+      const auto result = plugins::proxy_stream(id, path, on_head, on_data, plugin_stream_duration, error);
+      if (!streaming) {
+        write_proxied_response(response, request, result, collected, error);
+      }
+    }).detach();
+  }
+
+  /**
+   * @brief Forward a GET request from a plugin panel to the local port the plugin declares.
+   *
+   * Lets a panel read the state of a local service the plugin started without leaving Sunshine's origin.
+   * Only GET is forwarded, only to 127.0.0.1, and only to the port in the plugin's manifest. With
+   * `stream=1`, a server-sent event stream (`text/event-stream`) is passed on as it arrives, for up to
+   * four minutes; an `EventSource` reconnects on its own when it ends.
+   *
+   * @api_examples{/api/plugins/proxy?id=stadia-controller&path=/_input| GET| null}
+   * @api_examples{/api/plugins/proxy?id=stadia-controller&path=/_events&stream=1| GET| null}
+   */
+  void proxyPluginRequest(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    const auto query_params = request->parse_query_string();
+    const auto id_it = query_params.find("id");
+    const auto path_it = query_params.find("path");
+    if (id_it == query_params.end() || path_it == query_params.end()) {
+      bad_request(response, request, "Plugin id and path are required");
+      return;
+    }
+
+    if (const auto stream_it = query_params.find("stream"); stream_it != query_params.end() && stream_it->second == "1") {
+      stream_plugin_request(response, request, id_it->second, path_it->second);
+      return;
+    }
+
+    plugins::proxy_response_t proxied;
+    std::string error;
+    const auto result = plugins::proxy_get(id_it->second, path_it->second, proxied, error);
+    write_proxied_response(response, request, result, proxied, error);
   }
 
   /**

@@ -133,6 +133,17 @@ const response = await fetch('./proxy?id=my-plugin&path=' + encodeURIComponent('
 Sunshine forwards the GET request to `http://127.0.0.1:<port>/status` and returns the response, or answers
 `502 Bad Gateway` when nothing is listening. Only GET requests are forwarded, only to the declared port.
 
+To receive updates as they happen instead of polling, have the service send
+[server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) and add `stream=1`:
+
+```js
+const events = new EventSource('./proxy?id=my-plugin&stream=1&path=' + encodeURIComponent('/events'));
+events.addEventListener('message', (event) => console.log(event.data));
+```
+
+A `text/event-stream` response is passed on as it arrives. Sunshine ends the stream after a few minutes, and
+`EventSource` reconnects on its own; a service can send `retry: 250` to make that reconnect quick.
+
 ### Script environment
 Scripts run with `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script>`. A script fails
 when it exits with a non-zero code, including when it throws. Besides the `SUNSHINE_*` variables described under

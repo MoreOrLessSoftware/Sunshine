@@ -1159,6 +1159,233 @@ TEST_F(PluginsTest, ProxyGetRejectsBadRequestsAndReportsAMissingService) {
   EXPECT_TRUE(error.contains(std::format("nothing answered on local port {}", closed_port))) << error;
 }
 
+namespace {
+  /**
+   * @brief A local HTTP service that accepts one connection and lets the test script what it sends.
+   */
+  class one_shot_service_t {
+  public:
+    /**
+     * @brief Listen on an ephemeral loopback port and serve one connection with `serve`.
+     *
+     * @param serve Called with the connected socket once the request head has been read.
+     */
+    explicit one_shot_service_t(std::function<void(boost::asio::ip::tcp::socket &)> serve):
+        acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}},
+        thread {[this, serve = std::move(serve)]() {
+          boost::asio::ip::tcp::socket socket {acceptor.get_executor()};
+          boost::system::error_code ec;
+          acceptor.accept(socket, ec);
+          if (ec) {
+            return;
+          }
+          boost::asio::streambuf buffer;
+          boost::asio::read_until(socket, buffer, "\r\n\r\n", ec);
+          if (!ec) {
+            serve(socket);
+          }
+        }} {
+    }
+
+    /**
+     * @brief The port the service listens on.
+     *
+     * @return Port number.
+     */
+    int port() const {
+      return acceptor.local_endpoint().port();
+    }
+
+  private:
+    boost::asio::io_context io;  ///< I/O context of the acceptor.
+    boost::asio::ip::tcp::acceptor acceptor;  ///< Listening socket.
+    std::jthread thread;  ///< Serves the one connection.
+  };
+
+  /**
+   * @brief Head of a server-sent event stream that ends when the connection closes.
+   */
+  constexpr auto event_stream_head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
+
+  /**
+   * @brief A head callback that ignores the head.
+   */
+  const plugins::proxy_head_t ignore_head = [](int, const std::string &) {
+  };
+}  // namespace
+
+TEST_F(PluginsTest, ProxyStreamPassesEachPieceOnAsItArrives) {
+  std::promise<void> first_seen;
+  auto first_seen_future = first_seen.get_future();
+  one_shot_service_t service([&first_seen_future](boost::asio::ip::tcp::socket &socket) {
+    boost::asio::write(socket, boost::asio::buffer(std::string(event_stream_head) + "data: 1\n\n"));
+    // A proxy that collected the body would never pass "data: 1" on, and this would time out.
+    if (first_seen_future.wait_for(5s) == std::future_status::ready) {
+      boost::asio::write(socket, boost::asio::buffer(std::string("data: 2\n\n")));
+    }
+  });
+  write_panel_plugin(builtin_dir, "p", service.port());
+  plugins::load(paths());
+
+  int status = 0;
+  std::string content_type;
+  std::string received;
+  bool signalled = false;
+  const plugins::proxy_head_t on_head = [&](int s, const std::string &type) {
+    status = s;
+    content_type = type;
+  };
+  const plugins::proxy_data_t on_data = [&](std::string_view data) {
+    received.append(data);
+    if (!signalled && received.contains("data: 1")) {
+      signalled = true;
+      first_seen.set_value();
+    }
+    return true;
+  };
+  std::string error;
+  ASSERT_EQ(plugins::proxy_stream("p", "/_events", on_head, on_data, 10s, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(status, 200);
+  EXPECT_EQ(content_type, "text/event-stream");
+  EXPECT_EQ(received, "data: 1\n\ndata: 2\n\n");
+}
+
+TEST_F(PluginsTest, ProxyStreamEndsAtItsDeadline) {
+  std::promise<void> release;
+  auto released = release.get_future();
+  one_shot_service_t service([&released](boost::asio::ip::tcp::socket &socket) {
+    boost::asio::write(socket, boost::asio::buffer(std::string(event_stream_head) + "data: 1\n\n"));
+    released.wait_for(10s);  // keeps the stream open
+  });
+  write_panel_plugin(builtin_dir, "p", service.port());
+  plugins::load(paths());
+
+  const plugins::proxy_data_t keep_reading = [](std::string_view) {
+    return true;
+  };
+  std::string error;
+  const auto started = std::chrono::steady_clock::now();
+  const auto result = plugins::proxy_stream("p", "/_events", ignore_head, keep_reading, 1500ms, error);
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  release.set_value();
+  EXPECT_EQ(result, plugins::result_e::ok) << error;
+  EXPECT_GE(elapsed, 1500ms);
+  EXPECT_LT(elapsed, 5s);
+}
+
+TEST_F(PluginsTest, ProxyStreamStopsWhenTheReaderDoes) {
+  std::promise<void> release;
+  auto released = release.get_future();
+  one_shot_service_t service([&released](boost::asio::ip::tcp::socket &socket) {
+    boost::asio::write(socket, boost::asio::buffer(std::string(event_stream_head) + "data: 1\n\n"));
+    released.wait_for(10s);
+  });
+  write_panel_plugin(builtin_dir, "p", service.port());
+  plugins::load(paths());
+
+  int pieces = 0;
+  const plugins::proxy_data_t stop_reading = [&pieces](std::string_view) {
+    ++pieces;
+    return false;
+  };
+  std::string error;
+  const auto started = std::chrono::steady_clock::now();
+  const auto result = plugins::proxy_stream("p", "/_events", ignore_head, stop_reading, 10s, error);
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  release.set_value();
+  EXPECT_EQ(result, plugins::result_e::ok) << error;
+  EXPECT_EQ(pieces, 1);
+  EXPECT_LT(elapsed, 3s);
+}
+
+TEST_F(PluginsTest, ProxyStreamEndsAtShutdownUntilTheNextLoad) {
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  one_shot_service_t service([released](boost::asio::ip::tcp::socket &socket) {
+    boost::asio::write(socket, boost::asio::buffer(std::string(event_stream_head) + "data: 1\n\n"));
+    released.wait_for(10s);
+  });
+  write_panel_plugin(builtin_dir, "p", service.port());
+  plugins::load(paths());
+
+  std::promise<void> streaming;
+  bool signalled = false;
+  const plugins::proxy_data_t on_data = [&](std::string_view) {
+    if (!signalled) {
+      signalled = true;
+      streaming.set_value();
+    }
+    return true;
+  };
+  std::string error;
+  auto running = std::async(std::launch::async, [&]() {
+    return plugins::proxy_stream("p", "/_events", ignore_head, on_data, 10s, error);
+  });
+  ASSERT_EQ(streaming.get_future().wait_for(5s), std::future_status::ready);
+  const auto stopped_at = std::chrono::steady_clock::now();
+  plugins::stop_proxy_streams();
+  ASSERT_EQ(running.wait_for(5s), std::future_status::ready);
+  EXPECT_LT(std::chrono::steady_clock::now() - stopped_at, 3s);
+  EXPECT_EQ(running.get(), plugins::result_e::ok) << error;
+  release.set_value();
+
+  // Loading the registry again (as Sunshine does on start) lets streams run again: this one waits on the
+  // service's listening socket until its deadline instead of being aborted at once.
+  plugins::load(paths());
+  const auto restarted_at = std::chrono::steady_clock::now();
+  plugins::proxy_stream("p", "/_events", ignore_head, on_data, 1s, error);
+  EXPECT_GE(std::chrono::steady_clock::now() - restarted_at, 900ms) << error;
+}
+
+TEST_F(PluginsTest, ProxyStreamReportsAResponseWithoutABody) {
+  one_shot_service_t service([](boost::asio::ip::tcp::socket &socket) {
+    boost::asio::write(socket, boost::asio::buffer(std::string("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")));
+  });
+  write_panel_plugin(builtin_dir, "p", service.port());
+  plugins::load(paths());
+
+  int status = 0;
+  int pieces = 0;
+  const plugins::proxy_head_t on_head = [&status](int s, const std::string &) {
+    status = s;
+  };
+  const plugins::proxy_data_t on_data = [&pieces](std::string_view) {
+    ++pieces;
+    return true;
+  };
+  std::string error;
+  EXPECT_EQ(plugins::proxy_stream("p", "/_events", on_head, on_data, 5s, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(status, 404);
+  EXPECT_EQ(pieces, 0);
+}
+
+TEST_F(PluginsTest, ProxyStreamRejectsBadRequestsAndReportsAMissingService) {
+  int closed_port = 0;
+  {
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::acceptor acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+    closed_port = acceptor.local_endpoint().port();
+  }
+  write_panel_plugin(builtin_dir, "p", closed_port);
+  write_panel_plugin(custom_dir, "noport", 0);
+  plugins::load(paths());
+
+  bool head_called = false;
+  const plugins::proxy_head_t on_head = [&head_called](int, const std::string &) {
+    head_called = true;
+  };
+  const plugins::proxy_data_t on_data = [](std::string_view) {
+    return true;
+  };
+  std::string error;
+  EXPECT_EQ(plugins::proxy_stream("missing", "/_events", on_head, on_data, 1s, error), plugins::result_e::not_found);
+  EXPECT_EQ(plugins::proxy_stream("noport", "/_events", on_head, on_data, 1s, error), plugins::result_e::invalid);
+  EXPECT_EQ(plugins::proxy_stream("p", "//evil.invalid/", on_head, on_data, 1s, error), plugins::result_e::invalid);
+  EXPECT_EQ(plugins::proxy_stream("p", "/_events", on_head, on_data, 1s, error), plugins::result_e::unavailable);
+  EXPECT_TRUE(error.contains(std::format("nothing answered on local port {}", closed_port))) << error;
+  EXPECT_FALSE(head_called);
+}
+
 #ifdef _WIN32
 /**
  * @brief Fixture that runs plugin scripts with the real PowerShell runner.

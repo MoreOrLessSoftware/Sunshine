@@ -11,6 +11,7 @@
 #pragma once
 
 // standard includes
+#include <chrono>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -387,6 +388,39 @@ namespace plugins {
    * @return `ok`, `not_found`, `invalid` (no proxy port or a bad path) or `unavailable` (nothing answered).
    */
   result_e proxy_get(const std::string &id, const std::string &path, proxy_response_t &out, std::string &error);
+
+  /**
+   * @brief Receives the status and content type of a streamed panel response, before any of its body.
+   */
+  using proxy_head_t = std::function<void(int status, const std::string &content_type)>;
+
+  /**
+   * @brief Receives each piece of a streamed panel response as it arrives; returns `false` to stop.
+   */
+  using proxy_data_t = std::function<bool(std::string_view data)>;
+
+  /**
+   * @brief Forward a GET request from a plugin panel and pass the response on as it arrives.
+   *
+   * For server-sent events and other long-lived responses. Like `proxy_get()`, but the body is handed to
+   * `on_data` piece by piece instead of being collected, and the request runs until the service ends the
+   * response, `on_data` returns `false`, `max_duration` passes, or Sunshine shuts down.
+   *
+   * @param id Plugin ID.
+   * @param path Path and query to request.
+   * @param on_head Called once with the status and content type, before the first call to `on_data`.
+   * @param on_data Called with each piece of the body.
+   * @param max_duration Longest time to keep the request open.
+   * @param error Receives the reason when the request is rejected or fails.
+   * @return `ok` once a response was received (`on_head` was called), otherwise `not_found`, `invalid` or
+   *         `unavailable` as for `proxy_get()`.
+   */
+  result_e proxy_stream(const std::string &id, const std::string &path, const proxy_head_t &on_head, const proxy_data_t &on_data, std::chrono::milliseconds max_duration, std::string &error);
+
+  /**
+   * @brief End every running `proxy_stream()`. Called when Sunshine shuts down.
+   */
+  void stop_proxy_streams();
 
   /**
    * @brief Set the function called after an install or uninstall changes plugin state in the background.
