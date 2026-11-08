@@ -11,11 +11,13 @@ foreach ($backend in Get-VsyncBackends) {
             $stateFile = Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'previous-mode.txt'
             # Keep the mode saved by an earlier stream that did not run undo.ps1.
             if (-not (Test-Path $stateFile)) {
-                $previous = (& $nvidiaExe status | Select-Object -First 1)
+                # Collect all output before checking the exit code: in Windows PowerShell, piping a native
+                # command into Select-Object -First stops it early and leaves $LASTEXITCODE at -1.
+                $status = @(& $nvidiaExe status)
                 if ($LASTEXITCODE -ne 0) {
                     throw "vsynctoggle status failed with exit code $LASTEXITCODE"
                 }
-                Set-Content -Path $stateFile -Value "$previous".Trim()
+                Set-Content -Path $stateFile -Value "$($status | Select-Object -First 1)".Trim()
             }
 
             Write-Output "NVIDIA: setting V-Sync to $mode (was $(Get-Content $stateFile))"
