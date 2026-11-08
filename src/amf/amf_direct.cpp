@@ -160,12 +160,12 @@ namespace amf_direct {
 
       const auto type = (header >> 3) & 0x0F;
       if (type == 6) {
-        groups.push_back({-1, -1});
+        groups.push_back({-1, -1, offset, start + payload - offset});
       } else if (type == 4) {
         // tile_start_and_end_present_flag, then tg_start and tg_end of tile_bits each, read
         // from the most significant bit. One tile, or no flag, means all the tiles.
         const auto last = (1 << tile_bits) - 1;
-        tile_group_t group {0, last};
+        tile_group_t group {0, last, offset, start + payload - offset};
         if (tile_bits > 0 && payload > 0 && (data[start] & 0x80)) {
           std::size_t bit = 1;
           auto read = [&](int bits) {
@@ -674,6 +674,7 @@ namespace amf_direct {
     int tile_bits = -1;  ///< Bits that number an AV1 tile, -1 where the tiles aren't checked.
     std::size_t incomplete_frames = 0;  ///< AV1 frames sent without all their tiles, since the last timing line.
     std::size_t incomplete_logged = 0;  ///< AV1 frames sent without all their tiles that were described in the log.
+    std::size_t joined_tiles = 0;  ///< AV1 tile buffers that held the next tile too, kept, since the last timing line.
 
     ~impl_t() {
       surface = nullptr;
@@ -1006,12 +1007,30 @@ namespace amf_direct {
             }
           }
         }
+        if (next_tile >= 0) {
+          // AMF sometimes puts the next tile in the same buffer, right after the first. Keep the
+          // tile groups that carry on from the tiles kept, from the first byte after them, or the
+          // frame is sent without them and the client can't decode it or any frame after it.
+          const auto rest = tile_groups(native + used, bytes - used, impl->tile_bits);
+          std::size_t joined = 0;
+          for (const auto &group : rest) {
+            if (group.start != next_tile || group.offset != joined) {
+              break;
+            }
+            joined = group.offset + group.size;
+            next_tile = group.end + 1;
+          }
+          if (joined > 0) {
+            used += joined;
+            ++impl->joined_tiles;
+          }
+        }
         if (next_tile >= 0 && buffers < buffer_tiles.size()) {
           // Whether the bytes cut off start with the tile that should come next, which would
-          // mean AMF put two tiles in this buffer
+          // mean AMF put it in this buffer after something the tiles above didn't carry on past
           const auto cut = tile_groups(native + used, bytes - used, impl->tile_bits);
           const bool next_cut_off = !cut.empty() && cut.front().start == next_tile;
-          buffer_tiles[buffers++] = {used, bytes, next_tile, next_cut_off ? cut.front() : tile_group_t {-1, -1}};
+          buffer_tiles[buffers++] = {used, bytes, next_tile, next_cut_off ? cut.front() : tile_group_t {-1, -1, 0, 0}};
         }
       }
       frame.data.insert(frame.data.end(), native, native + used);
@@ -1075,13 +1094,14 @@ namespace amf_direct {
           const auto frames = static_cast<double>(impl->timing.frames());
           auto leftovers = impl->av1() ? std::format("{} tiles followed by bytes that looked like OBUs, ", impl->leftover_obus) : std::string {};
           if (impl->tile_bits >= 0) {
-            leftovers += std::format("{} frames missing a tile, ", impl->incomplete_frames);
+            leftovers += std::format("{} buffers holding more than one tile, {} frames missing a tile, ", impl->joined_tiles, impl->incomplete_frames);
           }
           BOOST_LOG(info) << "AMF direct: "sv << p.name << ' ' << impl->timing.summary() << ", "sv << leftovers << impl->idr_mismatches << " key frame flags not as asked, "sv
                           << std::format("{:.3f} ms preparing and {:.3f} ms submitting each frame, ", std::chrono::duration<double, std::milli>(impl->prepare_time).count() / frames, std::chrono::duration<double, std::milli>(impl->submit_time).count() / frames)
                           << impl->recoveries << " recoveries from long-term references, "sv << impl->recovery_keys << " key frames for lost frames, "sv << impl->ltr_misses << " long-term references not as asked"sv;
           impl->leftover_obus = 0;
           impl->incomplete_frames = 0;
+          impl->joined_tiles = 0;
           impl->idr_mismatches = 0;
           impl->recoveries = 0;
           impl->recovery_keys = 0;

@@ -197,6 +197,18 @@ TEST(AmfTileGroupsTest, SkipsOtherObusAndStopsAtLeftoverBytes) {
   EXPECT_EQ(groups[1].end, 1);
 }
 
+TEST(AmfTileGroupsTest, GivesWhereEachObuIs) {
+  // Tile 0 of 4 then tile 1 of 4, as AMF sometimes puts two tiles in one buffer, then zeros
+  const std::vector<std::uint8_t> data {0x22, 0x02, 0x80, 0xAA, 0x22, 0x03, 0xA8, 0xBB, 0xCC, 0, 0};
+  const auto groups = amf_direct::tile_groups(data.data(), data.size(), 2);
+  ASSERT_EQ(groups.size(), 2u);
+  EXPECT_EQ(groups[0].offset, 0u);
+  EXPECT_EQ(groups[0].size, 4u);
+  EXPECT_EQ(groups[1].offset, 4u);
+  EXPECT_EQ(groups[1].size, 5u);
+  EXPECT_EQ(groups[1].start, 1);
+}
+
 TEST(AmfTileGroupsTest, MarksAFrameObuAsUnknown) {
   const std::vector<std::uint8_t> data {0x32, 0x01, 0x00};
   const auto groups = amf_direct::tile_groups(data.data(), data.size(), 2);

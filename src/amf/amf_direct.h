@@ -152,6 +152,8 @@ namespace amf_direct {
   struct tile_group_t {
     int start;  ///< First tile, -1 for a frame OBU.
     int end;  ///< Last tile, -1 for a frame OBU.
+    std::size_t offset = 0;  ///< Where the OBU starts in the bitstream.
+    std::size_t size = 0;  ///< Bytes in the OBU, header included.
   };
 
   /**
