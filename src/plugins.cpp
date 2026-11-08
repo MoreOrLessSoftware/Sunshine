@@ -17,6 +17,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/process/v1.hpp>
+#include <curl/curl.h>
 
 // local includes
 #include "logging.h"
@@ -54,6 +55,7 @@ namespace plugins {
       action_e action;  ///< Operation that ran.
       task_status_e status;  ///< Progress of the operation.
       int exit_code;  ///< Exit code of the script once finished.
+      std::string action_id;  ///< Action that ran when `action` is `action_e::run`.
     };
 
     int run_script(const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const fs::path &working_dir, const fs::path &log_file, std::stop_token stop);
@@ -374,6 +376,113 @@ namespace plugins {
     }
 
     /**
+     * @brief Validate the panel file of a manifest.
+     *
+     * @param name File name from the manifest.
+     * @param dir Plugin directory.
+     * @param error Receives the reason when the reference is invalid.
+     * @return `true` when the name is an existing `.html` file directly inside the plugin directory.
+     */
+    bool is_valid_panel_file(const std::string &name, const fs::path &dir, std::string &error) {
+      const auto lower = boost::algorithm::to_lower_copy(name);
+      if (name.empty() || name.find_first_of("/\\:") != std::string::npos || name.starts_with('.') || !lower.ends_with(".html")) {
+        error = std::format("panel '{}' must be an .html file in the plugin directory", name);
+        return false;
+      }
+      std::error_code ec;
+      if (!fs::is_regular_file(dir / name, ec)) {
+        error = std::format("panel '{}' does not exist", name);
+        return false;
+      }
+      return true;
+    }
+
+    /**
+     * @brief Parse the actions of a manifest.
+     *
+     * @param node Array of action objects.
+     * @param dir Plugin directory.
+     * @param out Receives the parsed actions.
+     * @param error Receives the reason when the list is invalid.
+     * @return `false` when the list is invalid.
+     */
+    bool parse_actions(const json &node, const fs::path &dir, std::vector<action_t> &out, std::string &error) {
+      if (!node.is_array()) {
+        error = "'actions' must be an array";
+        return false;
+      }
+      for (const auto &entry : node) {
+        if (!entry.is_object()) {
+          error = "each action must be an object";
+          return false;
+        }
+        action_t action;
+        if (!read_string(entry, "id", action.id, error) ||
+            !read_string(entry, "label", action.label, error) ||
+            !read_string(entry, "description", action.description, error) ||
+            !read_string(entry, "script", action.script, error)) {
+          return false;
+        }
+        if (!is_valid_option_id(action.id)) {
+          error = std::format("invalid action id '{}'", action.id);
+          return false;
+        }
+        if (action.script.empty()) {
+          error = std::format("action '{}' needs a script", action.id);
+          return false;
+        }
+        if (!is_valid_script(action.script, dir, error)) {
+          return false;
+        }
+        if (std::ranges::any_of(out, [&action](const action_t &existing) {
+              return existing.id == action.id;
+            })) {
+          error = std::format("duplicate action id '{}'", action.id);
+          return false;
+        }
+        if (action.label.empty()) {
+          action.label = action.id;
+        }
+        out.emplace_back(std::move(action));
+      }
+      return true;
+    }
+
+    /**
+     * @brief Parse the panel of a manifest.
+     *
+     * @param node Panel object.
+     * @param dir Plugin directory.
+     * @param error Receives the reason when the panel is invalid.
+     * @return Parsed panel, or `std::nullopt` when invalid.
+     */
+    std::optional<panel_t> parse_panel(const json &node, const fs::path &dir, std::string &error) {
+      if (!node.is_object()) {
+        error = "'panel' must be an object";
+        return std::nullopt;
+      }
+      panel_t panel;
+      if (!read_string(node, "file", panel.file, error) || !is_valid_panel_file(panel.file, dir, error)) {
+        return std::nullopt;
+      }
+      if (node.contains("port")) {
+        if (!node["port"].is_number_integer() || node["port"].get<int>() < 1 || node["port"].get<int>() > 65535) {
+          error = "panel 'port' must be an integer from 1 to 65535";
+          return std::nullopt;
+        }
+        panel.port = node["port"].get<int>();
+      }
+      if (node.contains("height")) {
+        if (!node["height"].is_number_integer() || node["height"].get<int>() < 100 || node["height"].get<int>() > 2000) {
+          error = "panel 'height' must be an integer from 100 to 2000";
+          return std::nullopt;
+        }
+        panel.height = node["height"].get<int>();
+      }
+      return panel;
+    }
+
+    /**
      * @brief Read and parse the manifest in a directory.
      *
      * @param dir Plugin directory.
@@ -527,8 +636,27 @@ namespace plugins {
      * @param activate Whether to activate the plugin once an install succeeds.
      * @param stop Requests the script be terminated early.
      */
-    void run_task(const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, const paths_t &paths, const script_runner_t &runner, bool activate, std::stop_token stop) {
-      const auto &script = action == action_e::install ? manifest.scripts.install : manifest.scripts.uninstall;
+    void run_task(const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, const paths_t &paths, const script_runner_t &runner, bool activate, const std::string &action_id, std::stop_token stop) {
+      std::string script;
+      std::string heading;
+      switch (action) {
+        case action_e::install:
+          script = manifest.scripts.install;
+          heading = std::format("Installing {} {}", manifest.name, manifest.version);
+          break;
+        case action_e::uninstall:
+          script = manifest.scripts.uninstall;
+          heading = std::format("Uninstalling {} {}", manifest.name, manifest.version);
+          break;
+        case action_e::run:
+          for (const auto &candidate : manifest.actions) {
+            if (candidate.id == action_id) {
+              script = candidate.script;
+              heading = std::format("{}: {}", manifest.name, candidate.label);
+            }
+          }
+          break;
+      }
       const auto data_dir = plugin_data_dir(paths, id);
       const auto log_file = plugin_log_file(paths, id);
 
@@ -536,7 +664,7 @@ namespace plugins {
       fs::create_directories(data_dir, ec);
 
       if (std::unique_ptr<FILE, decltype(&std::fclose)> file {open_shared(log_file, L"w"), &std::fclose}; file) {
-        std::fputs(std::format("{} {} {}\n", action == action_e::install ? "Installing"sv : "Uninstalling"sv, manifest.name, manifest.version).c_str(), file.get());
+        std::fputs((heading + "\n").c_str(), file.get());
       }
 
       int exit_code = 0;
@@ -555,24 +683,25 @@ namespace plugins {
         std::fputs(std::format("\n{} (exit code {})\n", success ? "Completed"sv : "Failed"sv, exit_code).c_str(), file.get());
       }
 
+      const auto what = action == action_e::run ? std::format("action '{}'", action_id) : std::string {action == action_e::install ? "install"sv : "uninstall"sv};
       if (success) {
-        BOOST_LOG(info) << "Plugin ["sv << id << "] "sv << (action == action_e::install ? "installed"sv : "uninstalled"sv);
+        BOOST_LOG(info) << "Plugin ["sv << id << "] "sv << what << " succeeded"sv;
       } else {
-        BOOST_LOG(error) << "Plugin ["sv << id << "] "sv << (action == action_e::install ? "install"sv : "uninstall"sv) << " failed with exit code ["sv << exit_code << ']';
+        BOOST_LOG(error) << "Plugin ["sv << id << "] "sv << what << " failed with exit code ["sv << exit_code << ']';
       }
 
       auto &reg = registry();
       std::function<void()> on_change;
       {
         std::scoped_lock lock {reg.mutex};
-        if (success) {
+        if (success && action != action_e::run) {
           auto &state = reg.state[id];
           state.installed = action == action_e::install;
           state.active = state.installed && (state.active || activate);
           save_state(paths.state_file, reg.state);
           on_change = reg.on_change;
         }
-        reg.tasks[id] = {action, success ? task_status_e::succeeded : task_status_e::failed, exit_code};
+        reg.tasks[id] = {action, success ? task_status_e::succeeded : task_status_e::failed, exit_code, action_id};
         reg.task_running = false;
       }
 
@@ -678,6 +807,16 @@ namespace plugins {
           return std::nullopt;
         }
         manifest.options.emplace_back(std::move(*option));
+      }
+    }
+
+    if (node.contains("actions") && !parse_actions(node["actions"], dir, manifest.actions, error)) {
+      return std::nullopt;
+    }
+    if (node.contains("panel")) {
+      manifest.panel = parse_panel(node["panel"], dir, error);
+      if (!manifest.panel) {
+        return std::nullopt;
       }
     }
 
@@ -954,10 +1093,23 @@ namespace plugins {
       if (const auto task_it = reg.tasks.find(manifest.id); task_it != reg.tasks.end()) {
         const auto &info = task_it->second;
         task = {
-          {"action", info.action == action_e::install ? "install" : "uninstall"},
+          {"action", info.action == action_e::install ? "install" : info.action == action_e::uninstall ? "uninstall" :
+                                                                                                         "run"},
           {"status", task_status_name(info.status)},
           {"exit_code", info.exit_code}
         };
+        if (info.action == action_e::run) {
+          task["action_id"] = info.action_id;
+        }
+      }
+
+      json actions = json::array();
+      for (const auto &action : manifest.actions) {
+        actions.push_back({{"id", action.id}, {"label", action.label}, {"description", action.description}});
+      }
+      json panel = nullptr;
+      if (manifest.panel) {
+        panel = {{"height", manifest.panel->height}, {"proxy", manifest.panel->port != 0}};
       }
 
       result.push_back({
@@ -971,6 +1123,8 @@ namespace plugins {
         {"elevated", manifest.elevated},
         {"order", manifest.order},
         {"options", std::move(options)},
+        {"actions", std::move(actions)},
+        {"panel", std::move(panel)},
         {"installed", state.installed},
         {"active", state.active},
         {"config", effective_options(reg, manifest)},
@@ -1044,7 +1198,7 @@ namespace plugins {
     return result_e::ok;
   }
 
-  result_e start_task(const std::string &id, action_e action, std::string &error, bool activate) {
+  result_e start_task(const std::string &id, action_e action, std::string &error, bool activate, const std::string &action_id) {
     auto &reg = registry();
     std::unique_lock lock {reg.mutex};
 
@@ -1052,6 +1206,18 @@ namespace plugins {
     if (!found) {
       error = std::format("plugin '{}' not found", id);
       return result_e::not_found;
+    }
+    if (action == action_e::run) {
+      if (std::ranges::none_of(found->actions, [&action_id](const action_t &candidate) {
+            return candidate.id == action_id;
+          })) {
+        error = std::format("plugin '{}' has no action '{}'", id, action_id);
+        return result_e::invalid;
+      }
+      if (const auto it = reg.state.find(id); it == reg.state.end() || !it->second.installed) {
+        error = std::format("plugin '{}' must be installed before running its actions", id);
+        return result_e::not_installed;
+      }
     }
     if (reg.task_running) {
       error = "another plugin operation is still running";
@@ -1068,15 +1234,15 @@ namespace plugins {
     }
 
     reg.task_running = true;
-    reg.tasks[id] = {action, task_status_e::running, 0};
+    reg.tasks[id] = {action, task_status_e::running, 0, action == action_e::run ? action_id : std::string {}};
 
     // The previous worker has already finished since task_running was false.
     if (reg.worker.joinable()) {
       reg.worker.join();
     }
 
-    reg.worker = std::jthread([id, action, manifest, env, paths = reg.paths, runner, activate](std::stop_token stop) {
-      run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, stop);
+    reg.worker = std::jthread([id, action, manifest, env, paths = reg.paths, runner, activate, action_id](std::stop_token stop) {
+      run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, action_id, stop);
     });
 
     return result_e::ok;
@@ -1121,6 +1287,86 @@ namespace plugins {
     std::stringstream ss;
     ss << in.rdbuf();
     return ss.str();
+  }
+
+  std::optional<std::filesystem::path> panel_file(const std::string &id) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    const auto *manifest = find_manifest(reg, id);
+    if (!manifest || !manifest->panel) {
+      return std::nullopt;
+    }
+    return manifest->dir / manifest->panel->file;
+  }
+
+  bool is_valid_proxy_path(std::string_view path) {
+    if (path.empty() || path.size() > 512 || path.front() != '/' || path.starts_with("//"sv)) {
+      return false;
+    }
+    return std::ranges::all_of(path, [](const char c) {
+      const auto u = static_cast<unsigned char>(c);
+      return u > 0x20 && u < 0x7f && c != '\\' && c != '#';
+    });
+  }
+
+  result_e proxy_get(const std::string &id, const std::string &path, proxy_response_t &out, std::string &error) {
+    int port = 0;
+    {
+      auto &reg = registry();
+      std::scoped_lock lock {reg.mutex};
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        error = std::format("plugin '{}' not found", id);
+        return result_e::not_found;
+      }
+      if (!manifest->panel || manifest->panel->port == 0) {
+        error = std::format("plugin '{}' has no panel port", id);
+        return result_e::invalid;
+      }
+      port = manifest->panel->port;
+    }
+    if (!is_valid_proxy_path(path)) {
+      error = "invalid proxy path";
+      return result_e::invalid;
+    }
+
+    std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl {curl_easy_init(), &curl_easy_cleanup};
+    if (!curl) {
+      error = "could not start the request";
+      return result_e::unavailable;
+    }
+
+    constexpr std::size_t max_body = 4 * 1024 * 1024;
+    const auto url = std::format("http://127.0.0.1:{}{}", port, path);
+    out = {};
+    const auto write = +[](char *data, std::size_t size, std::size_t count, void *user) -> std::size_t {
+      auto *body = static_cast<std::string *>(user);
+      if (body->size() + size * count > max_body) {
+        return 0;  // aborts the transfer
+      }
+      body->append(data, size * count);
+      return size * count;
+    };
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_PROXY, "");  // never through a configured proxy
+    curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT_MS, 1000L);
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT_MS, 3000L);
+    curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &out.body);
+
+    if (const auto code = curl_easy_perform(curl.get()); code != CURLE_OK) {
+      error = std::format("nothing answered on local port {}: {}", port, curl_easy_strerror(code));
+      return result_e::unavailable;
+    }
+    long status = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
+    out.status = static_cast<int>(status);
+    if (char *type = nullptr; curl_easy_getinfo(curl.get(), CURLINFO_CONTENT_TYPE, &type) == CURLE_OK && type) {
+      out.content_type = type;
+    }
+    return result_e::ok;
   }
 
   void set_change_callback(std::function<void()> callback) {

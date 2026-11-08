@@ -593,6 +593,7 @@
     "warning_msg": "Make sure you have access to the client you are pairing with. This software can give total control to your computer, so be careful!"
   },
   "plugins": {
+    "action_failed": "{action} failed",
     "action_failure": "The request failed.",
     "activate": "Active",
     "active": "Active",
@@ -628,7 +629,9 @@
     "no_plugins": "No plugins found.",
     "not_installed": "Not installed",
     "options": "Options",
+    "panel_title": "{name} panel",
     "rescan": "Rescan",
+    "running": "Running {action}...",
     "save_options": "Save options",
     "saved": "Plugin options saved.",
     "title": "Plugins",

@@ -94,6 +94,9 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## GET /api/plugins
 @copydoc confighttp::getPlugins()
 
+## POST /api/plugins/action
+@copydoc confighttp::runPluginAction()
+
 ## POST /api/plugins/config
 @copydoc confighttp::savePluginConfig()
 
@@ -102,6 +105,12 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 
 ## GET /api/plugins/log
 @copydoc confighttp::getPluginLog()
+
+## GET /api/plugins/panel
+@copydoc confighttp::getPluginPanel()
+
+## GET /api/plugins/proxy
+@copydoc confighttp::proxyPluginRequest()
 
 ## POST /api/plugins/rescan
 @copydoc confighttp::rescanPlugins()

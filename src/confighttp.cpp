@@ -2670,6 +2670,150 @@ namespace confighttp {
   }
 
   /**
+   * @brief Run one of a plugin's actions in the background. Poll `/api/plugins` for the result.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "id": "stadia-controller",
+   *   "action": "test_start"
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/action| POST| {"id":"stadia-controller","action":"test_start"}}
+   */
+  void runPluginAction(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json body;
+    const auto id = read_plugin_request(response, request, body);
+    if (!id) {
+      return;
+    }
+    if (!body.contains("action") || !body["action"].is_string()) {
+      bad_request(response, request, "'action' is required");
+      return;
+    }
+
+    std::string error;
+    if (const auto result = plugins::start_task(*id, plugins::action_e::run, error, false, body["action"].get<std::string>()); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Get a plugin's panel page, shown in a frame on the plugin's card.
+   *
+   * Unlike every other response, the page may be framed by Sunshine's own pages (and no others).
+   *
+   * @api_examples{/api/plugins/panel?id=stadia-controller| GET| null}
+   */
+  void getPluginPanel(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto query_params = request->parse_query_string();
+    const auto id_it = query_params.find("id");
+    if (id_it == query_params.end()) {
+      bad_request(response, request, "Plugin id is required");
+      return;
+    }
+    const auto file = plugins::panel_file(id_it->second);
+    std::ifstream in;
+    if (file) {
+      in.open(*file, std::ios::binary);
+    }
+    if (!file || !in.is_open()) {
+      not_found(response, request, std::format("plugin '{}' has no panel", id_it->second));
+      return;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/html; charset=utf-8");
+    headers.emplace("X-Frame-Options", "SAMEORIGIN");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'self';");
+    headers.emplace("Cache-Control", "no-store");
+    response->write(SimpleWeb::StatusCode::success_ok, ss.str(), headers);
+  }
+
+  /**
+   * @brief Forward a GET request from a plugin panel to the local port the plugin declares.
+   *
+   * Lets a panel read the state of a local service the plugin started without leaving Sunshine's origin.
+   * Only GET is forwarded, only to 127.0.0.1, and only to the port in the plugin's manifest.
+   *
+   * @api_examples{/api/plugins/proxy?id=stadia-controller&path=/_input| GET| null}
+   */
+  void proxyPluginRequest(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    const auto query_params = request->parse_query_string();
+    const auto id_it = query_params.find("id");
+    const auto path_it = query_params.find("path");
+    if (id_it == query_params.end() || path_it == query_params.end()) {
+      bad_request(response, request, "Plugin id and path are required");
+      return;
+    }
+
+    plugins::proxy_response_t proxied;
+    std::string error;
+    const auto result = plugins::proxy_get(id_it->second, path_it->second, proxied, error);
+    if (result == plugins::result_e::unavailable) {
+      nlohmann::json tree;
+      tree["status_code"] = 502;
+      tree["status"] = false;
+      tree["error"] = error;
+      SimpleWeb::CaseInsensitiveMultimap headers;
+      headers.emplace("Content-Type", "application/json");
+      headers.emplace("X-Frame-Options", "DENY");
+      headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+      headers.emplace("Cache-Control", "no-store");
+      response->write(SimpleWeb::StatusCode::server_error_bad_gateway, tree.dump(), headers);
+      return;
+    }
+    if (result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    // Statuses SimpleWeb has no name for are reported as a bad gateway.
+    auto code = static_cast<SimpleWeb::StatusCode>(proxied.status);
+    if (!SimpleWeb::status_code_strings().contains(code)) {
+      code = SimpleWeb::StatusCode::server_error_bad_gateway;
+    }
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", proxied.content_type.empty() ? "application/octet-stream" : proxied.content_type);
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none'; sandbox;");
+    headers.emplace("X-Content-Type-Options", "nosniff");
+    headers.emplace("Cache-Control", "no-store");
+    response->write(code, proxied.body, headers);
+  }
+
+  /**
    * @brief Rescan the plugin directories to pick up added or removed custom plugins.
    *
    * @api_examples{/api/plugins/rescan| POST| null}
@@ -2766,7 +2910,10 @@ namespace confighttp {
     server.resource["^/api/plugins$"]["GET"] = getPlugins;
     server.resource["^/api/plugins/config$"]["POST"] = savePluginConfig;
     server.resource["^/api/plugins/install$"]["POST"] = installPlugin;
+    server.resource["^/api/plugins/action$"]["POST"] = runPluginAction;
     server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
+    server.resource["^/api/plugins/panel$"]["GET"] = getPluginPanel;
+    server.resource["^/api/plugins/proxy$"]["GET"] = proxyPluginRequest;
     server.resource["^/api/plugins/rescan$"]["POST"] = rescanPlugins;
     server.resource["^/api/plugins/uninstall$"]["POST"] = uninstallPlugin;
     server.resource["^/api/logs$"]["GET"] = getLogs;

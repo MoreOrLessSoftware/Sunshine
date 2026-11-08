@@ -21,6 +21,7 @@
 #include <utility>
 
 // lib includes
+#include <boost/asio.hpp>
 #include <Simple-Web-Server/client_https.hpp>
 #include <Simple-Web-Server/crypto.hpp>
 #include <Simple-Web-Server/server_https.hpp>
@@ -340,6 +341,9 @@ protected:
     server->resource["^/plugins-uninstall-test$"]["POST"] = confighttp::uninstallPlugin;
     server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
     server->resource["^/plugins-rescan-test$"]["POST"] = confighttp::rescanPlugins;
+    server->resource["^/plugins-action-test$"]["POST"] = confighttp::runPluginAction;
+    server->resource["^/plugins-panel-test$"]["GET"] = confighttp::getPluginPanel;
+    server->resource["^/plugins-proxy-test$"]["GET"] = confighttp::proxyPluginRequest;
 
     // Start server
     server_thread = std::jthread([this]() {
@@ -514,6 +518,8 @@ INSTANTIATE_TEST_SUITE_P(
     endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
     endpoint_request_t {"Plugins", "GET", "/plugins-test", ""},
     endpoint_request_t {"PluginLog", "GET", "/plugins-log-test?id=p", ""},
+    endpoint_request_t {"PluginPanel", "GET", "/plugins-panel-test?id=p", ""},
+    endpoint_request_t {"PluginProxy", "GET", "/plugins-proxy-test?id=p&path=/_input", ""},
     endpoint_request_t {"PluginRescan", "POST", "/plugins-rescan-test", ""}
   ),
   endpoint_request_name
@@ -1978,6 +1984,7 @@ TEST_F(BrowseDirectoryTest, GetWindowsDrives_EntriesHaveCorrectFormat) {
 class PluginsConfigHttpTest: public ConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
 protected:
   std::filesystem::path plugins_root;  ///< Temporary plugin directories.
+  int closed_port = 0;  ///< Port of the test plugin's panel; nothing listens on it.
 
   void SetUp() override {
     ConfigHttpTest::SetUp();
@@ -1987,13 +1994,24 @@ protected:
     const auto plugin_dir = plugins_root / "builtin" / "p";
     std::filesystem::create_directories(plugin_dir);
     std::ofstream(plugin_dir / "install.ps1") << "exit 0\n";
-    std::ofstream(plugin_dir / "plugin.json") << R"({
+    std::ofstream(plugin_dir / "go.ps1") << "exit 0\n";
+    std::ofstream(plugin_dir / "panel.html") << "<!doctype html><title>Test panel</title>";
+    // The panel reads from a port nothing listens on: bind one, then close it.
+    {
+      boost::asio::io_context io;
+      boost::asio::ip::tcp::acceptor acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+      closed_port = acceptor.local_endpoint().port();
+    }
+    std::ofstream(plugin_dir / "plugin.json") << std::format(R"({{
       "id": "p",
       "name": "Test Plugin",
       "version": "1.0.0",
-      "scripts": {"install": "install.ps1"},
-      "options": [{"id": "level", "type": "number", "default": 1, "min": 0, "max": 10}]
-    })";
+      "scripts": {{"install": "install.ps1"}},
+      "options": [{{"id": "level", "type": "number", "default": 1, "min": 0, "max": 10}}],
+      "actions": [{{"id": "go", "label": "Go", "script": "go.ps1"}}],
+      "panel": {{"file": "panel.html", "port": {}}}
+    }})",
+                                                             closed_port);
 
     plugins::set_script_runner_for_testing([](const std::string &, bool, const std::map<std::string, std::string> &, const std::filesystem::path &, const std::filesystem::path &, std::stop_token) {
       return 0;
@@ -2048,7 +2066,7 @@ TEST_F(PluginsConfigHttpTest, GetPluginsListsPlugins) {
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");
     const auto response = client->request("POST", path, R"({"id":"p"})", headers);
@@ -2057,7 +2075,7 @@ TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsrfToken) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
     headers.emplace("Origin", "https://example.invalid");
@@ -2069,7 +2087,7 @@ TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsr
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRequireJsonContentType) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
     const auto response = client->request("POST", path, R"({"id":"p"})", headers);
@@ -2115,7 +2133,11 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_plugin_request_t {"InstallInvalidJson", "/plugins-install-test", "not-json", "400 Bad Request", "Invalid plugin request"},
     invalid_plugin_request_t {"InstallUnknownPlugin", "/plugins-install-test", R"({"id":"missing"})", "404 Not Found", "plugin 'missing' not found"},
     invalid_plugin_request_t {"InstallActivateNotBoolean", "/plugins-install-test", R"({"id":"p","activate":"yes"})", "400 Bad Request", "'activate' must be a boolean"},
-    invalid_plugin_request_t {"UninstallMissingId", "/plugins-uninstall-test", R"({})", "400 Bad Request", "Plugin id is required"}
+    invalid_plugin_request_t {"UninstallMissingId", "/plugins-uninstall-test", R"({})", "400 Bad Request", "Plugin id is required"},
+    invalid_plugin_request_t {"ActionMissingAction", "/plugins-action-test", R"({"id":"p"})", "400 Bad Request", "'action' is required"},
+    invalid_plugin_request_t {"ActionNotInstalled", "/plugins-action-test", R"({"id":"p","action":"go"})", "400 Bad Request", "must be installed"},
+    invalid_plugin_request_t {"ActionUnknown", "/plugins-action-test", R"({"id":"p","action":"nope"})", "400 Bad Request", "has no action 'nope'"},
+    invalid_plugin_request_t {"ActionUnknownPlugin", "/plugins-action-test", R"({"id":"missing","action":"go"})", "404 Not Found", "plugin 'missing' not found"}
   ),
   [](const testing::TestParamInfo<invalid_plugin_request_t> &info) {
     return std::string(info.param.name);
@@ -2166,6 +2188,76 @@ TEST_F(PluginsConfigHttpTest, GetPluginLogReturnsText) {
 TEST_F(PluginsConfigHttpTest, GetPluginLogValidatesId) {
   EXPECT_EQ(send("GET", "/plugins-log-test")->status_code, "400 Bad Request");
   EXPECT_EQ(send("GET", "/plugins-log-test?id=missing")->status_code, "404 Not Found");
+}
+
+TEST_F(PluginsConfigHttpTest, RunPluginActionAfterInstall) {
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+
+  ASSERT_EQ(send("POST", "/plugins-action-test", R"({"id":"p","action":"go"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  const auto plugin = get_plugin();
+  EXPECT_EQ(plugin["task"]["action"], "run");
+  EXPECT_EQ(plugin["task"]["action_id"], "go");
+  EXPECT_EQ(plugin["task"]["status"], "succeeded");
+  EXPECT_EQ(plugin["actions"][0]["label"], "Go");
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_TRUE(send("GET", "/plugins-log-test?id=p")->content.string().contains("Test Plugin: Go"));
+}
+
+TEST_F(PluginsConfigHttpTest, PanelMayBeFramedOnlyBySunshine) {
+  const auto response = send("GET", "/plugins-panel-test?id=p");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(response->content.string(), "<!doctype html><title>Test panel</title>");
+  EXPECT_TRUE(response->header.find("Content-Type")->second.starts_with("text/html"));
+  EXPECT_EQ(response->header.find("X-Frame-Options")->second, "SAMEORIGIN");
+  EXPECT_EQ(response->header.find("Content-Security-Policy")->second, "frame-ancestors 'self';");
+
+  EXPECT_EQ(send("GET", "/plugins-panel-test")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-panel-test?id=missing")->status_code, "404 Not Found");
+}
+
+TEST_F(PluginsConfigHttpTest, ProxyReportsAServiceThatIsNotRunning) {
+  const auto response = send("GET", "/plugins-proxy-test?id=p&path=/_input");
+  ASSERT_EQ(response->status_code, "502 Bad Gateway");
+  const auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_FALSE(body["status"].get<bool>());
+  EXPECT_TRUE(body["error"].get<std::string>().contains(std::format("nothing answered on local port {}", closed_port)));
+}
+
+TEST_F(PluginsConfigHttpTest, ProxyValidatesItsRequest) {
+  EXPECT_EQ(send("GET", "/plugins-proxy-test?id=p")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-proxy-test?path=/_input")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-proxy-test?id=missing&path=/_input")->status_code, "404 Not Found");
+  const auto response = send("GET", "/plugins-proxy-test?id=p&path=http://evil.invalid/");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("invalid proxy path"));
+}
+
+TEST_F(PluginsConfigHttpTest, ProxyForwardsTheServiceResponse) {
+  boost::asio::io_context io;
+  boost::asio::ip::tcp::acceptor acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+  const auto port = acceptor.local_endpoint().port();
+  std::jthread service([&acceptor]() {
+    boost::asio::ip::tcp::socket socket {acceptor.get_executor()};
+    acceptor.accept(socket);
+    boost::asio::streambuf buffer;
+    boost::asio::read_until(socket, buffer, "\r\n\r\n");
+    const std::string reply = "HTTP/1.1 404 Not Found\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+    boost::asio::write(socket, boost::asio::buffer(reply));
+  });
+
+  const auto plugin_dir = plugins_root / "custom" / "live";
+  std::filesystem::create_directories(plugin_dir);
+  std::ofstream(plugin_dir / "panel.html") << "<!doctype html>";
+  std::ofstream(plugin_dir / "plugin.json") << std::format(R"({{"id":"live","panel":{{"file":"panel.html","port":{}}}}})", port);
+  ASSERT_EQ(send("POST", "/plugins-rescan-test")->status_code, "200 OK");
+
+  const auto response = send("GET", "/plugins-proxy-test?id=live&path=/_status");
+  EXPECT_EQ(response->status_code, "404 Not Found");  // the service's own status is passed through
+  EXPECT_EQ(response->content.string(), "{}");
+  EXPECT_EQ(response->header.find("Content-Type")->second, "application/json");
+  EXPECT_EQ(response->header.find("X-Content-Type-Options")->second, "nosniff");
 }
 
 TEST_F(PluginsConfigHttpTest, RescanFindsNewPlugins) {

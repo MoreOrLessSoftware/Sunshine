@@ -159,6 +159,30 @@ namespace confighttp {
   void getPluginLog(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Run one of a plugin's actions in the background.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void runPluginAction(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Return a plugin's panel page, which Sunshine's own pages may frame.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPluginPanel(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Forward a GET request from a plugin panel to the local port its manifest declares.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void proxyPluginRequest(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Rescan the plugin directories.
    *
    * @param response HTTP response object to populate.

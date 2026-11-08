@@ -17,6 +17,8 @@ Open the **Plugins** page in the web UI. Each plugin can be:
   application, or select *Apps & plugins* to see every application against every active plugin. In that grid,
   the checkbox next to an application or under a plugin changes the whole row or column.
 * **Configured** — change the plugin's options and select *Save options*. The new values apply to the next stream.
+* **Tested** — some plugins add buttons to their card, such as *Start test*, and a live view below them. A button
+  runs one of the plugin's scripts right away, as administrator; its output is shown under *View log*.
 * **Uninstalled** — deactivates the plugin, runs its uninstall script, and deletes the files it downloaded.
 
 Active plugins run before the global and application preparation commands, in plugin order. Their undo scripts
@@ -62,6 +64,19 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
     "do": "do.ps1",
     "undo": "undo.ps1"
   },
+  "actions": [
+    {
+      "id": "test",
+      "label": "Run a test",
+      "description": "Shown as the button's tooltip.",
+      "script": "test.ps1"
+    }
+  ],
+  "panel": {
+    "file": "panel.html",
+    "port": 8008,
+    "height": 360
+  },
   "options": [
     {
       "id": "level",
@@ -89,6 +104,8 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect` and `disconnect`. Each must be a `.ps1` file directly inside the plugin folder. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
+| `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |
+| `panel`       | No       | A page shown on the plugin's card once it is installed: `file` (an `.html` file directly inside the plugin folder), and optionally `port` and `height` (in pixels, 100 to 2000, default 360). |
 
 Each option has an `id` (lowercase letters, digits and `_`, starting with a letter), a `type`, and optionally a
 `label`, `description` and `default`.
@@ -99,6 +116,21 @@ Each option has an `id` (lowercase letters, digits and `_`, starting with a lett
 | `number`  | A number                                 | `min`, `max` and `step`                                                                       |
 | `string`  | Text                                     |                                                                                               |
 | `choice`  | One of the listed values                 | `choices`: an array of strings, or of objects with a `value` and a `label`                    |
+
+### Panels
+A panel is an HTML page from the plugin folder that the web UI shows in a frame on the plugin's card, for example a
+live view of a service the plugin starts. It is served from `/api/plugins/panel?id=<id>` and can only be framed by
+Sunshine's own pages.
+
+A panel cannot reach local services directly, since the web UI is served over HTTPS. When the manifest sets a
+`port`, the panel can read from that port on this computer through Sunshine instead:
+
+```js
+const response = await fetch('./proxy?id=my-plugin&path=' + encodeURIComponent('/status'));
+```
+
+Sunshine forwards the GET request to `http://127.0.0.1:<port>/status` and returns the response, or answers
+`502 Bad Gateway` when nothing is listening. Only GET requests are forwarded, only to the declared port.
 
 ### Script environment
 Scripts run with `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script>`. A script fails

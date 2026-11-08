@@ -76,6 +76,28 @@ namespace plugins {
   };
 
   /**
+   * @brief A button on the plugin's card that runs one of its scripts.
+   */
+  struct action_t {
+    std::string id;  ///< Identifier, sent by the web UI to run the action.
+    std::string label;  ///< Button text.
+    std::string description;  ///< Tooltip shown in the web UI.
+    std::string script;  ///< Script file relative to the plugin directory. Always runs elevated, like install.
+  };
+
+  /**
+   * @brief An HTML page from the plugin directory shown on the plugin's card.
+   *
+   * The page may read data from one local port through `/api/plugins/proxy`, so a plugin that starts a local
+   * service can show its live state without the browser reaching the service directly.
+   */
+  struct panel_t {
+    std::string file;  ///< HTML file relative to the plugin directory.
+    int port = 0;  ///< Local port `/api/plugins/proxy` forwards GET requests to, or 0 for none.
+    int height = 360;  ///< Height of the panel in pixels.
+  };
+
+  /**
    * @brief A parsed and validated `plugin.json`.
    */
   struct manifest_t {
@@ -89,6 +111,8 @@ namespace plugins {
     bool elevated;  ///< Whether the do and undo scripts run elevated.
     scripts_t scripts;  ///< Scripts the plugin provides.
     std::vector<option_t> options;  ///< Configuration options.
+    std::vector<action_t> actions;  ///< Buttons that run scripts on demand.
+    std::optional<panel_t> panel;  ///< Page shown on the plugin's card.
     std::filesystem::path dir;  ///< Directory containing the manifest.
     bool builtin;  ///< Whether the plugin ships with Sunshine.
   };
@@ -107,7 +131,8 @@ namespace plugins {
    */
   enum class action_e {
     install,  ///< Run the install script.
-    uninstall  ///< Run the uninstall script.
+    uninstall,  ///< Run the uninstall script.
+    run  ///< Run the script of one of the plugin's actions.
   };
 
   /**
@@ -127,7 +152,17 @@ namespace plugins {
     not_found,  ///< No plugin has the requested ID.
     invalid,  ///< The request contained an invalid value.
     not_installed,  ///< The plugin must be installed first.
-    busy  ///< Another install or uninstall is still running.
+    busy,  ///< Another install or uninstall is still running.
+    unavailable  ///< The local service behind a plugin panel did not answer.
+  };
+
+  /**
+   * @brief A response from the local service behind a plugin panel.
+   */
+  struct proxy_response_t {
+    int status = 0;  ///< HTTP status code.
+    std::string content_type;  ///< `Content-Type` of the response, or empty.
+    std::string body;  ///< Response body.
   };
 
   /**
@@ -318,9 +353,40 @@ namespace plugins {
    * @param action Operation to run.
    * @param error Receives the reason when the request is rejected.
    * @param activate Whether to activate the plugin once an install succeeds. Ignored for uninstall.
+   * @param action_id Action to run when `action` is `action_e::run`; the plugin must be installed.
    * @return Outcome of the request.
    */
-  result_e start_task(const std::string &id, action_e action, std::string &error, bool activate = false);
+  result_e start_task(const std::string &id, action_e action, std::string &error, bool activate = false, const std::string &action_id = {});
+
+  /**
+   * @brief Return the HTML file of a plugin's panel.
+   *
+   * @param id Plugin ID.
+   * @return Path of the panel file, or `std::nullopt` when the plugin does not exist or has no panel.
+   */
+  std::optional<std::filesystem::path> panel_file(const std::string &id);
+
+  /**
+   * @brief Check whether a path may be forwarded to a plugin's local service.
+   *
+   * @param path Path and query, as sent by the panel.
+   * @return `true` for an absolute path of at most 512 printable characters without a scheme or authority.
+   */
+  bool is_valid_proxy_path(std::string_view path);
+
+  /**
+   * @brief Forward a GET request from a plugin panel to the local port its manifest declares.
+   *
+   * The request goes to `http://127.0.0.1:<port><path>` with a short timeout, so the panel can show the
+   * state of a service the plugin started without the browser leaving Sunshine's origin.
+   *
+   * @param id Plugin ID.
+   * @param path Path and query to request.
+   * @param out Receives the response.
+   * @param error Receives the reason when the request is rejected or fails.
+   * @return `ok`, `not_found`, `invalid` (no proxy port or a bad path) or `unavailable` (nothing answered).
+   */
+  result_e proxy_get(const std::string &id, const std::string &path, proxy_response_t &out, std::string &error);
 
   /**
    * @brief Set the function called after an install or uninstall changes plugin state in the background.

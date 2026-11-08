@@ -1459,6 +1459,12 @@ p {
     font-size: 0.8rem;
 }
 
+/* A plugin's own page, framed on its card. */
+.plugin-panel {
+    display: block;
+    background-color: var(--bs-body-bg);
+}
+
 /* ==========================================================================
    Toolbar Styles
    ========================================================================== */

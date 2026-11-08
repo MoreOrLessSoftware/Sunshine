@@ -8,6 +8,7 @@
 // standard includes
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <future>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include <thread>
 
 // lib includes
+#include <boost/asio.hpp>
 #include <nlohmann/json.hpp>
 
 // local includes
@@ -930,6 +932,231 @@ TEST(PrepCmdEnvTest, AddsCommandVariables) {
   EXPECT_EQ(env.at("ADDED").to_string(), "2");
   EXPECT_EQ(base.at("OVERRIDDEN").to_string(), "base");
   EXPECT_EQ(base.count("ADDED"), 0);
+}
+
+namespace {
+  /**
+   * @brief A manifest with two actions and a panel that reads from a local port.
+   *
+   * @param id Plugin ID.
+   * @param port Port the panel may read from, or 0 for none.
+   * @return Manifest JSON.
+   */
+  json manifest_with_panel(const std::string &id, int port) {
+    auto manifest = full_manifest(id);
+    manifest["actions"] = json::array({
+      {{"id", "test_start"}, {"label", "Start test"}, {"description", "Starts the service"}, {"script", "test-start.ps1"}},
+      {{"id", "test_stop"}, {"script", "test-stop.ps1"}},
+    });
+    manifest["panel"] = {{"file", "panel.html"}};
+    if (port != 0) {
+      manifest["panel"]["port"] = port;
+    }
+    return manifest;
+  }
+
+  /**
+   * @brief Write a plugin with actions and a panel, including the files its manifest references.
+   *
+   * @param parent Bundled or custom root.
+   * @param id Plugin ID, also its directory name.
+   * @param port Port the panel may read from, or 0 for none.
+   * @return Plugin directory.
+   */
+  fs::path write_panel_plugin(const fs::path &parent, const std::string &id, int port) {
+    const auto manifest = manifest_with_panel(id, port);
+    const auto dir = parent / id;
+    write_text(dir / "plugin.json", manifest.dump(2));
+    for (const auto &[_, script] : manifest["scripts"].items()) {
+      write_text(dir / script.get<std::string>(), "exit 0\n");
+    }
+    write_text(dir / "test-start.ps1", "exit 0\n");
+    write_text(dir / "test-stop.ps1", "exit 0\n");
+    write_text(dir / "panel.html", "<!doctype html><title>panel</title>");
+    return dir;
+  }
+}  // namespace
+
+TEST_F(PluginsTest, ParseManifestReadsActionsAndPanel) {
+  const auto dir = write_panel_plugin(builtin_dir, "p", 8008);
+  std::string error;
+  const auto manifest = plugins::parse_manifest(manifest_with_panel("p", 8008), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  ASSERT_EQ(manifest->actions.size(), 2);
+  EXPECT_EQ(manifest->actions[0].id, "test_start");
+  EXPECT_EQ(manifest->actions[0].label, "Start test");
+  EXPECT_EQ(manifest->actions[0].description, "Starts the service");
+  EXPECT_EQ(manifest->actions[0].script, "test-start.ps1");
+  EXPECT_EQ(manifest->actions[1].label, "test_stop");  // the id when no label is given
+  ASSERT_TRUE(manifest->panel);
+  EXPECT_EQ(manifest->panel->file, "panel.html");
+  EXPECT_EQ(manifest->panel->port, 8008);
+  EXPECT_EQ(manifest->panel->height, 360);
+}
+
+TEST_F(PluginsTest, InvalidActionsAndPanelsAreRejected) {
+  write_text(builtin_dir / "exists.ps1", "exit 0\n");
+  write_text(builtin_dir / "panel.html", "");
+  write_text(builtin_dir / "readme.txt", "");
+  const std::vector<std::pair<std::string, std::string>> cases {
+    {R"({"id":"p","actions":{}})", "'actions' must be an array"},
+    {R"({"id":"p","actions":[1]})", "each action must be an object"},
+    {R"({"id":"p","actions":[{"id":"Bad","script":"exists.ps1"}]})", "invalid action id 'Bad'"},
+    {R"({"id":"p","actions":[{"id":"a"}]})", "action 'a' needs a script"},
+    {R"({"id":"p","actions":[{"id":"a","script":"missing.ps1"}]})", "does not exist"},
+    {R"({"id":"p","actions":[{"id":"a","script":"../exists.ps1"}]})", "must be a .ps1 file"},
+    {R"({"id":"p","actions":[{"id":"a","script":"exists.ps1"},{"id":"a","script":"exists.ps1"}]})", "duplicate action id 'a'"},
+    {R"({"id":"p","panel":"panel.html"})", "'panel' must be an object"},
+    {R"({"id":"p","panel":{}})", "must be an .html file"},
+    {R"({"id":"p","panel":{"file":"readme.txt"}})", "must be an .html file"},
+    {R"({"id":"p","panel":{"file":"../panel.html"}})", "must be an .html file"},
+    {R"({"id":"p","panel":{"file":"missing.html"}})", "does not exist"},
+    {R"({"id":"p","panel":{"file":"panel.html","port":0}})", "'port' must be an integer from 1 to 65535"},
+    {R"({"id":"p","panel":{"file":"panel.html","port":"8008"}})", "'port' must be an integer from 1 to 65535"},
+    {R"({"id":"p","panel":{"file":"panel.html","height":50}})", "'height' must be an integer from 100 to 2000"},
+  };
+  for (const auto &[manifest, expected] : cases) {
+    std::string error;
+    EXPECT_FALSE(plugins::parse_manifest(json::parse(manifest), builtin_dir, true, error)) << manifest;
+    EXPECT_TRUE(error.contains(expected)) << manifest << ": " << error;
+  }
+}
+
+TEST_F(PluginsTest, ListDescribesActionsAndPanel) {
+  write_panel_plugin(builtin_dir, "p", 8008);
+  write_plugin(builtin_dir, "plain", full_manifest("plain", 200));
+  plugins::load(paths());
+
+  const auto list = plugins::list();
+  const auto plugin = find_plugin(list, "p");
+  ASSERT_EQ(plugin["actions"].size(), 2);
+  EXPECT_EQ(plugin["actions"][0], json({{"id", "test_start"}, {"label", "Start test"}, {"description", "Starts the service"}}));
+  EXPECT_EQ(plugin["panel"], json({{"height", 360}, {"proxy", true}}));
+
+  const auto plain = find_plugin(list, "plain");
+  EXPECT_TRUE(plain["actions"].empty());
+  EXPECT_TRUE(plain["panel"].is_null());
+}
+
+TEST_F(PluginsTest, RunActionRunsItsScriptElevatedAndKeepsState) {
+  const auto dir = write_panel_plugin(builtin_dir, "p", 0);
+  plugins::load(paths());
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error, true), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::run, error, false, "test_start"), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  ASSERT_EQ(calls.size(), 2);
+  EXPECT_EQ(calls[1].command, plugins::script_command(dir / "test-start.ps1"));
+  EXPECT_TRUE(calls[1].elevated);
+  EXPECT_EQ(calls[1].working_dir, data_dir / "p");
+  EXPECT_EQ(calls[1].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "2");
+
+  const auto plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_EQ(plugin["active"], true);
+  EXPECT_EQ(plugin["task"], json({{"action", "run"}, {"status", "succeeded"}, {"exit_code", 0}, {"action_id", "test_start"}}));
+  const auto log = plugins::read_log("p");
+  ASSERT_TRUE(log);
+  EXPECT_TRUE(log->contains("Plugin p: Start test")) << *log;
+
+  runner_exit_code = 3;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::run, error, false, "test_stop"), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  const auto failed = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(failed["task"]["status"], "failed");
+  EXPECT_EQ(failed["task"]["exit_code"], 3);
+  EXPECT_EQ(failed["installed"], true);  // a failed action changes nothing
+  EXPECT_EQ(failed["active"], true);
+}
+
+TEST_F(PluginsTest, RunActionRequiresAnInstalledPluginAndAKnownAction) {
+  write_panel_plugin(builtin_dir, "p", 0);
+  plugins::load(paths());
+  std::string error;
+  EXPECT_EQ(plugins::start_task("p", plugins::action_e::run, error, false, "test_start"), plugins::result_e::not_installed);
+  EXPECT_TRUE(error.contains("must be installed")) << error;
+  EXPECT_EQ(plugins::start_task("p", plugins::action_e::run, error, false, "nope"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no action 'nope'")) << error;
+  EXPECT_EQ(plugins::start_task("missing", plugins::action_e::run, error, false, "test_start"), plugins::result_e::not_found);
+  EXPECT_TRUE(calls.empty());
+}
+
+TEST(PluginsProxyTest, AcceptsOnlyLocalAbsolutePaths) {
+  EXPECT_TRUE(plugins::is_valid_proxy_path("/_input"));
+  EXPECT_TRUE(plugins::is_valid_proxy_path("/_status?controller=c1&x=%20y"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path(""));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("_input"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("http://evil.invalid/"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("//evil.invalid/"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("/a b"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("/a\r\nHost: x"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("/a\\b"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("/a#b"));
+  EXPECT_FALSE(plugins::is_valid_proxy_path("/" + std::string(512, 'a')));
+}
+
+TEST_F(PluginsTest, PanelFileFindsThePanel) {
+  const auto dir = write_panel_plugin(builtin_dir, "p", 0);
+  write_plugin(builtin_dir, "plain", full_manifest("plain", 200));
+  plugins::load(paths());
+  EXPECT_EQ(plugins::panel_file("p"), dir / "panel.html");
+  EXPECT_FALSE(plugins::panel_file("plain"));
+  EXPECT_FALSE(plugins::panel_file("missing"));
+}
+
+TEST_F(PluginsTest, ProxyGetForwardsToTheDeclaredPort) {
+  boost::asio::io_context io;
+  boost::asio::ip::tcp::acceptor acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+  const auto port = acceptor.local_endpoint().port();
+  std::promise<std::string> request_line;
+  std::jthread server([&acceptor, &request_line]() {
+    boost::asio::ip::tcp::socket socket {acceptor.get_executor()};
+    acceptor.accept(socket);
+    boost::asio::streambuf buffer;
+    boost::asio::read_until(socket, buffer, "\r\n\r\n");
+    std::istream in(&buffer);
+    std::string line;
+    std::getline(in, line);
+    request_line.set_value(line);
+    const std::string reply = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}";
+    boost::asio::write(socket, boost::asio::buffer(reply));
+  });
+
+  write_panel_plugin(builtin_dir, "p", port);
+  plugins::load(paths());
+  plugins::proxy_response_t response;
+  std::string error;
+  ASSERT_EQ(plugins::proxy_get("p", "/_input?x=1", response, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(response.status, 200);
+  EXPECT_EQ(response.content_type, "application/json");
+  EXPECT_EQ(response.body, R"({"ok":true})");
+  EXPECT_TRUE(request_line.get_future().get().starts_with("GET /_input?x=1 HTTP/1.1"));
+}
+
+TEST_F(PluginsTest, ProxyGetRejectsBadRequestsAndReportsAMissingService) {
+  // A port nothing listens on: bind one, then close it.
+  int closed_port = 0;
+  {
+    boost::asio::io_context io;
+    boost::asio::ip::tcp::acceptor acceptor {io, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+    closed_port = acceptor.local_endpoint().port();
+  }
+  write_panel_plugin(builtin_dir, "p", closed_port);
+  write_panel_plugin(custom_dir, "noport", 0);
+  plugins::load(paths());
+
+  plugins::proxy_response_t response;
+  std::string error;
+  EXPECT_EQ(plugins::proxy_get("missing", "/_input", response, error), plugins::result_e::not_found);
+  EXPECT_EQ(plugins::proxy_get("noport", "/_input", response, error), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no panel port")) << error;
+  EXPECT_EQ(plugins::proxy_get("p", "http://evil.invalid/", response, error), plugins::result_e::invalid);
+  EXPECT_EQ(error, "invalid proxy path");
+  EXPECT_EQ(plugins::proxy_get("p", "/_input", response, error), plugins::result_e::unavailable);
+  EXPECT_TRUE(error.contains(std::format("nothing answered on local port {}", closed_port))) << error;
 }
 
 #ifdef _WIN32

@@ -134,7 +134,7 @@
               </div>
               <button type="button" class="btn btn-primary" v-if="isBusy(plugin)" disabled>
                 <span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
-                {{ plugin.task.action === 'install' ? $t('plugins.installing') : $t('plugins.uninstalling') }}
+                {{ taskRunningText(plugin) }}
               </button>
               <button type="button" class="btn btn-primary" v-else-if="!plugin.installed" :disabled="anyRunning" @click="runTask(plugin, 'install')">
                 <download :size="18" class="icon"></download>
@@ -154,19 +154,33 @@
             <a v-if="plugin.homepage" :href="plugin.homepage" target="_blank" rel="noopener noreferrer">{{ $t('plugins.homepage') }}</a>
           </p>
 
-          <!-- Install / uninstall status -->
+          <!-- Actions: buttons that run one of the plugin's scripts -->
+          <div v-if="plugin.installed && plugin.actions.length > 0" class="d-flex flex-wrap gap-2 mb-2">
+            <button type="button" class="btn btn-outline-primary btn-sm" v-for="action in plugin.actions" :key="action.id"
+                    :title="action.description" :disabled="anyRunning" @click="runAction(plugin, action)">
+              <play :size="14" class="icon"></play>
+              {{ action.label }}
+            </button>
+          </div>
+
+          <!-- Panel: a page from the plugin folder, e.g. a live view of a service the plugin runs -->
+          <iframe v-if="plugin.installed && plugin.panel" class="plugin-panel border rounded w-100 mb-2"
+                  :src="'./api/plugins/panel?id=' + encodeURIComponent(plugin.id)"
+                  :style="{height: plugin.panel.height + 'px'}" :title="$t('plugins.panel_title', {name: plugin.name})"></iframe>
+
+          <!-- Install / uninstall / action status -->
           <div v-if="plugin.task" class="mb-2">
             <div v-if="plugin.task.status === 'running'" class="alert alert-primary py-2 mb-0" role="status">
               <div class="d-flex align-items-center gap-2 fw-semibold mb-2">
                 <div class="spinner-border spinner-border-sm" aria-hidden="true"></div>
-                {{ plugin.task.action === 'install' ? $t('plugins.installing') : $t('plugins.uninstalling') }}
+                {{ taskRunningText(plugin) }}
               </div>
               <div class="progress" style="height: 6px;">
                 <div class="progress-bar progress-bar-striped progress-bar-animated w-100"></div>
               </div>
             </div>
             <div v-else-if="plugin.task.status === 'failed'" class="alert alert-danger py-2 mb-0">
-              {{ plugin.task.action === 'install' ? $t('plugins.install_failed') : $t('plugins.uninstall_failed') }}
+              {{ taskFailedText(plugin) }}
               ({{ $t('plugins.exit_code', { code: plugin.task.exit_code }) }})
             </div>
             <button type="button" class="btn btn-link btn-sm px-0" @click="toggleLog(plugin)">
@@ -229,7 +243,7 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { Download, FileText, LayoutGrid, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
+  import { Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
 
   const app = createApp({
     components: {
@@ -237,6 +251,7 @@
       Download,
       FileText,
       LayoutGrid,
+      Play,
       RefreshCw,
       Save,
       Shield,
@@ -414,6 +429,41 @@
           this.drafts[plugin.id] = null;
           notifyKey.success('plugins.saved');
         }
+        await this.loadPlugins();
+      },
+
+      /**
+       * Name of the action a plugin task runs, from the plugin's manifest.
+       */
+      actionLabel(plugin) {
+        const action = plugin.actions.find((a) => a.id === plugin.task.action_id);
+        return action ? action.label : plugin.task.action_id;
+      },
+
+      taskRunningText(plugin) {
+        switch (plugin.task.action) {
+          case 'install':
+            return this.i18n.t('plugins.installing');
+          case 'uninstall':
+            return this.i18n.t('plugins.uninstalling');
+          default:
+            return this.i18n.t('plugins.running', {action: this.actionLabel(plugin)});
+        }
+      },
+
+      taskFailedText(plugin) {
+        switch (plugin.task.action) {
+          case 'install':
+            return this.i18n.t('plugins.install_failed');
+          case 'uninstall':
+            return this.i18n.t('plugins.uninstall_failed');
+          default:
+            return this.i18n.t('plugins.action_failed', {action: this.actionLabel(plugin)});
+        }
+      },
+
+      async runAction(plugin, action) {
+        await this.post(plugin, './api/plugins/action', {action: action.id});
         await this.loadPlugins();
       },
 
