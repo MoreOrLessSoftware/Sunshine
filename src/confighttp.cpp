@@ -41,6 +41,7 @@
 #endif
 
 // local includes
+#include "client_commands.h"
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
@@ -1285,6 +1286,162 @@ namespace confighttp {
       send_response(response, output_tree);
     } catch (std::exception &e) {
       BOOST_LOG(warning) << "SaveAppPlugins: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief List the client commands: the global ones and those of each application.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * The response is JSON in the following format, with applications in the order of the applications file:
+   * @code{.json}
+   * {
+   *   "status": true,
+   *   "commands": [{"id": "...", "label": "Task Manager", "icon": "material:monitoring", "close-menu": true,
+   *                 "type": "keys", "steps": [[162, 160, 27]]}],
+   *   "apps": [{"index": 0, "name": "Desktop", "client-commands": []}]
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/client-commands| GET| null}
+   */
+  void getClientCommands(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    try {
+      nlohmann::json apps = nlohmann::json::array();
+      const nlohmann::json file_tree = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+      const auto apps_node = file_tree.value("apps", nlohmann::json::array());
+      for (std::size_t i = 0; i < apps_node.size(); i++) {
+        const auto &app = apps_node[i];
+        apps.push_back({
+          {"index", i},
+          {"name", app.value("name", "")},
+          {"client-commands", client_commands::to_json(client_commands::parse_commands(app.value("client-commands", nlohmann::json()), std::format("app{}", i)))},
+        });
+      }
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      output_tree["commands"] = client_commands::to_json(client_commands::load_global(client_commands::file()));
+      output_tree["apps"] = std::move(apps);
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "GetClientCommands: "sv << e.what();
+      bad_request(response, request, e.what());
+    }
+  }
+
+  /**
+   * @brief Save the client commands: the global ones and those of some applications.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * Every list is checked before anything is written; a list with an invalid command is rejected with the
+   * command's label. Applications are named by their current index and name, as for `/api/apps/plugins`.
+   * `commands` may be left out to keep the global commands, and applications that are not listed keep theirs.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "commands": [{"id": "...", "label": "Escape", "type": "keys", "steps": [[27]]}],
+   *   "apps": [{"index": 0, "name": "Desktop", "client-commands": []}]
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/client-commands| POST| {"commands":[],"apps":[]}}
+   */
+  void saveClientCommands(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      const nlohmann::json input_tree = nlohmann::json::parse(ss);
+      if (!input_tree.is_object()) {
+        bad_request(response, request, "the request must be an object");
+        return;
+      }
+
+      std::string error;
+      std::optional<std::vector<client_commands::command_t>> global;
+      if (input_tree.contains("commands")) {
+        global = client_commands::parse_commands_strict(input_tree["commands"], error);
+        if (!global) {
+          bad_request(response, request, error);
+          return;
+        }
+      }
+
+      const auto app_entries = input_tree.value("apps", nlohmann::json::array());
+      if (!app_entries.is_array()) {
+        bad_request(response, request, "'apps' must be an array");
+        return;
+      }
+
+      nlohmann::json file_tree;
+      if (!app_entries.empty()) {
+        file_tree = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
+        auto &apps_node = file_tree["apps"];
+
+        for (const auto &entry : app_entries) {
+          if (!entry.is_object() || !entry.contains("index") || !entry["index"].is_number_integer() || !entry.contains("name") || !entry["name"].is_string()) {
+            bad_request(response, request, "each app needs an integer 'index' and a string 'name'");
+            return;
+          }
+          const auto index = entry["index"].get<std::int64_t>();
+          if (index < 0 || std::cmp_greater_equal(index, apps_node.size()) || apps_node[index].value("name", "") != entry["name"].get<std::string>()) {
+            bad_request(response, request, "the applications have changed; reload and try again");
+            return;
+          }
+
+          auto commands = client_commands::parse_commands_strict(entry.value("client-commands", nlohmann::json::array()), error);
+          if (!commands) {
+            bad_request(response, request, std::format("{}: {}", entry["name"].get<std::string>(), error));
+            return;
+          }
+
+          auto &app = apps_node[index];
+          if (commands->empty()) {
+            app.erase("client-commands");
+          } else {
+            app["client-commands"] = client_commands::to_json(*commands);
+          }
+        }
+      }
+
+      if (global && !client_commands::save_global(client_commands::file(), *global, error)) {
+        bad_request(response, request, error);
+        return;
+      }
+
+      if (!app_entries.empty()) {
+        file_handler::write_file(config::stream.file_apps.c_str(), file_tree.dump(4));
+        proc::refresh(config::stream.file_apps);
+      }
+
+      nlohmann::json output_tree;
+      output_tree["status"] = true;
+      send_response(response, output_tree);
+    } catch (std::exception &e) {
+      BOOST_LOG(warning) << "SaveClientCommands: "sv << e.what();
       bad_request(response, request, e.what());
     }
   }
@@ -2973,6 +3130,7 @@ namespace confighttp {
     // web pages
     server.resource["^/$"]["GET"] = page_handler("index.html");
     server.resource["^/apps/?$"]["GET"] = page_handler("apps.html");
+    server.resource["^/client-commands/?$"]["GET"] = page_handler("client-commands.html");
     server.resource["^/clients/?$"]["GET"] = page_handler("clients.html");
     server.resource["^/config/?$"]["GET"] = page_handler("config.html");
     server.resource["^/featured/?$"]["GET"] = page_handler("featured.html");
@@ -2990,6 +3148,8 @@ namespace confighttp {
     server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
     server.resource["^/api/apps/close$"]["POST"] = closeApp;
     server.resource["^/api/apps/plugins$"]["POST"] = saveAppPlugins;
+    server.resource["^/api/client-commands$"]["GET"] = getClientCommands;
+    server.resource["^/api/client-commands$"]["POST"] = saveClientCommands;
     server.resource["^/api/clients/list$"]["GET"] = getClients;
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;

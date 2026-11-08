@@ -27,6 +27,7 @@
 #include <Simple-Web-Server/server_https.hpp>
 
 // local includes
+#include <src/client_commands.h>
 #include <src/config.h>
 #include <src/confighttp.h>
 #include <src/crypto.h>
@@ -2443,5 +2444,141 @@ TEST_F(SaveAppPluginsTest, RejectsMalformedRequests) {
 
 TEST_F(SaveAppPluginsTest, RejectsInvalidJson) {
   const auto response = send("POST", "/app-plugins-test", "{");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+}
+
+
+/**
+ * @brief Runs the client command endpoints against temporary applications and commands files.
+ */
+class ClientCommandsConfigHttpTest: public PluginsConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::string saved_file_apps;  ///< The applications file to restore after the test.
+
+  void SetUp() override {
+    PluginsConfigHttpTest::SetUp();
+    saved_file_apps = config::stream.file_apps;
+    config::stream.file_apps = (plugins_root / "apps.json").string();
+    std::ofstream(config::stream.file_apps) << R"({"env":{},"apps":[
+      {"name":"A","cmd":"a.exe","client-commands":[{"id":"a1","label":"Esc","type":"keys","steps":[[27]]}]},
+      {"name":"B"}
+    ]})";
+    client_commands::set_file_for_testing(plugins_root / "client_commands.json");
+    std::ofstream(plugins_root / "client_commands.json") << R"({"commands":[{"id":"g1","label":"Run","type":"script","cmd":"x.exe"}],"other":1})";
+    server->resource["^/client-commands-test$"]["GET"] = confighttp::getClientCommands;
+    server->resource["^/client-commands-test$"]["POST"] = confighttp::saveClientCommands;
+  }
+
+  void TearDown() override {
+    client_commands::set_file_for_testing({});
+    config::stream.file_apps = saved_file_apps;
+    PluginsConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Read the applications back from the file.
+   *
+   * @return The `apps` array.
+   */
+  nlohmann::json read_apps() const {
+    std::ifstream in(config::stream.file_apps);
+    return nlohmann::json::parse(in).at("apps");
+  }
+
+  /**
+   * @brief Read the global commands file back.
+   *
+   * @return Its contents.
+   */
+  nlohmann::json read_global() const {
+    std::ifstream in(plugins_root / "client_commands.json");
+    return nlohmann::json::parse(in);
+  }
+
+  /**
+   * @brief Post a body and expect it to be rejected without changing either file.
+   *
+   * @param body Request body.
+   * @param error Expected error message.
+   */
+  void expect_rejected(const std::string &body, const std::string &error) {
+    const auto apps_before = read_apps();
+    const auto global_before = read_global();
+    const auto response = send("POST", "/client-commands-test", body);
+    EXPECT_EQ(response->status_code, "400 Bad Request") << body;
+    EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("error"), error) << body;
+    EXPECT_EQ(read_apps(), apps_before) << body;
+    EXPECT_EQ(read_global(), global_before) << body;
+  }
+};
+
+TEST_F(ClientCommandsConfigHttpTest, ListsGlobalAndAppCommands) {
+  const auto response = send("GET", "/client-commands-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+  const auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_EQ(body["status"], true);
+  ASSERT_EQ(body["commands"].size(), 1);
+  EXPECT_EQ(body["commands"][0]["id"], "g1");
+  EXPECT_EQ(body["commands"][0]["cmd"], "x.exe");
+  ASSERT_EQ(body["apps"].size(), 2);
+  EXPECT_EQ(body["apps"][0]["index"], 0);
+  EXPECT_EQ(body["apps"][0]["name"], "A");
+  EXPECT_EQ(body["apps"][0]["client-commands"][0]["steps"], nlohmann::json::parse("[[27]]"));
+  EXPECT_TRUE(body["apps"][1]["client-commands"].empty());
+}
+
+TEST_F(ClientCommandsConfigHttpTest, ListingWithABrokenAppsFileFails) {
+  std::ofstream(config::stream.file_apps) << "{";
+  EXPECT_EQ(send("GET", "/client-commands-test")->status_code, "400 Bad Request");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, SavesGlobalAndListedAppCommands) {
+  const auto response = send("POST", "/client-commands-test", R"({
+    "commands": [{"id":"g2","label":"Esc","type":"keys","steps":[[27]]}],
+    "apps": [
+      {"index":0,"name":"A","client-commands":[]},
+      {"index":1,"name":"B","client-commands":[{"id":"b1","label":"Notepad","type":"script","cmd":"notepad.exe"}]}
+    ]
+  })");
+  ASSERT_EQ(response->status_code, "200 OK");
+
+  const auto global = read_global();
+  EXPECT_EQ(global["other"], 1);
+  ASSERT_EQ(global["commands"].size(), 1);
+  EXPECT_EQ(global["commands"][0]["id"], "g2");
+
+  const auto apps = read_apps();
+  EXPECT_FALSE(apps[0].contains("client-commands"));
+  EXPECT_EQ(apps[0]["cmd"], "a.exe");
+  ASSERT_EQ(apps[1]["client-commands"].size(), 1);
+  EXPECT_EQ(apps[1]["client-commands"][0]["cmd"], "notepad.exe");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, LeavingOutTheGlobalCommandsKeepsThem) {
+  ASSERT_EQ(send("POST", "/client-commands-test", R"({"apps":[]})")->status_code, "200 OK");
+  EXPECT_EQ(read_global()["commands"][0]["id"], "g1");
+  EXPECT_EQ(read_apps()[0]["client-commands"][0]["id"], "a1");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, RejectsInvalidRequests) {
+  expect_rejected(R"([])", "the request must be an object");
+  expect_rejected(R"({"commands":{}})", "the commands must be an array");
+  expect_rejected(R"({"commands":[{"id":"x","label":"Bad","type":"nope"}]})", "\"Bad\": \"type\" must be \"keys\" or \"script\"");
+  expect_rejected(R"({"apps":{}})", "'apps' must be an array");
+  expect_rejected(R"({"apps":[1]})", "each app needs an integer 'index' and a string 'name'");
+  expect_rejected(R"({"apps":[{"index":0,"name":"Renamed"}]})", "the applications have changed; reload and try again");
+  expect_rejected(R"({"apps":[{"index":5,"name":"A"}]})", "the applications have changed; reload and try again");
+  // A valid global list is not written when an app's list is rejected
+  expect_rejected(R"({"commands":[],"apps":[{"index":0,"name":"A","client-commands":[{"label":"No id","type":"keys","steps":[[27]]}]}]})",
+                  "A: \"No id\" has no id");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, RejectsInvalidJson) {
+  EXPECT_EQ(send("POST", "/client-commands-test", "{")->status_code, "400 Bad Request");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, ReportsAGlobalFileThatCannotBeWritten) {
+  client_commands::set_file_for_testing(plugins_root);
+  const auto response = send("POST", "/client-commands-test", R"({"commands":[]})");
   EXPECT_EQ(response->status_code, "400 Bad Request");
 }

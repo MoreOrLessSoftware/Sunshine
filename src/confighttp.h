@@ -119,6 +119,22 @@ namespace confighttp {
   void saveAppPlugins(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief List the global client commands and those of each application.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getClientCommands(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Save the global client commands and those of some applications.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void saveClientCommands(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief List plugins with their state and options.
    *
    * @param response HTTP response object to populate.

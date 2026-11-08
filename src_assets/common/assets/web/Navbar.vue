@@ -30,6 +30,12 @@
               </a>
             </li>
             <li class="nav-item">
+              <a class="nav-link" href="./client-commands">
+                <SquareMenu :size="18" class="icon"></SquareMenu>
+                {{ $t('navbar.client_commands') }}
+              </a>
+            </li>
+            <li class="nav-item">
               <a class="nav-link" href="./plugins">
                 <Puzzle :size="18" class="icon"></Puzzle>
                 {{ $t('navbar.plugins') }}
@@ -88,7 +94,7 @@
 </template>
 
 <script>
-import { CircleUserRound, Home, Info, Layers, Lock, LogOut, Puzzle, Settings, Shield, Star } from '@lucide/vue'
+import { CircleUserRound, Home, Info, Layers, Lock, LogOut, Puzzle, Settings, Shield, SquareMenu, Star } from '@lucide/vue'
 import ThemeToggle from './ThemeToggle.vue'
 import Notification from './Notification.vue'
 
@@ -100,6 +106,7 @@ export default {
     Lock,
     Layers,
     Puzzle,
+    SquareMenu,
     Star,
     Settings,
     Shield,

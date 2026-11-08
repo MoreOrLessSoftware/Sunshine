@@ -374,3 +374,96 @@ TEST_F(ClientCommandsTest, AppsCarryTheirOwnCommands) {
   EXPECT_TRUE(apps[1].client_commands.empty());
   EXPECT_TRUE(apps[2].client_commands.empty());
 }
+
+
+TEST(ClientCommandsSave, DefinitionsRoundTrip) {
+  auto keys = parse_valid(R"({"id": "k", "label": "Keys", "icon": "material:star", "close-menu": false, "type": "keys", "steps": [[17, 27]]})");
+  auto json = client_commands::to_json(keys);
+  EXPECT_EQ(json, (json::parse(R"({"id": "k", "label": "Keys", "icon": "material:star", "close-menu": false, "type": "keys", "steps": [[17, 27]]})")));
+
+  auto script = parse_valid(R"({"id": "s", "label": "Script", "type": "script", "cmd": "x.exe", "working-dir": "C:\\", "elevated": true})");
+  json = client_commands::to_json(script);
+  EXPECT_EQ(json["type"], "script");
+  EXPECT_EQ(json["cmd"], "x.exe");
+  EXPECT_EQ(json["working-dir"], "C:\\");
+  EXPECT_EQ(json["elevated"], true);
+  EXPECT_FALSE(json.contains("steps"));
+
+  EXPECT_EQ(client_commands::to_json(std::vector<client_commands::command_t> {keys, script}).size(), 2);
+}
+
+TEST(ClientCommandsSave, StrictListsRejectAnythingInvalid) {
+  std::string error;
+  auto commands = client_commands::parse_commands_strict(json::parse(R"([{"id": "a", "label": "A", "type": "keys", "steps": [[65]]}])"), error);
+  ASSERT_TRUE(commands);
+  EXPECT_EQ(commands->size(), 1);
+
+  EXPECT_FALSE(client_commands::parse_commands_strict(json::object(), error));
+  EXPECT_EQ(error, "the commands must be an array");
+
+  EXPECT_FALSE(client_commands::parse_commands_strict(json::parse(R"([{"label": "A", "type": "keys", "steps": [[65]]}])"), error));
+  EXPECT_EQ(error, "\"A\" has no id");
+
+  EXPECT_FALSE(client_commands::parse_commands_strict(json::parse(R"([5])"), error));
+  EXPECT_EQ(error, "command 1 has no id");
+
+  EXPECT_FALSE(client_commands::parse_commands_strict(json::parse(R"([{"id": "a", "label": "A", "type": "keys"}])"), error));
+  EXPECT_NE(error.find("\"A\": "), std::string::npos);
+
+  EXPECT_FALSE(client_commands::parse_commands_strict(json::parse(R"([{"id": "a", "type": "keys", "steps": [[65]]}])"), error));
+  EXPECT_NE(error.find("command 1: "), std::string::npos);
+
+  EXPECT_FALSE(client_commands::parse_commands_strict(json::parse(R"([
+    {"id": "a", "label": "A", "type": "keys", "steps": [[65]]},
+    {"id": "a", "label": "B", "type": "keys", "steps": [[66]]}
+  ])"),
+                                                      error));
+  EXPECT_EQ(error, "\"B\" has the same id as another command");
+}
+
+TEST_F(ClientCommandsTest, SavingKeepsTheRestOfTheFile) {
+  auto file = dir_ / "client_commands.json";
+  write_file(file, R"({"commands": [], "exe-groups": [{"label": "Kept"}]})");
+
+  std::string error;
+  auto command = parse_valid(R"({"id": "esc", "label": "Escape", "type": "keys", "steps": [[27]]})");
+  ASSERT_TRUE(client_commands::save_global(file, {command}, error)) << error;
+
+  std::ifstream in {file};
+  auto saved = json::parse(in);
+  EXPECT_EQ(saved["exe-groups"][0]["label"], "Kept");
+  EXPECT_EQ(client_commands::load_global(file).size(), 1);
+}
+
+TEST_F(ClientCommandsTest, SavingReplacesAnUnreadableFileOrMakesANewOne) {
+  std::string error;
+  auto command = parse_valid(R"({"id": "esc", "label": "Escape", "type": "keys", "steps": [[27]]})");
+
+  auto broken = dir_ / "broken.json";
+  write_file(broken, "{ nope");
+  ASSERT_TRUE(client_commands::save_global(broken, {command}, error)) << error;
+  EXPECT_EQ(client_commands::load_global(broken).size(), 1);
+
+  auto not_object = dir_ / "array.json";
+  write_file(not_object, "[]");
+  ASSERT_TRUE(client_commands::save_global(not_object, {command}, error)) << error;
+  EXPECT_EQ(client_commands::load_global(not_object).size(), 1);
+
+  auto fresh = dir_ / "new" / "client_commands.json";
+  ASSERT_TRUE(client_commands::save_global(fresh, {}, error)) << error;
+  EXPECT_TRUE(fs::exists(fresh));
+}
+
+TEST_F(ClientCommandsTest, SavingReportsAFileThatCannotBeWritten) {
+  std::string error;
+  EXPECT_FALSE(client_commands::save_global(dir_, {}, error));
+  EXPECT_FALSE(error.empty());
+}
+
+TEST_F(ClientCommandsTest, TheFileCanBeMovedForTests) {
+  EXPECT_EQ(client_commands::file(), client_commands::default_file());
+  client_commands::set_file_for_testing(dir_ / "other.json");
+  EXPECT_EQ(client_commands::file(), dir_ / "other.json");
+  client_commands::set_file_for_testing({});
+  EXPECT_EQ(client_commands::file(), client_commands::default_file());
+}

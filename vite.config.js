@@ -69,6 +69,7 @@ export default defineConfig({
         rollupOptions: {
             input: {
                 apps: resolve(assetsSrcPath, 'apps.html'),
+                'client-commands': resolve(assetsSrcPath, 'client-commands.html'),
                 config: resolve(assetsSrcPath, 'config.html'),
                 featured: resolve(assetsSrcPath, 'featured.html'),
                 index: resolve(assetsSrcPath, 'index.html'),

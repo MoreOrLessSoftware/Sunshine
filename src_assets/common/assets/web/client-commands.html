@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="auto">
+
+<head>
+  <%- header %>
+  <style>
+    @font-face {
+      font-family: 'Material Symbols Outlined';
+      font-style: normal;
+      font-weight: 400;
+      src: url('./assets/material-symbols/MaterialSymbolsOutlined.ttf') format('truetype');
+    }
+
+    .material-icon {
+      font-family: 'Material Symbols Outlined';
+      font-weight: normal;
+      font-style: normal;
+      line-height: 1;
+      font-size: 1.5rem;
+      display: inline-block;
+      width: 1.5rem;
+      text-align: center;
+      user-select: none;
+    }
+
+    .command-icon {
+      flex: 0 0 2.25rem;
+      height: 2.25rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: var(--radius-md);
+      background-color: var(--color-bg-subtle);
+    }
+
+    .command-summary {
+      font-family: var(--bs-font-monospace);
+      font-size: 0.85rem;
+      word-break: break-all;
+    }
+
+    .chord-badge {
+      font-family: var(--bs-font-monospace);
+      font-size: 0.9rem;
+    }
+
+    .recording {
+      animation: recording-pulse 1s ease-in-out infinite;
+    }
+
+    @keyframes recording-pulse {
+      50% { opacity: 0.55; }
+    }
+
+    .icon-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+      gap: var(--spacing-xs);
+      max-height: 18rem;
+      overflow-y: auto;
+    }
+
+    .icon-grid button {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.15rem;
+      padding: 0.35rem 0.2rem;
+      font-size: 0.65rem;
+      line-height: 1.1;
+      word-break: break-all;
+    }
+
+    .min-w-0 {
+      min-width: 0;
+    }
+
+    .command-count {
+      margin-left: auto;
+    }
+  </style>
+</head>
+
+<body id="app" v-cloak>
+  <Navbar></Navbar>
+  <div id="content" class="container">
+    <div class="my-4">
+      <h1>{{ $t('client_commands.title') }}</h1>
+      <p class="mb-0">{{ $t('client_commands.description') }}</p>
+    </div>
+
+    <div v-if="loadError" class="alert alert-danger" role="alert">{{ loadError }}</div>
+
+    <div class="config-layout">
+      <nav class="config-nav" :aria-label="$t('client_commands.title')">
+        <ul class="nav config-nav-list">
+          <li class="nav-item">
+            <a class="nav-link" :class="{'active': currentView === 'global'}" href="#global"
+               :aria-current="currentView === 'global' ? 'page' : null">
+              <globe :size="18" class="icon"></globe>
+              {{ $t('client_commands.global') }}
+              <span class="badge rounded-pill text-bg-secondary command-count" v-if="global.length">{{ global.length }}</span>
+            </a>
+          </li>
+        </ul>
+        <div class="config-nav-heading">{{ $t('client_commands.apps') }}</div>
+        <p v-if="!loading && apps.length === 0" class="small text-muted px-3 mb-0">{{ $t('client_commands.no_apps') }}</p>
+        <ul class="nav config-nav-list">
+          <li class="nav-item" v-for="app in apps" :key="app.index">
+            <a class="nav-link" :class="{'active': currentView === 'app-' + app.index}" :href="'#app-' + app.index"
+               :aria-current="currentView === 'app-' + app.index ? 'page' : null">
+              <app-window :size="18" class="icon"></app-window>
+              <span class="text-truncate">{{ app.name }}</span>
+              <span class="badge rounded-pill text-bg-secondary command-count" v-if="app.commands.length">{{ app.commands.length }}</span>
+            </a>
+          </li>
+        </ul>
+      </nav>
+
+      <div class="config-content">
+        <div v-if="loading" class="text-center py-5">
+          <div class="spinner-border" role="status">
+            <span class="visually-hidden">{{ $t('_common.loading') }}</span>
+          </div>
+        </div>
+
+        <div v-else class="config-page">
+          <h2 class="h4">{{ viewTitle }}</h2>
+          <p>{{ currentView === 'global' ? $t('client_commands.global_desc') : $t('client_commands.app_desc') }}</p>
+
+          <!-- The list -->
+          <div v-if="currentList.length === 0 && !editor" class="alert alert-secondary">{{ $t('client_commands.empty') }}</div>
+          <ul class="list-group mb-3" v-if="currentList.length > 0">
+            <li class="list-group-item d-flex align-items-center gap-3" v-for="(command, i) in currentList" :key="command.id"
+                :class="{'list-group-item-primary': editor && editor.index === i}">
+              <span class="command-icon">
+                <span class="material-icon" v-if="glyph(command.icon)">{{ glyph(command.icon) }}</span>
+              </span>
+              <div class="flex-grow-1 min-w-0">
+                <div class="fw-semibold">
+                  {{ command.label }}
+                  <span class="badge bg-warning text-dark ms-1" v-if="command.type === 'script' && command.elevated">{{ $t('_common.elevated') }}</span>
+                  <span class="badge bg-light text-dark border ms-1" v-if="!command['close-menu']">{{ $t('client_commands.keeps_menu_open') }}</span>
+                </div>
+                <div class="command-summary text-muted">
+                  <keyboard :size="14" class="icon" v-if="command.type === 'keys'"></keyboard>
+                  <square-terminal :size="14" class="icon" v-else></square-terminal>
+                  {{ command.type === 'keys' ? describeSteps(command.steps) : command.cmd }}
+                </div>
+              </div>
+              <div class="btn-group btn-group-sm" role="group">
+                <button type="button" class="btn btn-outline-secondary" :disabled="i === 0 || !!editor" @click="move(i, -1)"
+                        :title="$t('client_commands.move_up')" :aria-label="$t('client_commands.move_up')">
+                  <arrow-up :size="16"></arrow-up>
+                </button>
+                <button type="button" class="btn btn-outline-secondary" :disabled="i === currentList.length - 1 || !!editor" @click="move(i, 1)"
+                        :title="$t('client_commands.move_down')" :aria-label="$t('client_commands.move_down')">
+                  <arrow-down :size="16"></arrow-down>
+                </button>
+                <button type="button" class="btn btn-outline-primary" :disabled="!!editor" @click="startEdit(i)"
+                        :title="$t('client_commands.edit')" :aria-label="$t('client_commands.edit')">
+                  <pencil :size="16"></pencil>
+                </button>
+                <button type="button" class="btn btn-outline-danger" :disabled="!!editor" @click="remove(i)"
+                        :title="$t('client_commands.delete')" :aria-label="$t('client_commands.delete')">
+                  <trash-2 :size="16"></trash-2>
+                </button>
+              </div>
+            </li>
+          </ul>
+
+          <button type="button" class="btn btn-outline-primary mb-3" v-if="!editor" @click="startAdd">
+            <plus :size="18" class="icon"></plus>
+            {{ $t('client_commands.add') }}
+          </button>
+
+          <!-- The command being added or edited -->
+          <div v-if="editor" class="card mb-3">
+            <div class="card-body">
+              <h3 class="h5 card-title">{{ editor.index < 0 ? $t('client_commands.add') : $t('client_commands.edit') }}</h3>
+
+              <div class="mb-3">
+                <label class="form-label" for="command-label">{{ $t('client_commands.label') }}</label>
+                <input type="text" class="form-control" id="command-label" v-model="editor.draft.label" maxlength="64">
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="command-icon">
+                    <span class="material-icon" v-if="glyph(editor.draft.icon)">{{ glyph(editor.draft.icon) }}</span>
+                  </span>
+                  <span class="text-muted small">{{ editor.draft.icon ? editor.draft.icon.substring('material:'.length) : $t('client_commands.no_icon') }}</span>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="iconPicker.open = !iconPicker.open">
+                    <search :size="16" class="icon"></search>
+                    {{ $t('client_commands.choose_icon') }}
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" v-if="editor.draft.icon" @click="editor.draft.icon = ''">
+                    {{ $t('client_commands.no_icon') }}
+                  </button>
+                </div>
+                <div v-if="iconPicker.open" class="border rounded p-2 mt-2">
+                  <input type="search" class="form-control form-control-sm mb-2" v-model="iconPicker.query"
+                         :placeholder="$t('client_commands.search_icons')" :aria-label="$t('client_commands.search_icons')">
+                  <div class="icon-grid">
+                    <button type="button" class="btn btn-sm" v-for="name in iconResults" :key="name"
+                            :class="editor.draft.icon === 'material:' + name ? 'btn-primary' : 'btn-outline-secondary'"
+                            :title="name" @click="pickIcon(name)">
+                      <span class="material-icon">{{ codepoints[name] }}</span>
+                      <span>{{ name }}</span>
+                    </button>
+                  </div>
+                  <div class="small text-muted mt-1" v-if="iconMatches > iconResults.length">
+                    {{ $t('client_commands.more_icons', {count: iconMatches - iconResults.length}) }}
+                  </div>
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label d-block">{{ $t('client_commands.type') }}</label>
+                <div class="btn-group" role="group">
+                  <input type="radio" class="btn-check" id="type-keys" value="keys" v-model="editor.draft.type">
+                  <label class="btn btn-outline-primary" for="type-keys">
+                    <keyboard :size="16" class="icon"></keyboard>
+                    {{ $t('client_commands.type_keys') }}
+                  </label>
+                  <input type="radio" class="btn-check" id="type-script" value="script" v-model="editor.draft.type">
+                  <label class="btn btn-outline-primary" for="type-script">
+                    <square-terminal :size="16" class="icon"></square-terminal>
+                    {{ $t('client_commands.type_script') }}
+                  </label>
+                </div>
+              </div>
+
+              <!-- Keys -->
+              <div v-if="editor.draft.type === 'keys'" class="mb-3">
+                <label class="form-label d-block">{{ $t('client_commands.keys') }}</label>
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <span class="text-muted small" v-if="editor.draft.steps.length === 0">{{ $t('client_commands.no_keys') }}</span>
+                  <span class="badge text-bg-secondary chord-badge d-inline-flex align-items-center gap-1"
+                        v-for="(step, i) in editor.draft.steps" :key="i">
+                    {{ describeChord(step) }}
+                    <button type="button" class="btn-close btn-close-white ms-1" style="font-size: 0.6rem"
+                            :aria-label="$t('client_commands.remove_chord')" @click="editor.draft.steps.splice(i, 1)"></button>
+                  </span>
+                  <button type="button" class="btn btn-link btn-sm p-0" v-if="editor.draft.steps.length > 0" @click="editor.draft.steps = []">
+                    {{ $t('client_commands.clear_keys') }}
+                  </button>
+                </div>
+
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                  <button type="button" class="btn btn-sm" :class="recorder.recording ? 'btn-danger recording' : 'btn-outline-danger'"
+                          @click="recorder.recording ? stopRecording() : startRecording()">
+                    <circle-stop :size="16" class="icon" v-if="recorder.recording"></circle-stop>
+                    <circle-dot :size="16" class="icon" v-else></circle-dot>
+                    {{ recorder.recording ? $t('client_commands.stop_recording') : $t('client_commands.record') }}
+                  </button>
+                  <span class="small text-muted" v-if="recorder.recording">
+                    {{ recorder.chord.length ? describeChord(recorder.chord) : $t('client_commands.recording_hint') }}
+                  </span>
+                </div>
+
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                  <span class="small">{{ $t('client_commands.add_chord') }}</span>
+                  <div class="form-check form-check-inline mb-0" v-for="modifier in modifiers" :key="modifier.vk">
+                    <input class="form-check-input" type="checkbox" :id="'mod-' + modifier.vk" v-model="keyPicker.modifiers" :value="modifier.vk">
+                    <label class="form-check-label" :for="'mod-' + modifier.vk">{{ keyName(modifier.vk) }}</label>
+                  </div>
+                  <select class="form-select form-select-sm w-auto" v-model.number="keyPicker.key" :aria-label="$t('client_commands.key')">
+                    <option :value="0">{{ $t('client_commands.no_key') }}</option>
+                    <option v-for="vk in pickableKeys" :key="vk" :value="vk">{{ keyName(vk) }}</option>
+                  </select>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="!keyPicker.key && keyPicker.modifiers.length === 0"
+                          @click="addPickedChord">
+                    <plus :size="16" class="icon"></plus>
+                    {{ $t('client_commands.add_chord_button') }}
+                  </button>
+                </div>
+                <div class="form-text">{{ $t('client_commands.keys_desc') }}</div>
+              </div>
+
+              <!-- Script -->
+              <template v-else>
+                <div class="mb-3">
+                  <label class="form-label" for="command-cmd">{{ $t('client_commands.cmd') }}</label>
+                  <input type="text" class="form-control font-monospace" id="command-cmd" v-model="editor.draft.cmd">
+                  <div class="form-text">{{ $t('client_commands.cmd_desc') }}</div>
+                </div>
+                <div class="mb-3">
+                  <label class="form-label" for="command-working-dir">{{ $t('client_commands.working_dir') }}</label>
+                  <input type="text" class="form-control font-monospace" id="command-working-dir" v-model="editor.draft['working-dir']">
+                </div>
+                <div class="form-check mb-3">
+                  <input class="form-check-input" type="checkbox" id="command-elevated" v-model="editor.draft.elevated">
+                  <label class="form-check-label" for="command-elevated">{{ $t('client_commands.elevated') }}</label>
+                </div>
+              </template>
+
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="command-close-menu" v-model="editor.draft['close-menu']">
+                <label class="form-check-label" for="command-close-menu">{{ $t('client_commands.close_menu') }}</label>
+              </div>
+
+              <div v-if="editor.error" class="alert alert-danger py-2">{{ editor.error }}</div>
+
+              <div class="d-flex gap-2">
+                <button type="button" class="btn btn-primary" @click="commitEdit">{{ $t('client_commands.done') }}</button>
+                <button type="button" class="btn btn-outline-secondary" @click="cancelEdit">{{ $t('_common.cancel') }}</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Saving covers every list -->
+          <div class="d-flex flex-wrap align-items-center gap-2">
+            <button type="button" class="btn btn-success" :disabled="!dirty || saving || !!editor" @click="save">
+              <save :size="18" class="icon"></save>
+              {{ $t('client_commands.save') }}
+            </button>
+            <button type="button" class="btn btn-outline-secondary" v-if="dirty" :disabled="saving || !!editor" @click="revert">
+              {{ $t('client_commands.revert') }}
+            </button>
+            <span class="small text-muted" v-if="dirty">{{ $t('client_commands.unsaved') }}</span>
+          </div>
+          <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+
+<script type="module">
+  import { createApp } from 'vue'
+  import { initApp } from './init'
+  import Navbar from './Navbar.vue'
+  import { apiFetch } from './fetch_utils'
+  import { notifyKey } from './Notification.vue'
+  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search, SquareTerminal, Trash2 } from '@lucide/vue'
+
+  // Recording stops after this long without a key
+  const RECORD_IDLE_MS = 15000;
+
+  // Icons likely for a command, shown first when nothing is searched (as in Moonlight's own chooser)
+  const COMMON_ICONS = [
+    'keyboard', 'keyboard_command_key', 'keyboard_alt', 'terminal', 'code',
+    'screenshot', 'screenshot_monitor', 'photo_camera', 'videocam', 'radio_button_checked',
+    'mic', 'mic_off', 'volume_up', 'volume_down', 'volume_off', 'headphones',
+    'play_arrow', 'pause', 'play_pause', 'skip_previous', 'skip_next', 'stop',
+    'fast_rewind', 'fast_forward', 'replay', 'refresh', 'restart_alt',
+    'power_settings_new', 'logout', 'lock', 'home', 'apps', 'grid_view', 'tab',
+    'desktop_windows', 'monitor', 'tv', 'fullscreen', 'fullscreen_exit', 'picture_in_picture',
+    'sports_esports', 'videogame_asset', 'mouse', 'touch_app', 'settings', 'tune',
+    'save', 'folder', 'search', 'chat', 'forum', 'translate', 'map', 'inventory_2',
+    'backpack', 'explore', 'speed', 'timer', 'schedule', 'star', 'favorite', 'bolt',
+    'rocket_launch', 'dark_mode', 'light_mode', 'close', 'check', 'undo', 'redo',
+    'content_copy', 'content_paste', 'content_cut', 'select_all', 'swap_horiz', 'open_in_new',
+  ];
+
+  // How many icons the chooser shows at once
+  const ICON_RESULTS = 240;
+
+  // Key names, as in Moonlight's command editor
+  const KEY_NAMES = {
+    0x08: 'Backspace', 0x09: 'Tab', 0x0D: 'Enter', 0x10: 'Shift', 0xA0: 'Shift', 0xA1: 'Right Shift',
+    0x11: 'Ctrl', 0xA2: 'Ctrl', 0xA3: 'Right Ctrl', 0x12: 'Alt', 0xA4: 'Alt', 0xA5: 'Right Alt',
+    0x5B: 'Win', 0x5C: 'Right Win', 0x5D: 'Menu', 0x13: 'Pause', 0x14: 'Caps Lock', 0x1B: 'Esc',
+    0x20: 'Space', 0x21: 'Page Up', 0x22: 'Page Down', 0x23: 'End', 0x24: 'Home', 0x25: 'Left',
+    0x26: 'Up', 0x27: 'Right', 0x28: 'Down', 0x2C: 'Print Screen', 0x2D: 'Insert', 0x2E: 'Delete',
+    0x6A: 'Num *', 0x6B: 'Num +', 0x6D: 'Num -', 0x6E: 'Num .', 0x6F: 'Num /', 0x90: 'Num Lock',
+    0x91: 'Scroll Lock', 0xAD: 'Mute', 0xAE: 'Volume Down', 0xAF: 'Volume Up', 0xB0: 'Next Track',
+    0xB1: 'Previous Track', 0xB2: 'Stop', 0xB3: 'Play/Pause', 0xBA: ';', 0xBB: '=', 0xBC: ',',
+    0xBD: '-', 0xBE: '.', 0xBF: '/', 0xC0: '`', 0xDB: '[', 0xDC: '\\', 0xDD: ']', 0xDE: "'",
+  };
+
+  // Modifier keys, which a chord presses first
+  const MODIFIER_KEYS = [0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C];
+
+  // A browser reports which side of the keyboard a modifier is on only in its code
+  const CODE_KEYS = {
+    ShiftLeft: 0xA0, ShiftRight: 0xA1, ControlLeft: 0xA2, ControlRight: 0xA3,
+    AltLeft: 0xA4, AltRight: 0xA5, MetaLeft: 0x5B, MetaRight: 0x5C, OSLeft: 0x5B, OSRight: 0x5C,
+  };
+
+  /**
+   * A new random ID for a command.
+   */
+  function newId() {
+    if (window.crypto && window.crypto.randomUUID) {
+      return window.crypto.randomUUID();
+    }
+    return 'cmd-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2, 10);
+  }
+
+  /**
+   * A command as the server keeps it, with every field the editor uses.
+   */
+  function normalize(command) {
+    return {
+      id: command.id || newId(),
+      label: command.label || '',
+      icon: command.icon || '',
+      'close-menu': command['close-menu'] !== false,
+      type: command.type === 'script' ? 'script' : 'keys',
+      steps: Array.isArray(command.steps) ? command.steps.map((step) => [...step]) : [],
+      cmd: command.cmd || '',
+      'working-dir': command['working-dir'] || '',
+      elevated: !!command.elevated,
+    };
+  }
+
+  /**
+   * A command as it's sent to the server: only the fields its type uses.
+   */
+  function forServer(command) {
+    const out = {id: command.id, label: command.label.trim(), icon: command.icon, 'close-menu': command['close-menu'], type: command.type};
+    if (command.type === 'keys') {
+      out.steps = command.steps;
+    } else {
+      out.cmd = command.cmd.trim();
+      out['working-dir'] = command['working-dir'].trim();
+      out.elevated = command.elevated;
+    }
+    return out;
+  }
+
+  const app = createApp({
+    components: {
+      Navbar, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search, SquareTerminal, Trash2,
+    },
+    inject: ['i18n'],
+    data() {
+      return {
+        loading: true,
+        loadError: null,
+        saving: false,
+        error: null,
+        // The global commands, and each application's ({index, name, commands}), as edited
+        global: [],
+        apps: [],
+        // The same as saved on the server, to tell what changed
+        saved: {global: '[]', apps: {}},
+        // 'global' or 'app-<index>'
+        currentView: 'global',
+        // The command being edited: {view, index (-1 for a new one), draft, error}
+        editor: null,
+        recorder: {recording: false, held: [], chord: [], idleTimer: null},
+        keyPicker: {modifiers: [], key: 0},
+        iconPicker: {open: false, query: ''},
+        // Material Symbols icon names and their glyphs
+        codepoints: {},
+        iconNames: [],
+        modifiers: [{vk: 0xA2}, {vk: 0xA0}, {vk: 0xA4}, {vk: 0x5B}],
+      };
+    },
+    computed: {
+      currentList() {
+        if (this.currentView === 'global') {
+          return this.global;
+        }
+        const app = this.apps.find((a) => 'app-' + a.index === this.currentView);
+        return app ? app.commands : [];
+      },
+      viewTitle() {
+        if (this.currentView === 'global') {
+          return this.i18n.t('client_commands.global');
+        }
+        const app = this.apps.find((a) => 'app-' + a.index === this.currentView);
+        return app ? app.name : '';
+      },
+      changedApps() {
+        return this.apps.filter((app) => JSON.stringify(app.commands.map(forServer)) !== this.saved.apps[app.index]);
+      },
+      globalChanged() {
+        return JSON.stringify(this.global.map(forServer)) !== this.saved.global;
+      },
+      dirty() {
+        return this.globalChanged || this.changedApps.length > 0;
+      },
+      pickableKeys() {
+        const keys = [];
+        for (let vk = 0x41; vk <= 0x5A; vk++) keys.push(vk);
+        for (let vk = 0x30; vk <= 0x39; vk++) keys.push(vk);
+        for (let vk = 0x70; vk <= 0x87; vk++) keys.push(vk);
+        for (const vk of Object.keys(KEY_NAMES).map(Number)) {
+          if (!MODIFIER_KEYS.includes(vk) && !keys.includes(vk)) keys.push(vk);
+        }
+        for (let vk = 0x60; vk <= 0x69; vk++) keys.push(vk);
+        return keys;
+      },
+      iconMatchList() {
+        const words = this.iconPicker.query.trim().toLowerCase().split(/[\s_]+/).filter(Boolean);
+        if (words.length === 0) {
+          const common = COMMON_ICONS.filter((name) => this.codepoints[name]);
+          return common.concat(this.iconNames.filter((name) => !common.includes(name)));
+        }
+        return this.iconNames.filter((name) => words.every((word) => name.includes(word)));
+      },
+      iconMatches() {
+        return this.iconMatchList.length;
+      },
+      iconResults() {
+        return this.iconMatchList.slice(0, ICON_RESULTS);
+      },
+    },
+    mounted() {
+      this.currentView = this.viewFromHash();
+      window.addEventListener('hashchange', this.onHashChange);
+      window.addEventListener('beforeunload', this.onBeforeUnload);
+      this.loadIcons();
+      this.load();
+    },
+    beforeUnmount() {
+      this.stopRecording();
+      window.removeEventListener('hashchange', this.onHashChange);
+      window.removeEventListener('beforeunload', this.onBeforeUnload);
+    },
+    methods: {
+      async load() {
+        this.loading = true;
+        try {
+          const response = await apiFetch('./api/client-commands', {method: 'GET'});
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          const body = await response.json();
+          this.global = (body.commands || []).map(normalize);
+          this.apps = (body.apps || []).map((app) => ({index: app.index, name: app.name, commands: (app['client-commands'] || []).map(normalize)}));
+          this.markSaved();
+          this.loadError = null;
+          if (this.currentView !== 'global' && !this.apps.some((a) => 'app-' + a.index === this.currentView)) {
+            this.showView('global', true);
+          }
+        } catch (error) {
+          console.error('Failed to load client commands', error);
+          this.loadError = this.i18n.t('client_commands.load_failure');
+        } finally {
+          this.loading = false;
+        }
+      },
+      markSaved() {
+        this.saved.global = JSON.stringify(this.global.map(forServer));
+        this.saved.apps = Object.fromEntries(this.apps.map((app) => [app.index, JSON.stringify(app.commands.map(forServer))]));
+      },
+      async loadIcons() {
+        try {
+          const response = await fetch('./assets/material-symbols/codepoints.txt');
+          const text = await response.text();
+          const codepoints = {};
+          for (const line of text.split('\n')) {
+            const [name, hex] = line.trim().split(/\s+/);
+            if (name && hex) {
+              codepoints[name] = String.fromCodePoint(parseInt(hex, 16));
+            }
+          }
+          this.codepoints = codepoints;
+          this.iconNames = Object.keys(codepoints);
+        } catch (error) {
+          console.error('Failed to load the icon list', error);
+        }
+      },
+      glyph(icon) {
+        return icon && icon.startsWith('material:') ? this.codepoints[icon.substring('material:'.length)] || '' : '';
+      },
+      pickIcon(name) {
+        this.editor.draft.icon = 'material:' + name;
+        this.iconPicker.open = false;
+      },
+      keyName(vk) {
+        if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A)) return String.fromCharCode(vk);
+        if (vk >= 0x60 && vk <= 0x69) return 'Num ' + (vk - 0x60);
+        if (vk >= 0x70 && vk <= 0x87) return 'F' + (vk - 0x70 + 1);
+        return KEY_NAMES[vk] || '0x' + vk.toString(16).toUpperCase().padStart(2, '0');
+      },
+      describeChord(step) {
+        return step.map((vk) => this.keyName(vk)).join('+');
+      },
+      describeSteps(steps) {
+        return steps.map((step) => this.describeChord(step)).join(', ');
+      },
+
+      // --- Views
+      viewFromHash() {
+        const hash = window.location.hash.substring(1);
+        return /^app-\d+$/.test(hash) ? hash : 'global';
+      },
+      onHashChange() {
+        const view = this.viewFromHash();
+        if (view === this.currentView) {
+          return;
+        }
+        // An unfinished edit belongs to the list it was started in
+        if (this.editor && !window.confirm(this.i18n.t('client_commands.discard_edit_confirm'))) {
+          window.history.replaceState(null, '', '#' + this.currentView);
+          return;
+        }
+        this.cancelEdit();
+        this.showView(view, false);
+      },
+      showView(view, replaceUrl) {
+        this.currentView = view;
+        if (replaceUrl) {
+          window.history.replaceState(null, '', '#' + view);
+        }
+      },
+      onBeforeUnload(event) {
+        if (this.dirty || this.editor) {
+          event.preventDefault();
+          event.returnValue = '';
+        }
+      },
+
+      // --- Editing
+      startAdd() {
+        this.openEditor(-1, normalize({}));
+      },
+      startEdit(index) {
+        this.openEditor(index, normalize(JSON.parse(JSON.stringify(this.currentList[index]))));
+      },
+      openEditor(index, draft) {
+        this.editor = {view: this.currentView, index, draft, error: null};
+        this.keyPicker = {modifiers: [], key: 0};
+        this.iconPicker = {open: false, query: ''};
+      },
+      cancelEdit() {
+        this.stopRecording();
+        this.editor = null;
+      },
+      commitEdit() {
+        this.stopRecording();
+        const draft = this.editor.draft;
+        if (!draft.label.trim()) {
+          this.editor.error = this.i18n.t('client_commands.need_label');
+          return;
+        }
+        if (draft.type === 'keys' && draft.steps.length === 0) {
+          this.editor.error = this.i18n.t('client_commands.need_keys');
+          return;
+        }
+        if (draft.type === 'script' && !draft.cmd.trim()) {
+          this.editor.error = this.i18n.t('client_commands.need_cmd');
+          return;
+        }
+        draft.label = draft.label.trim();
+        const list = this.currentList;
+        if (this.editor.index < 0) {
+          list.push(draft);
+        } else {
+          list.splice(this.editor.index, 1, draft);
+        }
+        this.editor = null;
+      },
+      move(index, delta) {
+        const list = this.currentList;
+        const [command] = list.splice(index, 1);
+        list.splice(index + delta, 0, command);
+      },
+      remove(index) {
+        if (window.confirm(this.i18n.t('client_commands.delete_confirm', {label: this.currentList[index].label}))) {
+          this.currentList.splice(index, 1);
+        }
+      },
+      addPickedChord() {
+        const chord = [...this.keyPicker.modifiers];
+        if (this.keyPicker.key) {
+          chord.push(this.keyPicker.key);
+        }
+        if (chord.length > 0) {
+          this.editor.draft.steps.push(chord);
+        }
+        this.keyPicker = {modifiers: [], key: 0};
+      },
+
+      // --- Recording keys pressed on this page
+      startRecording() {
+        if (this.recorder.recording) {
+          return;
+        }
+        this.recorder.recording = true;
+        this.recorder.held = [];
+        this.recorder.chord = [];
+        window.addEventListener('keydown', this.onRecordKey, true);
+        window.addEventListener('keyup', this.onRecordKey, true);
+        // Keys meant for another window aren't for this
+        window.addEventListener('blur', this.stopRecording);
+        this.restartIdleTimer();
+      },
+      stopRecording() {
+        if (!this.recorder.recording) {
+          return;
+        }
+        this.recorder.recording = false;
+        this.recorder.held = [];
+        this.recorder.chord = [];
+        window.clearTimeout(this.recorder.idleTimer);
+        window.removeEventListener('keydown', this.onRecordKey, true);
+        window.removeEventListener('keyup', this.onRecordKey, true);
+        window.removeEventListener('blur', this.stopRecording);
+      },
+      restartIdleTimer() {
+        window.clearTimeout(this.recorder.idleTimer);
+        this.recorder.idleTimer = window.setTimeout(() => this.stopRecording(), RECORD_IDLE_MS);
+      },
+      onRecordKey(event) {
+        // The page doesn't act on them while recording
+        event.preventDefault();
+        event.stopPropagation();
+
+        const vk = CODE_KEYS[event.code] || event.keyCode;
+        if (!vk || vk >= 0xFF || !this.editor) {
+          return;
+        }
+        this.restartIdleTimer();
+
+        if (event.type === 'keydown') {
+          if (event.repeat || this.recorder.held.includes(vk)) {
+            return;
+          }
+          this.recorder.held.push(vk);
+          if (!this.recorder.chord.includes(vk)) {
+            this.recorder.chord.push(vk);
+          }
+          return;
+        }
+
+        // A key held since before recording started isn't part of anything
+        const heldIndex = this.recorder.held.indexOf(vk);
+        if (heldIndex < 0) {
+          return;
+        }
+        this.recorder.held.splice(heldIndex, 1);
+
+        if (this.recorder.held.length === 0 && this.recorder.chord.length > 0) {
+          // Modifiers first, as they're sent, whatever order they were pressed in
+          const chord = [...this.recorder.chord.filter((key) => MODIFIER_KEYS.includes(key)),
+                         ...this.recorder.chord.filter((key) => !MODIFIER_KEYS.includes(key))];
+          this.editor.draft.steps.push(chord.slice(0, 8));
+          this.recorder.chord = [];
+        }
+      },
+
+      // --- Saving
+      revert() {
+        this.load();
+      },
+      async save() {
+        const payload = {apps: this.changedApps.map((app) => ({index: app.index, name: app.name, 'client-commands': app.commands.map(forServer)}))};
+        if (this.globalChanged) {
+          payload.commands = this.global.map(forServer);
+        }
+
+        this.saving = true;
+        this.error = null;
+        try {
+          const response = await apiFetch('./api/client-commands', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+          });
+          const result = await response.json();
+          if (!response.ok || result.status !== true) {
+            this.error = result.error || this.i18n.t('client_commands.save_failure');
+            return;
+          }
+          notifyKey.success('client_commands.saved');
+          await this.load();
+        } catch (error) {
+          console.error('Failed to save client commands', error);
+          this.error = this.i18n.t('client_commands.save_failure');
+        } finally {
+          this.saving = false;
+        }
+      },
+    },
+  });
+
+  initApp(app);
+</script>

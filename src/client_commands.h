@@ -108,11 +108,62 @@ namespace client_commands {
   std::vector<command_t> load_global(const std::filesystem::path &file);
 
   /**
-   * @brief Return the file the global commands are read from.
+   * @brief Return the default file of the global commands.
    *
    * @return `client_commands.json` in the config directory.
    */
   std::filesystem::path default_file();
+
+  /**
+   * @brief Return the file the global commands are read from and saved to.
+   *
+   * @return The file set by `set_file_for_testing()`, otherwise `default_file()`.
+   */
+  std::filesystem::path file();
+
+  /**
+   * @brief Use another file for the global commands.
+   *
+   * @param path File to use, or an empty path for `default_file()`.
+   */
+  void set_file_for_testing(const std::filesystem::path &path);
+
+  /**
+   * @brief Turn a command back into its definition, as it is saved.
+   *
+   * @param command Command to describe.
+   * @return Command object with only the members its type uses.
+   */
+  nlohmann::json to_json(const command_t &command);
+
+  /**
+   * @brief Turn a list of commands into their definitions.
+   *
+   * @param commands Commands to describe.
+   * @return Array of command objects.
+   */
+  nlohmann::json to_json(const std::vector<command_t> &commands);
+
+  /**
+   * @brief Parse a list of command definitions, rejecting the list when any of them is invalid.
+   *
+   * Used for lists being saved, where nothing invalid should be dropped silently.
+   *
+   * @param json Array of command objects.
+   * @param error Receives the reason when the list is rejected, naming the command.
+   * @return The commands, or `std::nullopt` when the list is rejected.
+   */
+  std::optional<std::vector<command_t>> parse_commands_strict(const nlohmann::json &json, std::string &error);
+
+  /**
+   * @brief Save the global commands, keeping anything else the file holds.
+   *
+   * @param path File to write.
+   * @param commands Commands to save.
+   * @param error Receives the reason when the file cannot be written.
+   * @return `true` on success.
+   */
+  bool save_global(const std::filesystem::path &path, const std::vector<command_t> &commands, std::string &error);
 
   /**
    * @brief Build what is offered with the given commands available.

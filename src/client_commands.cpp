@@ -3,6 +3,7 @@
  * @brief Definitions for commands the host offers in a client's in-stream overlay menu.
  */
 // standard includes
+#include <algorithm>
 #include <condition_variable>
 #include <format>
 #include <fstream>
@@ -304,6 +305,122 @@ namespace client_commands {
     return platf::appdata() / "client_commands.json";
   }
 
+  namespace {
+    /**
+     * @brief Return the file override set for tests.
+     *
+     * @return The override, empty when none is set.
+     */
+    std::filesystem::path &file_override() {
+      static std::filesystem::path path;
+      return path;
+    }
+  }  // namespace
+
+  std::filesystem::path file() {
+    return file_override().empty() ? default_file() : file_override();
+  }
+
+  void set_file_for_testing(const std::filesystem::path &path) {
+    file_override() = path;
+  }
+
+  nlohmann::json to_json(const command_t &command) {
+    nlohmann::json json = {
+      {"id", command.id},
+      {"label", command.label},
+      {"icon", command.icon},
+      {"close-menu", command.close_menu},
+    };
+
+    if (command.type == type_e::keys) {
+      json["type"] = "keys";
+      json["steps"] = command.steps;
+    } else {
+      json["type"] = "script";
+      json["cmd"] = command.cmd;
+      json["working-dir"] = command.working_dir;
+      json["elevated"] = command.elevated;
+    }
+
+    return json;
+  }
+
+  nlohmann::json to_json(const std::vector<command_t> &commands) {
+    nlohmann::json json = nlohmann::json::array();
+    for (const auto &command : commands) {
+      json.push_back(to_json(command));
+    }
+    return json;
+  }
+
+  std::optional<std::vector<command_t>> parse_commands_strict(const nlohmann::json &json, std::string &error) {
+    if (!json.is_array()) {
+      error = "the commands must be an array";
+      return std::nullopt;
+    }
+
+    std::vector<command_t> commands;
+    for (std::size_t i = 0; i < json.size(); i++) {
+      const auto &item = json[i];
+      const auto label = item.is_object() ? string_member(item, "label") : std::string {};
+      const auto name = label.empty() ? std::format("command {}", i + 1) : std::format("\"{}\"", label);
+
+      if (!item.is_object() || string_member(item, "id").empty()) {
+        error = std::format("{} has no id", name);
+        return std::nullopt;
+      }
+
+      std::string reason;
+      auto command = parse_command(item, {}, reason);
+      if (!command) {
+        error = std::format("{}: {}", name, reason);
+        return std::nullopt;
+      }
+
+      if (std::ranges::any_of(commands, [&](const command_t &other) {
+            return other.id == command->id;
+          })) {
+        error = std::format("{} has the same id as another command", name);
+        return std::nullopt;
+      }
+
+      commands.push_back(std::move(*command));
+    }
+
+    return commands;
+  }
+
+  bool save_global(const std::filesystem::path &path, const std::vector<command_t> &commands, std::string &error) {
+    nlohmann::json json = nlohmann::json::object();
+
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(path, ec)) {
+      try {
+        std::ifstream in {path};
+        json = nlohmann::json::parse(in);
+        if (!json.is_object()) {
+          json = nlohmann::json::object();
+        }
+      } catch (const std::exception &) {
+        // An unreadable file is replaced
+        json = nlohmann::json::object();
+      }
+    }
+
+    json["commands"] = to_json(commands);
+
+    std::filesystem::create_directories(path.parent_path(), ec);
+    std::ofstream out {path, std::ios::binary | std::ios::trunc};
+    out << json.dump(4);
+    out.close();
+    if (!out) {
+      error = "Couldn't write the client commands file";
+      return false;
+    }
+    return true;
+  }
+
   offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands) {
     offer_t offer;
     offer.commands = std::move(global);
@@ -329,7 +446,7 @@ namespace client_commands {
       }
     }
 
-    return make_offer(load_global(default_file()), app_name, std::move(app_commands));
+    return make_offer(load_global(file()), app_name, std::move(app_commands));
   }
 
   nlohmann::json describe(const offer_t &offer) {
