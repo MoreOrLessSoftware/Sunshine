@@ -98,6 +98,7 @@ namespace {
       {"homepage", "https://example.invalid"},
       {"order", order},
       {"elevated", true},
+      {"manages_display", true},
       {"scripts", {{"install", "install.ps1"}, {"uninstall", "uninstall.ps1"}, {"do", "do.ps1"}, {"undo", "undo.ps1"}}},
       {"options", json::array({
                     {{"id", "enabled"}, {"type", "boolean"}, {"label", "Enabled"}, {"default", true}},
@@ -204,6 +205,7 @@ TEST_F(PluginsTest, ParseManifestAppliesDefaults) {
   EXPECT_EQ(manifest->name, "minimal");
   EXPECT_EQ(manifest->order, 1000);
   EXPECT_FALSE(manifest->elevated);
+  EXPECT_FALSE(manifest->manages_display);
   EXPECT_TRUE(manifest->builtin);
   EXPECT_EQ(manifest->dir, builtin_dir);
   EXPECT_TRUE(manifest->scripts.install.empty());
@@ -222,6 +224,7 @@ TEST_F(PluginsTest, ParseManifestReadsEveryField) {
   EXPECT_EQ(manifest->homepage, "https://example.invalid");
   EXPECT_EQ(manifest->order, 42);
   EXPECT_TRUE(manifest->elevated);
+  EXPECT_TRUE(manifest->manages_display);
   EXPECT_FALSE(manifest->builtin);
   EXPECT_EQ(manifest->scripts.install, "install.ps1");
   EXPECT_EQ(manifest->scripts.uninstall, "uninstall.ps1");
@@ -301,6 +304,7 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"NameNotString", R"({"id":"p","name":1})", "'name' must be a string"},
     invalid_manifest_t {"OrderNotInteger", R"({"id":"p","order":1.5})", "'order' must be an integer"},
     invalid_manifest_t {"ElevatedNotBoolean", R"({"id":"p","elevated":"yes"})", "'elevated' must be a boolean"},
+    invalid_manifest_t {"ManagesDisplayNotBoolean", R"({"id":"p","manages_display":1})", "'manages_display' must be a boolean"},
     invalid_manifest_t {"ScriptsNotObject", R"({"id":"p","scripts":[]})", "'scripts' must be an object"},
     invalid_manifest_t {"ScriptNotString", R"({"id":"p","scripts":{"do":1}})", "'do' must be a string"},
     invalid_manifest_t {"ScriptTraversal", R"({"id":"p","scripts":{"do":"../exists.ps1"}})", "must be a .ps1 file"},
@@ -510,6 +514,7 @@ TEST_F(PluginsTest, ListDescribesPlugins) {
   EXPECT_EQ(plugin["version"], "1.2.3");
   EXPECT_EQ(plugin["builtin"], true);
   EXPECT_EQ(plugin["elevated"], true);
+  EXPECT_EQ(plugin["manages_display"], true);
   EXPECT_EQ(plugin["order"], 100);
   EXPECT_EQ(plugin["installed"], false);
   EXPECT_EQ(plugin["active"], false);
@@ -761,6 +766,29 @@ TEST_F(PluginsTest, PrepCmdsIncludeActivePluginsInOrder) {
   EXPECT_EQ(plugins::prep_cmds({}).size(), 3);
 }
 
+TEST_F(PluginsTest, DisplayPluginIsFirstActiveManagingPlugin) {
+  write_plugin(builtin_dir, "plain", {{"id", "plain"}, {"order", 5}});
+  write_plugin(builtin_dir, "excluded", {{"id", "excluded"}, {"name", "Excluded"}, {"order", 10}, {"manages_display", true}});
+  write_plugin(builtin_dir, "inactive", {{"id", "inactive"}, {"order", 20}, {"manages_display", true}});
+  write_plugin(builtin_dir, "uninstalled", {{"id", "uninstalled"}, {"order", 30}, {"manages_display", true}});
+  write_plugin(builtin_dir, "display", {{"id", "display"}, {"name", "Display"}, {"order", 40}, {"manages_display", true}});
+  write_plugin(builtin_dir, "later", {{"id", "later"}, {"name", "Later"}, {"order", 50}, {"manages_display", true}});
+  write_text(state_file, R"({"plugins":{
+    "plain":{"installed":true,"active":true},
+    "excluded":{"installed":true,"active":true},
+    "inactive":{"installed":true,"active":false},
+    "uninstalled":{"installed":false,"active":true},
+    "display":{"installed":true,"active":true},
+    "later":{"installed":true,"active":true}
+  }})");
+  plugins::load(paths());
+
+  EXPECT_EQ(plugins::display_plugin({}), "Excluded");
+  EXPECT_EQ(plugins::display_plugin({"excluded"}), "Display");
+  EXPECT_EQ(plugins::display_plugin({"excluded", "display"}), "Later");
+  EXPECT_EQ(plugins::display_plugin({"excluded", "display", "later"}), "");
+}
+
 TEST_F(PluginsTest, ParsesConnectAndDisconnectScripts) {
   const json node = {{"id", "c"}, {"scripts", {{"connect", "resume.ps1"}, {"disconnect", "leave.ps1"}}}};
   const auto dir = write_plugin(builtin_dir, "c", node);
@@ -889,6 +917,13 @@ TEST_F(PluginsTest, ParseAddsPluginCommandsBeforeGlobalCommands) {
   ASSERT_EQ(apps[2].prep_cmds.size(), 2);
   EXPECT_EQ(apps[2].prep_cmds[0].env.at("SUNSHINE_PLUGIN_ID"), "p");
   EXPECT_EQ(apps[2].prep_cmds[1].do_cmd, "app-do");
+
+  // The plugin manages the display for every application that does not exclude it
+  EXPECT_EQ(apps[0].display_plugin, "Plugin p");
+  EXPECT_EQ(apps[1].display_plugin, "");
+  EXPECT_EQ(proc->get_display_plugin(std::stoi(apps[0].id)), "Plugin p");
+  EXPECT_EQ(proc->get_display_plugin(std::stoi(apps[1].id)), "");
+  EXPECT_EQ(proc->get_display_plugin(-1), "");
 }
 
 TEST_F(PluginsTest, ParseRoutesPluginConnectCommandsToConnectCommands) {

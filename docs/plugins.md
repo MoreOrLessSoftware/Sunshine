@@ -42,6 +42,10 @@ is resuming.
 Using *Virtual Display* with a refresh rate multiplier together with *RTSS Frame Limit* runs the display faster than
 the stream while keeping games capped at the client frame rate.
 
+While *Virtual Display* runs for an application, Sunshine skips its *Device configuration* setting (Audio/Video) for
+that stream, so the plugin alone sets up the displays. Applications that exclude the plugin use *Device configuration*
+as usual.
+
 ## Writing a plugin
 A plugin is a folder containing a `plugin.json` manifest and the PowerShell scripts it references. Put custom plugins
 in the `plugins` folder inside the Sunshine config directory (by default `C:\Program Files\Sunshine\config\plugins`),
@@ -103,6 +107,7 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 | `homepage`    | No       | Linked from the web UI.                                                                                             |
 | `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50, 100, 200, 300.                  |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
+| `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. Defaults to `false`. |
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect` and `disconnect`. Each must be a `.ps1` file directly inside the plugin folder. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 | `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |

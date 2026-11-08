@@ -78,6 +78,7 @@ namespace proc {
     std::string output;  ///< Captured output from the launched process.
     std::string image_path;  ///< Image path.
     std::string id;  ///< Stable identifier for the configured application.
+    std::string display_plugin;  ///< Name of an active plugin that sets up the display for this app; empty when Sunshine's display device configuration applies.
     bool elevated;  ///< Whether the process should be launched elevated.
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.
@@ -166,6 +167,15 @@ namespace proc {
      * @return Validated image path for the requested application.
      */
     std::string get_app_image(int app_id);
+
+    /**
+     * @brief Find the plugin that sets up the display for an application.
+     *
+     * @param app_id Application ID.
+     * @return Name of the plugin, or an empty string when Sunshine's display device configuration applies
+     *         (also for unknown application IDs).
+     */
+    std::string get_display_plugin(int app_id) const;
     /**
      * @brief Get last run app name.
      *

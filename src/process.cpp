@@ -476,6 +476,13 @@ namespace proc {
     return validate_app_image_path(app_image_path);
   }
 
+  std::string proc_t::get_display_plugin(int app_id) const {
+    const auto iter = std::ranges::find_if(_apps, [app_id](const auto &app) {
+      return app.id == std::to_string(app_id);
+    });
+    return iter == _apps.end() ? std::string() : iter->display_plugin;
+  }
+
   std::string proc_t::get_last_run_app_name() {
     return _app.name;
   }
@@ -807,6 +814,7 @@ namespace proc {
         for (auto &plugin_cmd : plugins::prep_cmds(exclude_plugins)) {
           add_cmd(std::move(plugin_cmd));
         }
+        ctx.display_plugin = plugins::display_plugin(exclude_plugins);
 
         if (!exclude_global_prep.value_or(false)) {
           for (auto &prep_cmd : config::sunshine.prep_cmds) {

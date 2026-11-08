@@ -7,6 +7,7 @@
   "homepage": "https://github.com/Zayrick/sunshine-vdisplay",
   "order": 100,
   "elevated": false,
+  "manages_display": true,
   "scripts": {
     "install": "install.ps1",
     "uninstall": "uninstall.ps1",

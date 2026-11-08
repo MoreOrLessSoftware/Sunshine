@@ -460,6 +460,24 @@ namespace nvhttp {
   }
 
   /**
+   * @brief Apply the display device configuration for a stream, unless a plugin sets up the display instead.
+   *
+   * Sunshine's configuration is applied before the app's prep commands run. A plugin that creates or
+   * arranges displays (such as Virtual Display) would otherwise have its layout overridden, or find the
+   * display it needs turned off, so the configuration is skipped while such a plugin runs for the app.
+   *
+   * @param app_id Application being launched or resumed.
+   * @param launch_session Launch session with the client's display settings.
+   */
+  void prepare_display(const int app_id, const rtsp_stream::launch_session_t &launch_session) {
+    if (const auto plugin = proc::proc.get_display_plugin(app_id); !plugin.empty()) {
+      BOOST_LOG(info) << "Skipping display device configuration: the "sv << plugin << " plugin sets up the display for this application"sv;
+      return;
+    }
+    display_device::configure_display(config::video, launch_session);
+  }
+
+  /**
    * @brief Create launch session.
    *
    * @param host_audio Host audio.
@@ -1409,7 +1427,7 @@ namespace nvhttp {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      prepare_display((int) appid, *launch_session);
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
@@ -1521,7 +1539,7 @@ namespace nvhttp {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      display_device::configure_display(config::video, *launch_session);
+      prepare_display(current_appid, *launch_session);
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed

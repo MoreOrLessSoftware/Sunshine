@@ -110,6 +110,7 @@ namespace plugins {
     std::string homepage;  ///< Project URL.
     int order;  ///< Do scripts run in ascending order, undo scripts in descending order.
     bool elevated;  ///< Whether the do and undo scripts run elevated.
+    bool manages_display;  ///< Whether the plugin sets up the display itself, replacing Sunshine's display device configuration.
     scripts_t scripts;  ///< Scripts the plugin provides.
     std::vector<option_t> options;  ///< Configuration options.
     std::vector<action_t> actions;  ///< Buttons that run scripts on demand.
@@ -333,6 +334,18 @@ namespace plugins {
    *         followed by a connect command when the plugin also has a connect or disconnect script.
    */
   std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded);
+
+  /**
+   * @brief Find the active plugin that sets up the display for an application.
+   *
+   * While such a plugin runs for a stream, Sunshine skips its own display device configuration, which would
+   * otherwise be applied before the plugin's do script and fight over the display layout.
+   *
+   * @param excluded IDs of plugins the application opted out of.
+   * @return Name of the first active, installed plugin (in plugin order) whose manifest sets
+   *         `manages_display`, or an empty string when there is none.
+   */
+  std::string display_plugin(const std::vector<std::string> &excluded);
 
   /**
    * @brief Change whether a plugin is active and the values of its options.

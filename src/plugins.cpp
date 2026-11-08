@@ -773,6 +773,13 @@ namespace plugins {
       }
       manifest.elevated = node["elevated"].get<bool>();
     }
+    if (node.contains("manages_display")) {
+      if (!node["manages_display"].is_boolean()) {
+        error = "'manages_display' must be a boolean";
+        return std::nullopt;
+      }
+      manifest.manages_display = node["manages_display"].get<bool>();
+    }
 
     if (node.contains("scripts")) {
       const auto &scripts = node["scripts"];
@@ -1129,6 +1136,7 @@ namespace plugins {
         {"homepage", manifest.homepage},
         {"builtin", manifest.builtin},
         {"elevated", manifest.elevated},
+        {"manages_display", manifest.manages_display},
         {"order", manifest.order},
         {"options", std::move(options)},
         {"actions", std::move(actions)},
@@ -1170,6 +1178,22 @@ namespace plugins {
       add(manifest.scripts.connect_script, manifest.scripts.disconnect_script, config::prep_cmd_t::type_e::connect);
     }
     return cmds;
+  }
+
+  std::string display_plugin(const std::vector<std::string> &excluded) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    for (const auto &manifest : reg.manifests) {
+      if (!manifest.manages_display || std::ranges::find(excluded, manifest.id) != excluded.end()) {
+        continue;
+      }
+      const auto it = reg.state.find(manifest.id);
+      if (it != reg.state.end() && it->second.active && it->second.installed) {
+        return manifest.name;
+      }
+    }
+    return {};
   }
 
   result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error) {
