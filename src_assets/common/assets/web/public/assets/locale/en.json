@@ -634,6 +634,7 @@
     "running": "Running {action}...",
     "save_options": "Save options",
     "saved": "Plugin options saved.",
+    "status_inactive": "Installed, not active",
     "title": "Plugins",
     "uninstall": "Uninstall",
     "uninstall_confirm": "Uninstall {name}? This deactivates it and removes the files it downloaded.",

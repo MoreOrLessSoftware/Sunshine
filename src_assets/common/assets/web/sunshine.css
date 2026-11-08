@@ -1459,10 +1459,61 @@ p {
     font-size: 0.8rem;
 }
 
-/* A plugin's own page, framed on its card. */
+/* A plugin's own page, framed on its plugin page. */
 .plugin-panel {
     display: block;
     background-color: var(--bs-body-bg);
+}
+
+/* Plugins page sidebar: plugin name with a status indicator at the end of the row. */
+.plugin-nav-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.plugin-nav-uninstalled:not(.active) .plugin-nav-name {
+    opacity: 0.6;
+}
+
+.plugin-status {
+    flex: 0 0 auto;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    border: 2px solid currentColor;
+}
+
+.plugin-status-active {
+    background-color: var(--color-success);
+    border-color: var(--color-success);
+}
+
+.plugin-status-inactive {
+    border-color: var(--color-text-subtle);
+}
+
+.plugin-status-failed {
+    background-color: var(--color-danger);
+    border-color: var(--color-danger);
+}
+
+/* On the highlighted row, outline the dot so it stays visible against the primary background. */
+.config-nav-list .nav-link.active .plugin-status {
+    box-shadow: 0 0 0 2px var(--color-on-primary);
+}
+
+.config-nav-list .nav-link.active .plugin-status-inactive {
+    border-color: var(--color-on-primary);
+}
+
+.plugin-status-spinner {
+    flex: 0 0 auto;
+    width: 0.85rem;
+    height: 0.85rem;
+    border-width: 2px;
 }
 
 /* ==========================================================================
