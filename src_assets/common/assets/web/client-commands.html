@@ -105,8 +105,9 @@
         </ul>
         <div class="config-nav-heading">{{ $t('client_commands.apps') }}</div>
         <p v-if="!loading && apps.length === 0" class="small text-muted px-3 mb-0">{{ $t('client_commands.no_apps') }}</p>
+        <p v-else-if="!loading && listedApps.length === 0" class="small text-muted px-3 mb-2">{{ $t('client_commands.no_app_commands') }}</p>
         <ul class="nav config-nav-list">
-          <li class="nav-item" v-for="app in apps" :key="app.index">
+          <li class="nav-item" v-for="app in listedApps" :key="app.index">
             <a class="nav-link" :class="{'active': currentView === 'app-' + app.index}" :href="'#app-' + app.index"
                :aria-current="currentView === 'app-' + app.index ? 'page' : null">
               <app-window :size="18" class="icon"></app-window>
@@ -115,6 +116,14 @@
             </a>
           </li>
         </ul>
+        <!-- Applications without commands are picked from here to add some -->
+        <div class="px-3 mt-2" v-if="unlistedApps.length > 0">
+          <select class="form-select form-select-sm" :aria-label="$t('client_commands.add_app')"
+                  :value="''" @change="pickApp($event)">
+            <option value="" disabled>{{ $t('client_commands.add_app') }}</option>
+            <option v-for="app in unlistedApps" :key="app.index" :value="app.index">{{ app.name }}</option>
+          </select>
+        </div>
       </nav>
 
       <div class="config-content">
@@ -466,6 +475,14 @@
         const app = this.apps.find((a) => 'app-' + a.index === this.currentView);
         return app ? app.name : '';
       },
+      // The applications in the sidebar: those with commands, the one showing, and any with unsaved changes
+      listedApps() {
+        return this.apps.filter((app) => app.commands.length > 0 || this.currentView === 'app-' + app.index ||
+                                         this.changedApps.includes(app));
+      },
+      unlistedApps() {
+        return this.apps.filter((app) => !this.listedApps.includes(app));
+      },
       changedApps() {
         return this.apps.filter((app) => JSON.stringify(app.commands.map(forServer)) !== this.saved.apps[app.index]);
       },
@@ -599,6 +616,14 @@
         this.currentView = view;
         if (replaceUrl) {
           window.history.replaceState(null, '', '#' + view);
+        }
+      },
+      // Shows an application picked from the sidebar's list of those without commands
+      pickApp(event) {
+        const index = event.target.value;
+        event.target.value = '';
+        if (index !== '') {
+          window.location.hash = '#app-' + index;
         }
       },
       onBeforeUnload(event) {

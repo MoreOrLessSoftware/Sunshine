@@ -116,6 +116,7 @@
   },
   "client_commands": {
     "add": "Add Command",
+    "add_app": "Add an application...",
     "add_chord": "Or add a chord:",
     "add_chord_button": "Add",
     "app_desc": "Shown as a group of their own in the overlay menu, only while this application is being streamed.",
@@ -148,6 +149,7 @@
     "need_cmd": "Enter the command to run.",
     "need_keys": "Record or add at least one chord.",
     "need_label": "Enter a label.",
+    "no_app_commands": "No applications have commands yet.",
     "no_apps": "No applications.",
     "no_icon": "None",
     "no_key": "(no other key)",
