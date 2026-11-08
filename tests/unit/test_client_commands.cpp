@@ -489,3 +489,167 @@ TEST_F(ClientCommandsTest, TheFileCanBeMovedForTests) {
   client_commands::set_file_for_testing({});
   EXPECT_EQ(client_commands::file(), client_commands::default_file());
 }
+
+
+namespace {
+  /**
+   * @brief A program group that should parse.
+   *
+   * @param text Group JSON.
+   * @param strict Whether to parse it as for saving.
+   * @return The group.
+   */
+  client_commands::program_group_t parse_group(const std::string &text, bool strict = false) {
+    std::string error;
+    auto group = client_commands::parse_program_group(json::parse(text), "fallback", strict, error);
+    EXPECT_TRUE(group) << error;
+    return group.value_or(client_commands::program_group_t {});
+  }
+
+  /**
+   * @brief Why a program group is rejected.
+   *
+   * @param text Group JSON.
+   * @param strict Whether to parse it as for saving.
+   * @return The reason.
+   */
+  std::string group_error(const std::string &text, bool strict = false) {
+    std::string error;
+    EXPECT_FALSE(client_commands::parse_program_group(json::parse(text), "fallback", strict, error));
+    return error;
+  }
+}  // namespace
+
+TEST(ClientCommandsPrograms, ParsesAGroup) {
+  auto group = parse_group(R"({"id": "ps", "label": "Photoshop", "icon": "material:brush", "programs": ["Photoshop.exe", "C:\\Apps\\ps2.exe"],
+                               "commands": [{"label": "Undo", "type": "keys", "steps": [[17, 90]]}, {"label": "Broken"}]})");
+  EXPECT_EQ(group.id, "ps");
+  EXPECT_EQ(group.label, "Photoshop");
+  EXPECT_EQ(group.icon, "material:brush");
+  EXPECT_EQ(group.programs, (std::vector<std::string> {"Photoshop.exe", "C:\\Apps\\ps2.exe"}));
+  ASSERT_EQ(group.commands.size(), 1);
+  EXPECT_EQ(group.commands[0].id, "program:ps/0");
+
+  EXPECT_EQ(parse_group(R"({"label": "X", "programs": ["x.exe"]})").id, "fallback");
+  EXPECT_TRUE(parse_group(R"({"label": "X", "programs": ["x.exe"]})").commands.empty());
+}
+
+TEST(ClientCommandsPrograms, RejectsInvalidGroups) {
+  EXPECT_FALSE(group_error("[]").empty());
+  EXPECT_NE(group_error(R"({"programs": ["x.exe"]})").find("label"), std::string::npos);
+  EXPECT_NE(group_error(R"({"label": "X"})").find("programs"), std::string::npos);
+  EXPECT_NE(group_error(R"({"label": "X", "programs": []})").find("programs"), std::string::npos);
+  EXPECT_NE(group_error(R"({"label": "X", "programs": [""]})").find("file name"), std::string::npos);
+  EXPECT_NE(group_error(R"({"label": "X", "programs": [5]})").find("file name"), std::string::npos);
+
+  // Saving needs an id and valid commands
+  EXPECT_EQ(group_error(R"({"label": "X", "programs": ["x.exe"]})", true), "it has no id");
+  EXPECT_NE(group_error(R"({"id": "x", "label": "X", "programs": ["x.exe"], "commands": [{"id": "c", "label": "Broken"}]})", true).find("\"Broken\""), std::string::npos);
+  EXPECT_EQ(parse_group(R"({"id": "x", "label": "X", "programs": ["x.exe"], "commands": [{"id": "c", "label": "C", "type": "keys", "steps": [[27]]}]})", true).commands.size(), 1);
+}
+
+TEST(ClientCommandsPrograms, ListsSkipOrRejectInvalidGroups) {
+  auto groups = client_commands::parse_program_groups(json::parse(R"([{"label": "A", "programs": ["a.exe"]}, {"label": "Broken"}])"));
+  ASSERT_EQ(groups.size(), 1);
+  EXPECT_EQ(groups[0].id, "program0");
+  EXPECT_TRUE(client_commands::parse_program_groups(json::object()).empty());
+
+  std::string error;
+  EXPECT_FALSE(client_commands::parse_program_groups_strict(json::object(), error));
+  EXPECT_EQ(error, "the program groups must be an array");
+  EXPECT_FALSE(client_commands::parse_program_groups_strict(json::parse(R"([{"id": "a", "label": "A"}])"), error));
+  EXPECT_EQ(error, "\"A\": \"programs\" must name at least one program");
+  EXPECT_FALSE(client_commands::parse_program_groups_strict(json::parse(R"([5])"), error));
+  EXPECT_EQ(error.rfind("program group 1: ", 0), 0);
+  EXPECT_FALSE(client_commands::parse_program_groups_strict(json::parse(R"([{"id": "a", "label": "A", "programs": ["a.exe"]}, {"id": "a", "label": "B", "programs": ["b.exe"]}])"), error));
+  EXPECT_EQ(error, "\"B\" has the same id as another group");
+  auto valid = client_commands::parse_program_groups_strict(json::parse(R"([{"id": "a", "label": "A", "programs": ["a.exe"]}])"), error);
+  ASSERT_TRUE(valid);
+  EXPECT_EQ(valid->size(), 1);
+}
+
+TEST(ClientCommandsPrograms, MatchesFileNamesIgnoringCase) {
+  auto group = parse_group(R"({"label": "PS", "programs": ["Photoshop.exe", "D:\\Tools\\other.EXE"]})");
+  EXPECT_TRUE(client_commands::matches(group, "photoshop.exe"));
+  EXPECT_TRUE(client_commands::matches(group, "PHOTOSHOP.EXE"));
+  EXPECT_TRUE(client_commands::matches(group, "other.exe"));
+  EXPECT_FALSE(client_commands::matches(group, "photoshop"));
+  EXPECT_FALSE(client_commands::matches(group, ""));
+}
+
+TEST(ClientCommandsPrograms, OffersTheForegroundProgramsGroups) {
+  auto with_commands = parse_group(R"({"label": "Notepad", "icon": "material:edit", "programs": ["notepad.exe"], "commands": [{"label": "Esc", "type": "keys", "steps": [[27]]}]})");
+  auto without_commands = parse_group(R"({"label": "Empty", "programs": ["notepad.exe"]})");
+  auto other = parse_group(R"({"label": "Other", "programs": ["other.exe"], "commands": [{"label": "Esc", "type": "keys", "steps": [[27]]}]})");
+
+  auto offered = client_commands::program_offer({with_commands, without_commands, other}, "Notepad.exe");
+  ASSERT_EQ(offered.size(), 1);
+  EXPECT_EQ(offered[0].kind, "program");
+  EXPECT_EQ(offered[0].label, "Notepad");
+  EXPECT_EQ(offered[0].icon, "material:edit");
+  EXPECT_EQ(offered[0].commands.size(), 1);
+
+  EXPECT_TRUE(client_commands::program_offer({with_commands}, "").empty());
+}
+
+TEST(ClientCommandsPrograms, GroupsRoundTrip) {
+  auto group = parse_group(R"({"id": "g", "label": "G", "icon": "", "programs": ["g.exe"], "commands": [{"id": "c", "label": "C", "type": "keys", "steps": [[27]]}]})");
+  auto json = client_commands::to_json(group);
+  EXPECT_EQ(json["programs"], json::parse(R"(["g.exe"])"));
+  EXPECT_EQ(json["commands"][0]["id"], "c");
+  EXPECT_EQ(client_commands::to_json(std::vector<client_commands::program_group_t> {group}).size(), 1);
+
+  std::string error;
+  auto back = client_commands::parse_program_group(json, {}, true, error);
+  ASSERT_TRUE(back) << error;
+  EXPECT_EQ(client_commands::to_json(*back), json);
+}
+
+TEST_F(ClientCommandsTest, LoadsAndSavesProgramGroups) {
+  auto file = dir_ / "client_commands.json";
+  EXPECT_TRUE(client_commands::load_program_groups(file).empty());
+
+  write_file(file, "{ broken");
+  EXPECT_TRUE(client_commands::load_program_groups(file).empty());
+
+  write_file(file, R"({"commands": [{"id": "g", "label": "G", "type": "keys", "steps": [[27]]}], "program-groups": [{"id": "n", "label": "Notepad", "programs": ["notepad.exe"]}]})");
+  ASSERT_EQ(client_commands::load_program_groups(file).size(), 1);
+
+  // Saving only the groups keeps the commands, and the other way round
+  std::string error;
+  auto group = parse_group(R"({"id": "p", "label": "Paint", "programs": ["mspaint.exe"]})");
+  ASSERT_TRUE(client_commands::save(file, std::nullopt, std::vector {group}, error)) << error;
+  EXPECT_EQ(client_commands::load_global(file).size(), 1);
+  ASSERT_EQ(client_commands::load_program_groups(file).size(), 1);
+  EXPECT_EQ(client_commands::load_program_groups(file)[0].label, "Paint");
+
+  ASSERT_TRUE(client_commands::save(file, std::vector<client_commands::command_t> {}, std::nullopt, error)) << error;
+  EXPECT_TRUE(client_commands::load_global(file).empty());
+  EXPECT_EQ(client_commands::load_program_groups(file).size(), 1);
+}
+
+TEST_F(ClientCommandsTest, TheCurrentOfferIncludesTheForegroundProgramsGroup) {
+  auto file = dir_ / "client_commands.json";
+  write_file(file, R"({"program-groups": [{"id": "n", "label": "Notepad", "programs": ["notepad.exe"],
+                                           "commands": [{"id": "esc", "label": "Esc", "type": "keys", "steps": [[27]]}]}]})");
+  client_commands::set_file_for_testing(file);
+
+  client_commands::set_foreground_program_for_testing("NOTEPAD.EXE");
+  auto offer = client_commands::current_offer();
+  ASSERT_EQ(offer.groups.size(), 1);
+  EXPECT_EQ(offer.groups[0].kind, "program");
+  EXPECT_EQ(client_commands::find(offer, "esc")->label, "Esc");
+
+  client_commands::set_foreground_program_for_testing("explorer.exe");
+  EXPECT_TRUE(client_commands::current_offer().groups.empty());
+
+  client_commands::set_foreground_program_for_testing(std::nullopt);
+  client_commands::set_file_for_testing({});
+}
+
+TEST(ClientCommandsPrograms, ThePlatformCanBeAsked) {
+  client_commands::set_foreground_program_for_testing(std::nullopt);
+  // Whatever is in front of the test (possibly nothing), it's a file name rather than a path
+  auto program = client_commands::foreground_program();
+  EXPECT_EQ(program.find_first_of("\\/"), std::string::npos) << program;
+}

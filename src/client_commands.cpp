@@ -12,6 +12,7 @@
 #include <thread>
 
 // lib includes
+#include <boost/algorithm/string/predicate.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/process/v1.hpp>
 
@@ -311,6 +312,163 @@ namespace client_commands {
     }
   }
 
+  std::optional<program_group_t> parse_program_group(const nlohmann::json &json, const std::string &fallback_id, bool strict, std::string &error) {
+    if (!json.is_object()) {
+      error = "a program group must be an object";
+      return std::nullopt;
+    }
+
+    program_group_t group;
+    group.id = string_member(json, "id");
+    if (group.id.empty()) {
+      if (strict) {
+        error = "it has no id";
+        return std::nullopt;
+      }
+      group.id = fallback_id;
+    }
+    group.label = string_member(json, "label");
+    if (group.label.empty()) {
+      error = "\"label\" is required";
+      return std::nullopt;
+    }
+    group.icon = string_member(json, "icon");
+
+    auto programs = json.find("programs");
+    if (programs == json.end() || !programs->is_array() || programs->empty()) {
+      error = "\"programs\" must name at least one program";
+      return std::nullopt;
+    }
+    for (const auto &program : *programs) {
+      if (!program.is_string() || program.get<std::string>().empty()) {
+        error = "each program must be a non-empty file name";
+        return std::nullopt;
+      }
+      group.programs.push_back(program.get<std::string>());
+    }
+
+    const auto commands = json.contains("commands") ? json["commands"] : nlohmann::json::array();
+    if (strict) {
+      auto parsed = parse_commands_strict(commands, error);
+      if (!parsed) {
+        return std::nullopt;
+      }
+      group.commands = std::move(*parsed);
+    } else {
+      group.commands = parse_commands(commands, std::format("program:{}", group.id));
+    }
+
+    return group;
+  }
+
+  std::vector<program_group_t> parse_program_groups(const nlohmann::json &json) {
+    std::vector<program_group_t> groups;
+    if (!json.is_array()) {
+      return groups;
+    }
+
+    for (std::size_t i = 0; i < json.size(); i++) {
+      std::string error;
+      auto group = parse_program_group(json[i], std::format("program{}", i), false, error);
+      if (!group) {
+        BOOST_LOG(warning) << "Ignoring program group "sv << i << " of the client commands: "sv << error;
+        continue;
+      }
+      groups.push_back(std::move(*group));
+    }
+
+    return groups;
+  }
+
+  std::optional<std::vector<program_group_t>> parse_program_groups_strict(const nlohmann::json &json, std::string &error) {
+    if (!json.is_array()) {
+      error = "the program groups must be an array";
+      return std::nullopt;
+    }
+
+    std::vector<program_group_t> groups;
+    for (std::size_t i = 0; i < json.size(); i++) {
+      const auto label = json[i].is_object() ? string_member(json[i], "label") : std::string {};
+      const auto name = label.empty() ? std::format("program group {}", i + 1) : std::format("\"{}\"", label);
+
+      std::string reason;
+      auto group = parse_program_group(json[i], {}, true, reason);
+      if (!group) {
+        error = std::format("{}: {}", name, reason);
+        return std::nullopt;
+      }
+      if (std::ranges::any_of(groups, [&](const program_group_t &other) {
+            return other.id == group->id;
+          })) {
+        error = std::format("{} has the same id as another group", name);
+        return std::nullopt;
+      }
+      groups.push_back(std::move(*group));
+    }
+
+    return groups;
+  }
+
+  std::vector<program_group_t> load_program_groups(const std::filesystem::path &file) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(file, ec)) {
+      return {};
+    }
+
+    try {
+      std::ifstream in {file};
+      auto json = nlohmann::json::parse(in);
+      return parse_program_groups(json.is_object() && json.contains("program-groups") ? json["program-groups"] : nlohmann::json {});
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Couldn't read the client commands file: "sv << e.what();
+      return {};
+    }
+  }
+
+  bool matches(const program_group_t &group, std::string_view program) {
+    if (program.empty()) {
+      return false;
+    }
+    return std::ranges::any_of(group.programs, [program](const std::string &name) {
+      // A path matches by its file name
+      auto file_name = std::filesystem::path {name}.filename().string();
+      return boost::iequals(file_name, program);
+    });
+  }
+
+  std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, std::string_view program) {
+    std::vector<group_t> offered;
+    for (const auto &group : groups) {
+      if (!group.commands.empty() && matches(group, program)) {
+        offered.push_back(group_t {"program", group.label, group.icon, group.commands});
+      }
+    }
+    return offered;
+  }
+
+  namespace {
+    /**
+     * @brief Return the foreground program set for tests.
+     *
+     * @return The program, or `std::nullopt` to ask the platform.
+     */
+    std::optional<std::string> &foreground_override() {
+      static std::optional<std::string> program;
+      return program;
+    }
+  }  // namespace
+
+  std::string foreground_program() {
+    if (foreground_override()) {
+      return *foreground_override();
+    }
+    return platf::foreground_program();
+  }
+
+  void set_foreground_program_for_testing(std::optional<std::string> program) {
+    foreground_override() = std::move(program);
+  }
+
   std::filesystem::path default_file() {
     return platf::appdata() / "client_commands.json";
   }
@@ -353,6 +511,24 @@ namespace client_commands {
       json["elevated"] = command.elevated;
     }
 
+    return json;
+  }
+
+  nlohmann::json to_json(const program_group_t &group) {
+    return {
+      {"id", group.id},
+      {"label", group.label},
+      {"icon", group.icon},
+      {"programs", group.programs},
+      {"commands", to_json(group.commands)},
+    };
+  }
+
+  nlohmann::json to_json(const std::vector<program_group_t> &groups) {
+    nlohmann::json json = nlohmann::json::array();
+    for (const auto &group : groups) {
+      json.push_back(to_json(group));
+    }
     return json;
   }
 
@@ -402,6 +578,10 @@ namespace client_commands {
   }
 
   bool save_global(const std::filesystem::path &path, const std::vector<command_t> &commands, std::string &error) {
+    return save(path, commands, std::nullopt, error);
+  }
+
+  bool save(const std::filesystem::path &path, const std::optional<std::vector<command_t>> &commands, const std::optional<std::vector<program_group_t>> &groups, std::string &error) {
     nlohmann::json json = nlohmann::json::object();
 
     std::error_code ec;
@@ -418,7 +598,12 @@ namespace client_commands {
       }
     }
 
-    json["commands"] = to_json(commands);
+    if (commands) {
+      json["commands"] = to_json(*commands);
+    }
+    if (groups) {
+      json["program-groups"] = to_json(*groups);
+    }
 
     std::filesystem::create_directories(path.parent_path(), ec);
     std::ofstream out {path, std::ios::binary | std::ios::trunc};
@@ -459,6 +644,15 @@ namespace client_commands {
     }
 
     auto offer = make_offer(load_global(file()), app_name, std::move(app_commands));
+
+    // The program in the foreground is only looked up when there are groups to match it
+    if (auto groups = load_program_groups(file()); !groups.empty()) {
+      auto program = foreground_program();
+      for (auto &group : program_offer(groups, program)) {
+        offer.groups.push_back(std::move(group));
+      }
+    }
+
     offer.app_id = std::move(app_id);
     offer.app_name = std::move(app_name);
     return offer;

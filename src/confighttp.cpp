@@ -1301,6 +1301,7 @@ namespace confighttp {
    *   "status": true,
    *   "commands": [{"id": "...", "label": "Task Manager", "icon": "material:monitoring", "close-menu": true,
    *                 "type": "keys", "steps": [[162, 160, 27]]}],
+   *   "program-groups": [{"id": "...", "label": "Photoshop", "icon": "", "programs": ["photoshop.exe"], "commands": []}],
    *   "apps": [{"index": 0, "name": "Desktop", "client-commands": []}]
    * }
    * @endcode
@@ -1330,6 +1331,7 @@ namespace confighttp {
       nlohmann::json output_tree;
       output_tree["status"] = true;
       output_tree["commands"] = client_commands::to_json(client_commands::load_global(client_commands::file()));
+      output_tree["program-groups"] = client_commands::to_json(client_commands::load_program_groups(client_commands::file()));
       output_tree["apps"] = std::move(apps);
       send_response(response, output_tree);
     } catch (std::exception &e) {
@@ -1345,7 +1347,8 @@ namespace confighttp {
    *
    * Every list is checked before anything is written; a list with an invalid command is rejected with the
    * command's label. Applications are named by their current index and name, as for `/api/apps/plugins`.
-   * `commands` may be left out to keep the global commands, and applications that are not listed keep theirs.
+   * `commands` and `program-groups` may each be left out to keep what's saved, and applications that are not
+   * listed keep theirs.
    * The body for the post request should be JSON serialized in the following format:
    * @code{.json}
    * {
@@ -1390,6 +1393,15 @@ namespace confighttp {
         }
       }
 
+      std::optional<std::vector<client_commands::program_group_t>> program_groups;
+      if (input_tree.contains("program-groups")) {
+        program_groups = client_commands::parse_program_groups_strict(input_tree["program-groups"], error);
+        if (!program_groups) {
+          bad_request(response, request, error);
+          return;
+        }
+      }
+
       const auto app_entries = input_tree.value("apps", nlohmann::json::array());
       if (!app_entries.is_array()) {
         bad_request(response, request, "'apps' must be an array");
@@ -1427,7 +1439,7 @@ namespace confighttp {
         }
       }
 
-      if (global && !client_commands::save_global(client_commands::file(), *global, error)) {
+      if ((global || program_groups) && !client_commands::save(client_commands::file(), global, program_groups, error)) {
         bad_request(response, request, error);
         return;
       }

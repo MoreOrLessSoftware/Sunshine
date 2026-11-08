@@ -124,6 +124,24 @@
             <option v-for="app in unlistedApps" :key="app.index" :value="app.index">{{ app.name }}</option>
           </select>
         </div>
+
+        <div class="config-nav-heading">{{ $t('client_commands.programs') }}</div>
+        <ul class="nav config-nav-list">
+          <li class="nav-item" v-for="group in programGroups" :key="group.id">
+            <a class="nav-link" :class="{'active': currentView === 'program-' + group.id}" :href="'#program-' + group.id"
+               :aria-current="currentView === 'program-' + group.id ? 'page' : null">
+              <square-mouse-pointer :size="18" class="icon"></square-mouse-pointer>
+              <span class="text-truncate">{{ group.label || $t('client_commands.new_program') }}</span>
+              <span class="badge rounded-pill text-bg-secondary command-count" v-if="group.commands.length">{{ group.commands.length }}</span>
+            </a>
+          </li>
+        </ul>
+        <div class="px-3 mt-2">
+          <button type="button" class="btn btn-outline-secondary btn-sm w-100" @click="addProgramGroup">
+            <plus :size="16" class="icon"></plus>
+            {{ $t('client_commands.add_program') }}
+          </button>
+        </div>
       </nav>
 
       <div class="config-content">
@@ -135,7 +153,45 @@
 
         <div v-else class="config-page">
           <h2 class="h4">{{ viewTitle }}</h2>
-          <p>{{ currentView === 'global' ? $t('client_commands.global_desc') : $t('client_commands.app_desc') }}</p>
+          <p>{{ viewDescription }}</p>
+
+          <!-- A program group's own settings -->
+          <div v-if="currentGroup" class="card mb-3">
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label" for="group-label">{{ $t('client_commands.group_label') }}</label>
+                <input type="text" class="form-control" id="group-label" v-model="currentGroup.label" maxlength="64">
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="group-programs">{{ $t('client_commands.group_programs') }}</label>
+                <input type="text" class="form-control font-monospace" id="group-programs" :value="currentGroup.programs.join(', ')"
+                       placeholder="photoshop.exe" @change="setPrograms(currentGroup, $event.target.value)">
+                <div class="form-text">{{ $t('client_commands.group_programs_desc') }}</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="command-icon">
+                    <span class="material-icon" v-if="glyph(currentGroup.icon)">{{ glyph(currentGroup.icon) }}</span>
+                  </span>
+                  <span class="text-muted small">{{ currentGroup.icon ? currentGroup.icon.substring('material:'.length) : $t('client_commands.default_icon') }}</span>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="toggleIconPicker(currentGroup)">
+                    <search :size="16" class="icon"></search>
+                    {{ $t('client_commands.choose_icon') }}
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" v-if="currentGroup.icon" @click="currentGroup.icon = ''">
+                    {{ $t('client_commands.default_icon') }}
+                  </button>
+                </div>
+                <icon-chooser v-if="iconPicker.target === currentGroup" :names="iconNames" :codepoints="codepoints"
+                              :selected="currentGroup.icon" @pick="pickIcon"></icon-chooser>
+              </div>
+              <button type="button" class="btn btn-outline-danger btn-sm" @click="removeProgramGroup(currentGroup)">
+                <trash-2 :size="16" class="icon"></trash-2>
+                {{ $t('client_commands.delete_program') }}
+              </button>
+            </div>
+          </div>
 
           <!-- The list -->
           <div v-if="currentList.length === 0 && !editor" class="alert alert-secondary">{{ $t('client_commands.empty') }}</div>
@@ -200,7 +256,7 @@
                     <span class="material-icon" v-if="glyph(editor.draft.icon)">{{ glyph(editor.draft.icon) }}</span>
                   </span>
                   <span class="text-muted small">{{ editor.draft.icon ? editor.draft.icon.substring('material:'.length) : $t('client_commands.no_icon') }}</span>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="iconPicker.open = !iconPicker.open">
+                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="toggleIconPicker(editor.draft)">
                     <search :size="16" class="icon"></search>
                     {{ $t('client_commands.choose_icon') }}
                   </button>
@@ -208,21 +264,8 @@
                     {{ $t('client_commands.no_icon') }}
                   </button>
                 </div>
-                <div v-if="iconPicker.open" class="border rounded p-2 mt-2">
-                  <input type="search" class="form-control form-control-sm mb-2" v-model="iconPicker.query"
-                         :placeholder="$t('client_commands.search_icons')" :aria-label="$t('client_commands.search_icons')">
-                  <div class="icon-grid">
-                    <button type="button" class="btn btn-sm" v-for="name in iconResults" :key="name"
-                            :class="editor.draft.icon === 'material:' + name ? 'btn-primary' : 'btn-outline-secondary'"
-                            :title="name" @click="pickIcon(name)">
-                      <span class="material-icon">{{ codepoints[name] }}</span>
-                      <span>{{ name }}</span>
-                    </button>
-                  </div>
-                  <div class="small text-muted mt-1" v-if="iconMatches > iconResults.length">
-                    {{ $t('client_commands.more_icons', {count: iconMatches - iconResults.length}) }}
-                  </div>
-                </div>
+                <icon-chooser v-if="iconPicker.target === editor.draft" :names="iconNames" :codepoints="codepoints"
+                              :selected="editor.draft.icon" @pick="pickIcon"></icon-chooser>
               </div>
 
               <div class="mb-3">
@@ -343,7 +386,7 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search, SquareTerminal, Trash2 } from '@lucide/vue'
+  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search, SquareMousePointer, SquareTerminal, Trash2 } from '@lucide/vue'
 
   // Recording stops after this long without a key
   const RECORD_IDLE_MS = 15000;
@@ -417,6 +460,70 @@
   }
 
   /**
+   * A program group as the editor keeps it.
+   */
+  function normalizeGroup(group) {
+    return {
+      id: group.id || newId(),
+      label: group.label || '',
+      icon: group.icon || '',
+      programs: Array.isArray(group.programs) ? [...group.programs] : [],
+      commands: (group.commands || []).map(normalize),
+    };
+  }
+
+  /**
+   * A program group as it's sent to the server.
+   */
+  function groupForServer(group) {
+    return {id: group.id, label: group.label.trim(), icon: group.icon, programs: group.programs, commands: group.commands.map(forServer)};
+  }
+
+  /**
+   * A searchable grid of Material Symbols icons. Emits `pick` with the name of the icon picked.
+   */
+  const IconChooser = {
+    props: {
+      names: {type: Array, required: true},
+      codepoints: {type: Object, required: true},
+      selected: {type: String, default: ''},
+    },
+    emits: ['pick'],
+    data() {
+      return {query: ''};
+    },
+    computed: {
+      matches() {
+        const words = this.query.trim().toLowerCase().split(/[\s_]+/).filter(Boolean);
+        if (words.length === 0) {
+          const common = COMMON_ICONS.filter((name) => this.codepoints[name]);
+          return common.concat(this.names.filter((name) => !common.includes(name)));
+        }
+        return this.names.filter((name) => words.every((word) => name.includes(word)));
+      },
+      results() {
+        return this.matches.slice(0, ICON_RESULTS);
+      },
+    },
+    template: `
+      <div class="border rounded p-2 mt-2">
+        <input type="search" class="form-control form-control-sm mb-2" v-model="query"
+               :placeholder="$t('client_commands.search_icons')" :aria-label="$t('client_commands.search_icons')">
+        <div class="icon-grid">
+          <button type="button" class="btn btn-sm" v-for="name in results" :key="name"
+                  :class="selected === 'material:' + name ? 'btn-primary' : 'btn-outline-secondary'"
+                  :title="name" @click="$emit('pick', name)">
+            <span class="material-icon">{{ codepoints[name] }}</span>
+            <span>{{ name }}</span>
+          </button>
+        </div>
+        <div class="small text-muted mt-1" v-if="matches.length > results.length">
+          {{ $t('client_commands.more_icons', {count: matches.length - results.length}) }}
+        </div>
+      </div>`,
+  };
+
+  /**
    * A command as it's sent to the server: only the fields its type uses.
    */
   function forServer(command) {
@@ -433,7 +540,8 @@
 
   const app = createApp({
     components: {
-      Navbar, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search, SquareTerminal, Trash2,
+      Navbar, IconChooser, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search,
+      SquareMousePointer, SquareTerminal, Trash2,
     },
     inject: ['i18n'],
     data() {
@@ -445,15 +553,18 @@
         // The global commands, and each application's ({index, name, commands}), as edited
         global: [],
         apps: [],
+        // The groups shown while a program is in the foreground: {id, label, icon, programs, commands}
+        programGroups: [],
         // The same as saved on the server, to tell what changed
-        saved: {global: '[]', apps: {}},
-        // 'global' or 'app-<index>'
+        saved: {global: '[]', apps: {}, programGroups: '[]'},
+        // 'global', 'app-<index>' or 'program-<id>'
         currentView: 'global',
         // The command being edited: {view, index (-1 for a new one), draft, error}
         editor: null,
         recorder: {recording: false, held: [], chord: [], idleTimer: null},
         keyPicker: {modifiers: [], key: 0},
-        iconPicker: {open: false, query: ''},
+        // The command or program group whose icon is being chosen
+        iconPicker: {target: null},
         // Material Symbols icon names and their glyphs
         codepoints: {},
         iconNames: [],
@@ -465,15 +576,33 @@
         if (this.currentView === 'global') {
           return this.global;
         }
+        if (this.currentGroup) {
+          return this.currentGroup.commands;
+        }
         const app = this.apps.find((a) => 'app-' + a.index === this.currentView);
         return app ? app.commands : [];
+      },
+      currentGroup() {
+        return this.programGroups.find((group) => 'program-' + group.id === this.currentView) || null;
       },
       viewTitle() {
         if (this.currentView === 'global') {
           return this.i18n.t('client_commands.global');
         }
+        if (this.currentGroup) {
+          return this.currentGroup.label || this.i18n.t('client_commands.new_program');
+        }
         const app = this.apps.find((a) => 'app-' + a.index === this.currentView);
         return app ? app.name : '';
+      },
+      viewDescription() {
+        if (this.currentView === 'global') {
+          return this.i18n.t('client_commands.global_desc');
+        }
+        return this.i18n.t(this.currentGroup ? 'client_commands.program_desc' : 'client_commands.app_desc');
+      },
+      programGroupsChanged() {
+        return JSON.stringify(this.programGroups.map(groupForServer)) !== this.saved.programGroups;
       },
       // The applications in the sidebar: those with commands, the one showing, and any with unsaved changes
       listedApps() {
@@ -490,7 +619,7 @@
         return JSON.stringify(this.global.map(forServer)) !== this.saved.global;
       },
       dirty() {
-        return this.globalChanged || this.changedApps.length > 0;
+        return this.globalChanged || this.programGroupsChanged || this.changedApps.length > 0;
       },
       pickableKeys() {
         const keys = [];
@@ -502,20 +631,6 @@
         }
         for (let vk = 0x60; vk <= 0x69; vk++) keys.push(vk);
         return keys;
-      },
-      iconMatchList() {
-        const words = this.iconPicker.query.trim().toLowerCase().split(/[\s_]+/).filter(Boolean);
-        if (words.length === 0) {
-          const common = COMMON_ICONS.filter((name) => this.codepoints[name]);
-          return common.concat(this.iconNames.filter((name) => !common.includes(name)));
-        }
-        return this.iconNames.filter((name) => words.every((word) => name.includes(word)));
-      },
-      iconMatches() {
-        return this.iconMatchList.length;
-      },
-      iconResults() {
-        return this.iconMatchList.slice(0, ICON_RESULTS);
       },
     },
     mounted() {
@@ -541,9 +656,10 @@
           const body = await response.json();
           this.global = (body.commands || []).map(normalize);
           this.apps = (body.apps || []).map((app) => ({index: app.index, name: app.name, commands: (app['client-commands'] || []).map(normalize)}));
+          this.programGroups = (body['program-groups'] || []).map(normalizeGroup);
           this.markSaved();
           this.loadError = null;
-          if (this.currentView !== 'global' && !this.apps.some((a) => 'app-' + a.index === this.currentView)) {
+          if (this.currentView !== 'global' && !this.currentGroup && !this.apps.some((a) => 'app-' + a.index === this.currentView)) {
             this.showView('global', true);
           }
         } catch (error) {
@@ -556,6 +672,7 @@
       markSaved() {
         this.saved.global = JSON.stringify(this.global.map(forServer));
         this.saved.apps = Object.fromEntries(this.apps.map((app) => [app.index, JSON.stringify(app.commands.map(forServer))]));
+        this.saved.programGroups = JSON.stringify(this.programGroups.map(groupForServer));
       },
       async loadIcons() {
         try {
@@ -577,9 +694,34 @@
       glyph(icon) {
         return icon && icon.startsWith('material:') ? this.codepoints[icon.substring('material:'.length)] || '' : '';
       },
+      toggleIconPicker(target) {
+        this.iconPicker.target = this.iconPicker.target === target ? null : target;
+      },
       pickIcon(name) {
-        this.editor.draft.icon = 'material:' + name;
-        this.iconPicker.open = false;
+        if (this.iconPicker.target) {
+          this.iconPicker.target.icon = 'material:' + name;
+        }
+        this.iconPicker.target = null;
+      },
+
+      // --- Program groups
+      addProgramGroup() {
+        const group = normalizeGroup({});
+        this.programGroups.push(group);
+        window.location.hash = '#program-' + group.id;
+      },
+      removeProgramGroup(group) {
+        const name = group.label || this.i18n.t('client_commands.new_program');
+        if (!window.confirm(this.i18n.t('client_commands.delete_program_confirm', {label: name}))) {
+          return;
+        }
+        this.cancelEdit();
+        this.programGroups.splice(this.programGroups.indexOf(group), 1);
+        this.showView('global', true);
+      },
+      // From what's typed: file names separated by commas or semicolons
+      setPrograms(group, text) {
+        group.programs = text.split(/[,;]/).map((name) => name.trim()).filter(Boolean);
       },
       keyName(vk) {
         if ((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A)) return String.fromCharCode(vk);
@@ -597,7 +739,7 @@
       // --- Views
       viewFromHash() {
         const hash = window.location.hash.substring(1);
-        return /^app-\d+$/.test(hash) ? hash : 'global';
+        return /^app-\d+$/.test(hash) || /^program-[\w-]+$/.test(hash) ? hash : 'global';
       },
       onHashChange() {
         const view = this.viewFromHash();
@@ -643,7 +785,7 @@
       openEditor(index, draft) {
         this.editor = {view: this.currentView, index, draft, error: null};
         this.keyPicker = {modifiers: [], key: 0};
-        this.iconPicker = {open: false, query: ''};
+        this.iconPicker.target = null;
       },
       cancelEdit() {
         this.stopRecording();
@@ -767,9 +909,20 @@
         this.load();
       },
       async save() {
+        // A program group needs a name and its programs
+        const incomplete = this.programGroups.find((group) => !group.label.trim() || group.programs.length === 0);
+        if (incomplete) {
+          this.showView('program-' + incomplete.id, true);
+          this.error = this.i18n.t('client_commands.need_program');
+          return;
+        }
+
         const payload = {apps: this.changedApps.map((app) => ({index: app.index, name: app.name, 'client-commands': app.commands.map(forServer)}))};
         if (this.globalChanged) {
           payload.commands = this.global.map(forServer);
+        }
+        if (this.programGroupsChanged) {
+          payload['program-groups'] = this.programGroups.map(groupForServer);
         }
 
         this.saving = true;

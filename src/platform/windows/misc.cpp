@@ -9,6 +9,7 @@
 #include <iterator>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 // lib includes
@@ -143,6 +144,77 @@ namespace platf {
   decltype(WlanFreeMemory) *fn_WlanFreeMemory = nullptr;  ///< Fn wlan free memory.
   decltype(WlanEnumInterfaces) *fn_WlanEnumInterfaces = nullptr;  ///< Fn wlan enum interfaces.
   decltype(WlanSetInterface) *fn_WlanSetInterface = nullptr;  ///< Fn wlan set interface.
+
+  namespace {
+    /**
+     * @brief Return the file name of a process's executable.
+     *
+     * @param pid Process ID.
+     * @return The file name, or an empty string when the process can't be read.
+     */
+    std::string process_file_name(DWORD pid) {
+      HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+      if (!process) {
+        return {};
+      }
+
+      WCHAR path[MAX_PATH * 4];
+      DWORD size = _countof(path);
+      std::string name;
+      if (QueryFullProcessImageNameW(process, 0, path, &size)) {
+        name = utf_utils::to_utf8(std::filesystem::path {std::wstring {path, size}}.filename().wstring());
+      }
+      CloseHandle(process);
+      return name;
+    }
+
+    /**
+     * @brief What `EnumChildWindows()` looks for in a UWP app's frame.
+     */
+    struct uwp_child_t {
+      DWORD frame_pid;  ///< Process of the frame, ApplicationFrameHost.exe.
+      DWORD app_pid = 0;  ///< Receives the process of the first child window that belongs to another process.
+    };
+  }  // namespace
+
+  std::string foreground_program() {
+    std::string name;
+
+    // On a thread of its own, which can be moved to the desktop that has the input
+    std::thread {[&name]() {
+      syncThreadDesktop();
+
+      HWND window = GetForegroundWindow();
+      if (!window) {
+        return;
+      }
+
+      DWORD pid = 0;
+      GetWindowThreadProcessId(window, &pid);
+      name = process_file_name(pid);
+
+      // A UWP app's window is a frame that ApplicationFrameHost.exe owns, around a child window of the app's own
+      if (boost::iequals(name, "ApplicationFrameHost.exe")) {
+        uwp_child_t child {pid};
+        EnumChildWindows(window, [](HWND child_window, LPARAM param) -> BOOL {
+          auto child = reinterpret_cast<uwp_child_t *>(param);
+          DWORD child_pid = 0;
+          GetWindowThreadProcessId(child_window, &child_pid);
+          if (child_pid != 0 && child_pid != child->frame_pid) {
+            child->app_pid = child_pid;
+            return FALSE;
+          }
+          return TRUE;
+        },
+                         reinterpret_cast<LPARAM>(&child));
+        if (child.app_pid != 0) {
+          name = process_file_name(child.app_pid);
+        }
+      }
+    }}.join();
+
+    return name;
+  }
 
   std::filesystem::path appdata() {
     WCHAR sunshine_path[MAX_PATH];

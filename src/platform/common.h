@@ -973,6 +973,13 @@ namespace platf {
   std::filesystem::path appdata();
 
   /**
+   * @brief Return the file name of the program whose window is in the foreground, such as `notepad.exe`.
+   *
+   * @return The file name, or an empty string when it can't be told (or on platforms without support).
+   */
+  std::string foreground_program();
+
+  /**
    * @brief Return the hardware MAC address associated with a network address.
    *
    * @param address Network address being parsed or filtered.

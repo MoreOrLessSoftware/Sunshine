@@ -12,7 +12,11 @@ Open the **Client Commands** page in the web UI.
 * **All Streams** holds the commands shown whatever is being streamed. They appear in the menu's row of commands,
   after the client's own custom commands.
 * Each application under **Applications** can have commands of its own. While that application is being streamed,
-  the menu shows a button named after it, which opens a page of its commands.
+  the menu shows a button named after it, which opens a page of its commands. Applications without commands are
+  picked from the list underneath to add some.
+* Each group under **Programs** has a name, an icon and the file names of one or more programs, such as
+  `photoshop.exe`. While one of those programs is in the foreground on this host when the client opens its menu, the
+  menu shows a button with the group's name, which opens a page of its commands. This works on Windows only for now.
 
 For each command, set:
 
@@ -32,8 +36,15 @@ A command only runs while the client asking for it is streaming, and a key seque
 before another one starts. If a command fails, the client shows why on its button.
 
 ## Files
-The global commands are kept in `client_commands.json` in the config directory, and an application's in a
-`client-commands` array on it in `apps.json`. Each command looks like one of these:
+The global commands are kept in the `commands` array of `client_commands.json` in the config directory, the program
+groups in its `program-groups` array, and an application's commands in a `client-commands` array on it in `apps.json`.
+A program group looks like this:
+
+```json
+{"id": "3b0d...", "label": "Photoshop", "icon": "material:brush", "programs": ["photoshop.exe"], "commands": [...]}
+```
+
+Each command looks like one of these:
 
 ```json
 {"id": "6f1c...", "label": "Task Manager", "icon": "material:monitoring", "close-menu": true,
@@ -53,7 +64,7 @@ Clients use two requests on the paired HTTPS port:
 
 * `GET /clientcommands` lists the commands offered now:
   `{"version": 1, "commands": [...], "groups": [{"kind": "app", "label": "...", "icon": "", "commands": [...]}]}`,
-  where each command has `id`, `label`, `icon` and `close-menu`.
+  where a group's `kind` is `app` or `program`, and each command has `id`, `label`, `icon` and `close-menu`.
 * `GET /runclientcommand?id=<id>` runs one and answers `{"status": "ok"}`, or `{"status": "error", "message": "..."}`
   with 403 when the client isn't streaming, 404 when the command is no longer offered, 409 while another key sequence
   is being typed, and 500 when a command line couldn't start.

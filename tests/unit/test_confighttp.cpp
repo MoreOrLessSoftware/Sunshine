@@ -2582,3 +2582,30 @@ TEST_F(ClientCommandsConfigHttpTest, ReportsAGlobalFileThatCannotBeWritten) {
   const auto response = send("POST", "/client-commands-test", R"({"commands":[]})");
   EXPECT_EQ(response->status_code, "400 Bad Request");
 }
+
+
+TEST_F(ClientCommandsConfigHttpTest, ListsAndSavesProgramGroups) {
+  auto body = nlohmann::json::parse(send("GET", "/client-commands-test")->content.string());
+  EXPECT_TRUE(body["program-groups"].empty());
+
+  ASSERT_EQ(send("POST", "/client-commands-test", R"({"program-groups": [
+    {"id": "n", "label": "Notepad", "icon": "material:edit", "programs": ["notepad.exe"],
+     "commands": [{"id": "esc", "label": "Esc", "type": "keys", "steps": [[27]]}]}
+  ]})")->status_code,
+            "200 OK");
+
+  // The global commands were left out, so they're kept
+  const auto global = read_global();
+  EXPECT_EQ(global["commands"][0]["id"], "g1");
+  ASSERT_EQ(global["program-groups"].size(), 1);
+  EXPECT_EQ(global["program-groups"][0]["programs"][0], "notepad.exe");
+
+  body = nlohmann::json::parse(send("GET", "/client-commands-test")->content.string());
+  ASSERT_EQ(body["program-groups"].size(), 1);
+  EXPECT_EQ(body["program-groups"][0]["commands"][0]["id"], "esc");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, RejectsInvalidProgramGroups) {
+  expect_rejected(R"({"program-groups": {}})", "the program groups must be an array");
+  expect_rejected(R"({"program-groups": [{"id": "n", "label": "Notepad"}]})", "\"Notepad\": \"programs\" must name at least one program");
+}

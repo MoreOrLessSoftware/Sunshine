@@ -276,6 +276,11 @@ namespace platf {
    * @details This is used for the log directory, so it cannot invoke Boost logging!
    * @return The path of the appdata directory that should be used.
    */
+  std::string foreground_program() {
+    // Not supported yet
+    return {};
+  }
+
   fs::path appdata() {
     static std::once_flag migration_flag;
     static fs::path config_path;

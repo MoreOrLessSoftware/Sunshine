@@ -56,9 +56,20 @@ namespace client_commands {
    * @brief Commands shown together on one page of the client's menu.
    */
   struct group_t {
-    std::string kind;  ///< Where the group comes from: `app`.
+    std::string kind;  ///< Where the group comes from: `app` or `program`.
     std::string label;  ///< Text shown on the client's button for the group.
     std::string icon;  ///< Icon for the client's button, or empty for the client's default.
+    std::vector<command_t> commands;  ///< Commands in the group, in menu order.
+  };
+
+  /**
+   * @brief Commands offered while a program is in the foreground on the host.
+   */
+  struct program_group_t {
+    std::string id;  ///< Identifier of the group.
+    std::string label;  ///< Text shown on the client's button for the group.
+    std::string icon;  ///< Icon for the client's button, or empty for the client's default.
+    std::vector<std::string> programs;  ///< File names of the programs, such as `photoshop.exe`, matched ignoring case.
     std::vector<command_t> commands;  ///< Commands in the group, in menu order.
   };
 
@@ -111,6 +122,75 @@ namespace client_commands {
   std::vector<command_t> parse_commands(const nlohmann::json &json, std::string_view scope);
 
   /**
+   * @brief Parse one program group.
+   *
+   * @param json Group object.
+   * @param fallback_id ID used when the object has none and `strict` is `false`.
+   * @param strict Whether an ID is required and any invalid command rejects the group, as for saving; otherwise
+   *               invalid commands are skipped and logged.
+   * @param error Receives the reason when the group is rejected.
+   * @return The group, or `std::nullopt` when it is invalid.
+   */
+  std::optional<program_group_t> parse_program_group(const nlohmann::json &json, const std::string &fallback_id, bool strict, std::string &error);
+
+  /**
+   * @brief Parse a list of program groups, skipping and logging invalid ones.
+   *
+   * @param json Array of group objects; anything else yields no groups.
+   * @return Valid groups in their original order.
+   */
+  std::vector<program_group_t> parse_program_groups(const nlohmann::json &json);
+
+  /**
+   * @brief Parse a list of program groups, rejecting the list when any of them is invalid.
+   *
+   * @param json Array of group objects.
+   * @param error Receives the reason when the list is rejected, naming the group.
+   * @return The groups, or `std::nullopt` when the list is rejected.
+   */
+  std::optional<std::vector<program_group_t>> parse_program_groups_strict(const nlohmann::json &json, std::string &error);
+
+  /**
+   * @brief Read the program groups.
+   *
+   * @param file `client_commands.json` to read.
+   * @return Groups from its `program-groups` array; empty when the file is missing or unreadable.
+   */
+  std::vector<program_group_t> load_program_groups(const std::filesystem::path &file);
+
+  /**
+   * @brief Check whether a program group is for a program.
+   *
+   * @param group Group to check.
+   * @param program File name of the program, such as `notepad.exe`.
+   * @return `true` when one of the group's programs has the same file name, ignoring case.
+   */
+  bool matches(const program_group_t &group, std::string_view program);
+
+  /**
+   * @brief Build the groups offered while a program is in the foreground.
+   *
+   * @param groups Every program group.
+   * @param program File name of the program in the foreground, or empty for none.
+   * @return A `program` group for each group of the program that has commands.
+   */
+  std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, std::string_view program);
+
+  /**
+   * @brief Return the program in the foreground on the host.
+   *
+   * @return The program set by `set_foreground_program_for_testing()`, otherwise `platf::foreground_program()`.
+   */
+  std::string foreground_program();
+
+  /**
+   * @brief Pretend a program is in the foreground.
+   *
+   * @param program File name of the program, or `std::nullopt` to ask the platform again.
+   */
+  void set_foreground_program_for_testing(std::optional<std::string> program);
+
+  /**
    * @brief Read the global commands.
    *
    * @param file `client_commands.json` to read.
@@ -156,6 +236,22 @@ namespace client_commands {
   nlohmann::json to_json(const std::vector<command_t> &commands);
 
   /**
+   * @brief Turn a program group back into its definition, as it is saved.
+   *
+   * @param group Group to describe.
+   * @return Group object.
+   */
+  nlohmann::json to_json(const program_group_t &group);
+
+  /**
+   * @brief Turn a list of program groups into their definitions.
+   *
+   * @param groups Groups to describe.
+   * @return Array of group objects.
+   */
+  nlohmann::json to_json(const std::vector<program_group_t> &groups);
+
+  /**
    * @brief Parse a list of command definitions, rejecting the list when any of them is invalid.
    *
    * Used for lists being saved, where nothing invalid should be dropped silently.
@@ -177,6 +273,17 @@ namespace client_commands {
   bool save_global(const std::filesystem::path &path, const std::vector<command_t> &commands, std::string &error);
 
   /**
+   * @brief Save the global commands and the program groups, keeping anything else the file holds.
+   *
+   * @param path File to write.
+   * @param commands Commands to save, or `std::nullopt` to keep those in the file.
+   * @param groups Program groups to save, or `std::nullopt` to keep those in the file.
+   * @param error Receives the reason when the file cannot be written.
+   * @return `true` on success.
+   */
+  bool save(const std::filesystem::path &path, const std::optional<std::vector<command_t>> &commands, const std::optional<std::vector<program_group_t>> &groups, std::string &error);
+
+  /**
    * @brief Build what is offered with the given commands available.
    *
    * @param global Global commands.
@@ -189,7 +296,8 @@ namespace client_commands {
   /**
    * @brief Build what is offered to a client now.
    *
-   * @return The global commands and those of the application being streamed.
+   * @return The global commands, those of the application being streamed, and those of the program in the
+   *         foreground.
    */
   offer_t current_offer();
 

@@ -102,6 +102,11 @@ namespace platf {
     return std::make_unique<deinit_t>();
   }
 
+  std::string foreground_program() {
+    // Not supported yet
+    return {};
+  }
+
   fs::path appdata() {
     const char *homedir;
     if ((homedir = getenv("HOME")) == nullptr) {
