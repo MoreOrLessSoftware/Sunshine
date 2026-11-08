@@ -101,7 +101,7 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 | `description` | No       | Shown in the web UI.                                                                                                |
 | `author`      | No       | Shown in the web UI.                                                                                                |
 | `homepage`    | No       | Linked from the web UI.                                                                                             |
-| `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 100, 200 and 300.                   |
+| `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50, 100, 200, 300.                  |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect` and `disconnect`. Each must be a `.ps1` file directly inside the plugin folder. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
