@@ -23,6 +23,7 @@
 #include <Simple-Web-Server/server_http.hpp>
 
 // local includes
+#include "client_commands.h"
 #include "config.h"
 #include "display_device.h"
 #include "file_handler.h"
@@ -1619,6 +1620,80 @@ namespace nvhttp {
   }
 
   /**
+   * @brief Send a JSON response to a client command request.
+   *
+   * @param response HTTP response object to populate.
+   * @param status HTTP status code.
+   * @param body JSON body.
+   */
+  void write_json(resp_https_t &response, SimpleWeb::StatusCode status, const nlohmann::json &body) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    response->write(status, body.dump(), headers);
+    response->close_connection_after_response = true;
+  }
+
+  /**
+   * @brief List the commands the client can run from its overlay menu now.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void clientcommands(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    write_json(response, SimpleWeb::StatusCode::success_ok, client_commands::describe(client_commands::current_offer()));
+  }
+
+  /**
+   * @brief Run a command from the client's overlay menu.
+   *
+   * The command must be one offered to the client now, and the client must be streaming.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void runclientcommand(resp_https_t response, req_https_t request) {
+    print_req<SunshineHTTPS>(request);
+
+    auto args = request->parse_query_string();
+    auto id = args.find("id");
+    if (id == args.end() || id->second.empty()) {
+      write_json(response, SimpleWeb::StatusCode::client_error_bad_request, {{"status", "error"}, {"message", "Missing the command's id"}});
+      return;
+    }
+
+    std::string cert;
+    {
+      std::lock_guard lock {client_auth_mutex()};
+      cert = last_verified_client_cert;
+    }
+    if (!rtsp_stream::has_session_for_cert(cert)) {
+      write_json(response, SimpleWeb::StatusCode::client_error_forbidden, {{"status", "error"}, {"message", "Commands only run while streaming"}});
+      return;
+    }
+
+    auto command = client_commands::find(client_commands::current_offer(), id->second);
+    if (!command) {
+      write_json(response, SimpleWeb::StatusCode::client_error_not_found, {{"status", "error"}, {"message", "The command is no longer available"}});
+      return;
+    }
+
+    std::string error;
+    switch (client_commands::run(*command, error)) {
+      case client_commands::run_result_e::ok:
+        write_json(response, SimpleWeb::StatusCode::success_ok, {{"status", "ok"}});
+        return;
+      case client_commands::run_result_e::busy:
+        write_json(response, SimpleWeb::StatusCode::client_error_conflict, {{"status", "error"}, {"message", error}});
+        return;
+      default:
+        write_json(response, SimpleWeb::StatusCode::server_error_internal_server_error, {{"status", "error"}, {"message", error}});
+        return;
+    }
+  }
+
+  /**
    * @brief Return an application asset requested by the client.
    *
    * @param response HTTP response object to populate.
@@ -1752,6 +1827,8 @@ namespace nvhttp {
       resume(host_audio, resp, req);
     };
     https_server.resource["^/cancel$"]["GET"] = cancel;
+    https_server.resource["^/clientcommands$"]["GET"] = clientcommands;
+    https_server.resource["^/runclientcommand$"]["GET"] = runclientcommand;
 
     https_server.config.reuse_address = true;
     https_server.config.address = net::get_bind_address(address_family);

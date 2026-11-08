@@ -84,6 +84,17 @@ namespace input {
    */
   std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
 
+  /**
+   * @brief Press or release a key on the host on behalf of Sunshine itself, such as for a client command.
+   *
+   * The event is queued behind the clients' own input, so the two never interleave mid-event, and it
+   * bypasses the configured keybinding remap.
+   *
+   * @param key_code Windows virtual-key code.
+   * @param release Whether the event releases the key.
+   */
+  void send_host_key(std::uint16_t key_code, bool release);
+
 #ifdef SUNSHINE_TESTS
   namespace testing {
     /**

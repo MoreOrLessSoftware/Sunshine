@@ -1083,6 +1083,12 @@ namespace input {
     platf::keyboard_update(platf_input, key_code, release, flags);
   }
 
+  void send_host_key(std::uint16_t key_code, bool release) {
+    task_pool.push([key_code, release]() {
+      emit_keyboard_update(key_code, release, 0);
+    });
+  }
+
   /**
    * @brief Send key and modifiers.
    *

@@ -31,6 +31,7 @@
 #endif
 
 // local includes
+#include "client_commands.h"
 #include "confighttp.h"
 #include "display_device.h"
 #include "display_version.h"
@@ -447,6 +448,7 @@ int main(int argc, char *argv[]) {
     proc::refresh(config::stream.file_apps);
   });
   proc::refresh(config::stream.file_apps);
+  auto client_commands_deinit_guard = client_commands::init();
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.
   // This allows access to the UI to fix configuration problems or view the logs.

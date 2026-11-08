@@ -668,6 +668,19 @@ namespace rtsp_stream {
     }
 
     /**
+     * @brief Check whether an active session belongs to a client.
+     *
+     * @param cert PEM certificate of the client.
+     * @return `true` when a session's client certificate matches.
+     */
+    bool has_cert(std::string_view cert) {
+      auto lg = _session_slots.lock();
+      return std::ranges::any_of(*_session_slots, [cert](const auto &slot) {
+        return stream::session::client_cert(*slot) == cert;
+      });
+    }
+
+    /**
      * @brief Clear by cert state.
      *
      * @param cert Certificate data or object used by the operation.
@@ -770,6 +783,10 @@ namespace rtsp_stream {
   void terminate_sessions_by_cert(std::string_view cert) {
     server.clear_by_cert(cert);
     input::terminate_gamepads(cert);
+  }
+
+  bool has_session_for_cert(std::string_view cert) {
+    return !cert.empty() && server.has_cert(cert);
   }
 
   /**

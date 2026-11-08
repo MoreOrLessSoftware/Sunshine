@@ -20,6 +20,7 @@
 #include <boost/process/v1.hpp>
 
 // local includes
+#include "client_commands.h"
 #include "config.h"
 #include "platform/common.h"
 #include "rtsp.h"
@@ -79,6 +80,7 @@ namespace proc {
     std::string image_path;  ///< Image path.
     std::string id;  ///< Stable identifier for the configured application.
     std::string display_plugin;  ///< Name of an active plugin that sets up the display for this app; empty when Sunshine's display device configuration applies.
+    std::vector<client_commands::command_t> client_commands;  ///< Commands a client can run from its overlay menu while this app is streamed.
     bool elevated;  ///< Whether the process should be launched elevated.
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.
@@ -234,6 +236,15 @@ namespace proc {
    * @return `base` with the command's variables added.
    */
   boost::process::v1::environment prep_cmd_env(const boost::process::v1::environment &base, const cmd_t &cmd);
+
+  /**
+   * @brief Determine the working directory to use for a command.
+   *
+   * @param cmd Command line to inspect.
+   * @param env Environment variables used to search PATH.
+   * @return Directory used to launch the command, falling back to PATH lookup when needed.
+   */
+  boost::filesystem::path find_working_directory(const std::string &cmd, boost::process::v1::environment &env);
 
   /**
    * @brief Calculate a stable id based on name and image data

@@ -6,6 +6,8 @@
 
 // standard includes
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -18,6 +20,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/token_functions.hpp>
+#include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
@@ -772,11 +775,29 @@ namespace proc {
         this_env[name] = parse_env_val(this_env, val.get_value<std::string>());
       }
 
+      // The property tree turns numbers into strings, so the client commands are read from the same file as JSON
+      nlohmann::json apps_json = nlohmann::json::array();
+      try {
+        std::ifstream in {file_name};
+        auto file_json = nlohmann::json::parse(in);
+        if (file_json.contains("apps") && file_json["apps"].is_array()) {
+          apps_json = std::move(file_json["apps"]);
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Couldn't read the client commands of the applications: "sv << e.what();
+      }
+
       std::set<std::string> ids;
       std::vector<proc::ctx_t> apps;
       int i = 0;
+      std::size_t app_index = 0;
       for (auto &[_, app_node] : apps_node) {
         proc::ctx_t ctx;
+
+        if (app_index < apps_json.size() && apps_json[app_index].is_object() && apps_json[app_index].contains("client-commands")) {
+          ctx.client_commands = client_commands::parse_commands(apps_json[app_index]["client-commands"], std::format("app{}", app_index));
+        }
+        app_index++;
 
         auto prep_nodes_opt = app_node.get_child_optional("prep-cmd"s);
         auto detached_nodes_opt = app_node.get_child_optional("detached"s);

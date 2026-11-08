@@ -79,6 +79,14 @@ namespace rtsp_stream {
   void terminate_sessions_by_cert(std::string_view cert);
 
   /**
+   * @brief Check whether a client is streaming.
+   *
+   * @param cert PEM certificate of the paired client.
+   * @return `true` when an active session belongs to the client.
+   */
+  bool has_session_for_cert(std::string_view cert);
+
+  /**
    * @brief Runs the RTSP server loop.
    */
   void start();
