@@ -1664,23 +1664,28 @@ namespace nvhttp {
     }
 
     std::string cert;
+    client_commands::run_context_t context;
     {
       std::lock_guard lock {client_auth_mutex()};
       cert = last_verified_client_cert;
+      context.client_name = last_verified_client_name;
     }
     if (!rtsp_stream::has_session_for_cert(cert)) {
       write_json(response, SimpleWeb::StatusCode::client_error_forbidden, {{"status", "error"}, {"message", "Commands only run while streaming"}});
       return;
     }
 
-    auto command = client_commands::find(client_commands::current_offer(), id->second);
+    const auto offer = client_commands::current_offer();
+    auto command = client_commands::find(offer, id->second);
     if (!command) {
       write_json(response, SimpleWeb::StatusCode::client_error_not_found, {{"status", "error"}, {"message", "The command is no longer available"}});
       return;
     }
 
     std::string error;
-    switch (client_commands::run(*command, error)) {
+    context.app_id = offer.app_id;
+    context.app_name = offer.app_name;
+    switch (client_commands::run(*command, error, context)) {
       case client_commands::run_result_e::ok:
         write_json(response, SimpleWeb::StatusCode::success_ok, {{"status", "ok"}});
         return;

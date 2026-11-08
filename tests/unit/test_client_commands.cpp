@@ -333,6 +333,28 @@ TEST_F(ClientCommandsTest, OneKeySequenceAtATimeAndStopReleasesHeldKeys) {
 }
 
 #ifdef _WIN32
+TEST_F(ClientCommandsTest, ScriptsGetTheClientAndApp) {
+  auto out = dir_ / "env.txt";
+  client_commands::command_t command {
+    .id = "env",
+    .label = "Env",
+    .type = client_commands::type_e::script,
+    .cmd = std::format("cmd.exe /c echo %SUNSHINE_CLIENT_NAME%^|%SUNSHINE_APP_ID%^|%SUNSHINE_APP_NAME%^|%SUNSHINE_CLIENT_COMMAND_ID%> \"{}\"", out.string()),
+    .working_dir = dir_.string(),
+  };
+  std::string error;
+  ASSERT_EQ(client_commands::run(command, error, {"Living Room", "1234", "Desktop"}), client_commands::run_result_e::ok) << error;
+
+  // It's left running, so wait for what it writes
+  std::string text;
+  for (int i = 0; i < 100 && text.find('\n') == std::string::npos; i++) {
+    std::this_thread::sleep_for(50ms);
+    std::ifstream in {out};
+    text.assign(std::istreambuf_iterator<char>(in), {});
+  }
+  EXPECT_EQ(text.substr(0, text.find_first_of("\r\n")), "Living Room|1234|Desktop|env");
+}
+
 TEST_F(ClientCommandsTest, RunStartsAScript) {
   client_commands::command_t command {.id = "x", .label = "Exit", .type = client_commands::type_e::script, .cmd = "cmd.exe /c exit 0", .working_dir = dir_.string()};
   std::string error;

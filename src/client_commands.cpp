@@ -193,14 +193,24 @@ namespace client_commands {
      * @brief Start a `script` command and leave it running.
      *
      * @param command Command to start.
+     * @param context Who the command runs for.
      * @param error Receives the reason when it does not start.
      * @return `true` when it started.
      */
-    bool start_script(const command_t &command, std::string &error) {
+    bool start_script(const command_t &command, const run_context_t &context, std::string &error) {
       // A copy, so the variables are only for the command
       boost::process::v1::environment env = boost::this_process::environment();
       env["SUNSHINE_CLIENT_COMMAND_ID"] = command.id;
       env["SUNSHINE_CLIENT_COMMAND_LABEL"] = command.label;
+      if (!context.client_name.empty()) {
+        env["SUNSHINE_CLIENT_NAME"] = context.client_name;
+      }
+      if (!context.app_id.empty()) {
+        env["SUNSHINE_APP_ID"] = context.app_id;
+      }
+      if (!context.app_name.empty()) {
+        env["SUNSHINE_APP_NAME"] = context.app_name;
+      }
 
       boost::filesystem::path working_dir = command.working_dir.empty() ?
                                               proc::find_working_directory(command.cmd, env) :
@@ -433,12 +443,14 @@ namespace client_commands {
   }
 
   offer_t current_offer() {
+    std::string app_id;
     std::string app_name;
     std::vector<command_t> app_commands;
 
-    if (const int app_id = proc::proc.running(); app_id > 0) {
+    if (const int running_id = proc::proc.running(); running_id > 0) {
       for (const auto &app : proc::proc.get_apps()) {
-        if (app.id == std::to_string(app_id)) {
+        if (app.id == std::to_string(running_id)) {
+          app_id = app.id;
           app_name = app.name;
           app_commands = app.client_commands;
           break;
@@ -446,7 +458,10 @@ namespace client_commands {
       }
     }
 
-    return make_offer(load_global(file()), app_name, std::move(app_commands));
+    auto offer = make_offer(load_global(file()), app_name, std::move(app_commands));
+    offer.app_id = std::move(app_id);
+    offer.app_name = std::move(app_name);
+    return offer;
   }
 
   nlohmann::json describe(const offer_t &offer) {
@@ -529,9 +544,9 @@ namespace client_commands {
     return events;
   }
 
-  run_result_e run(const command_t &command, std::string &error) {
+  run_result_e run(const command_t &command, std::string &error, const run_context_t &context) {
     if (command.type == type_e::script) {
-      return start_script(command, error) ? run_result_e::ok : run_result_e::failed;
+      return start_script(command, context, error) ? run_result_e::ok : run_result_e::failed;
     }
 
     auto &state = typist();

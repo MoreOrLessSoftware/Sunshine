@@ -21,7 +21,9 @@ For each command, set:
   * **Keys** — key chords, typed in order. *Record* captures the keys you press on the page. The browser can't capture
     some combinations, such as those with the Windows key; add those with the chord picker underneath.
   * **Command Line** — a command started on this host and left running, optionally in a working directory and
-    elevated. It gets `SUNSHINE_CLIENT_COMMAND_ID` and `SUNSHINE_CLIENT_COMMAND_LABEL` in its environment.
+    elevated. Its environment has `SUNSHINE_CLIENT_COMMAND_ID` and `SUNSHINE_CLIENT_COMMAND_LABEL`, the name of the
+    client that picked it in `SUNSHINE_CLIENT_NAME`, and the application being streamed in `SUNSHINE_APP_ID` and
+    `SUNSHINE_APP_NAME`.
 * **Close the menu after running it** — turn this off for commands you may want to run several times in a row.
 
 Select **Save** to save every list at once. Changes apply the next time a client opens its menu.

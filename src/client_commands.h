@@ -68,6 +68,17 @@ namespace client_commands {
   struct offer_t {
     std::vector<command_t> commands;  ///< Global commands, shown at the top level of the menu.
     std::vector<group_t> groups;  ///< Groups shown as pages of the menu.
+    std::string app_id;  ///< ID of the application being streamed, or empty for none.
+    std::string app_name;  ///< Name of the application being streamed, or empty for none.
+  };
+
+  /**
+   * @brief Who a command runs for, passed to a `script` command in its environment.
+   */
+  struct run_context_t {
+    std::string client_name;  ///< Name of the client that picked the command, as `SUNSHINE_CLIENT_NAME`.
+    std::string app_id;  ///< ID of the application being streamed, as `SUNSHINE_APP_ID`.
+    std::string app_name;  ///< Name of the application being streamed, as `SUNSHINE_APP_NAME`.
   };
 
   /**
@@ -229,9 +240,10 @@ namespace client_commands {
    *
    * @param command Command to run.
    * @param error Receives the reason when the command does not start.
+   * @param context Who the command runs for; a `script` command gets each non-empty value in its environment.
    * @return Outcome of the request.
    */
-  run_result_e run(const command_t &command, std::string &error);
+  run_result_e run(const command_t &command, std::string &error, const run_context_t &context = {});
 
   /**
    * @brief Prepare client commands for use.
