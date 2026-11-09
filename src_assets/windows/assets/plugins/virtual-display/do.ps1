@@ -4,6 +4,7 @@
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vdisplay.ps1')
+. (Join-Path $PSScriptRoot 'desktop.ps1')
 
 $invariant = [Globalization.CultureInfo]::InvariantCulture
 
@@ -27,21 +28,32 @@ switch ($env:SUNSHINE_PLUGIN_OPT_HDR) {
     'off' { $vdisplayArgs += '--no-hdr' }
 }
 
-Write-Output "Starting virtual display at $($displayFps.ToString($invariant)) Hz for client $env:SUNSHINE_CLIENT_NAME"
-$process = Start-Vdisplay $vdisplayArgs
-
-# vdisplay waits for Windows to add the new monitor to the desktop, but depending on the saved display layout
-# Windows may never do that on its own. If the display is not ready shortly after starting, switch to extend
-# mode so Windows activates it. vdisplay restores the previous layout when the display is removed.
-if (-not $process.WaitForExit(2000)) {
-    Write-Output 'Virtual display not active yet; switching Windows to extend mode'
-    & (Join-Path $env:windir 'System32\DisplaySwitch.exe') /extend
+if ($env:SUNSHINE_PLUGIN_OPT_NEW_DESKTOP -eq 'true') {
+    Enter-StreamDesktop
 }
-$process.WaitForExit()
 
-$code = $process.ExitCode
-if ($code -ne 0) {
-    throw "vdisplay start failed with exit code $code; see $(Split-Path $vdisplayExe)\vdisplay.log"
+# Sunshine does not run the undo script of a do script that failed, so clean up the desktop here.
+try {
+    Write-Output "Starting virtual display at $($displayFps.ToString($invariant)) Hz for client $env:SUNSHINE_CLIENT_NAME"
+    $process = Start-Vdisplay $vdisplayArgs
+
+    # vdisplay waits for Windows to add the new monitor to the desktop, but depending on the saved display layout
+    # Windows may never do that on its own. If the display is not ready shortly after starting, switch to extend
+    # mode so Windows activates it. vdisplay restores the previous layout when the display is removed.
+    if (-not $process.WaitForExit(2000)) {
+        Write-Output 'Virtual display not active yet; switching Windows to extend mode'
+        & (Join-Path $env:windir 'System32\DisplaySwitch.exe') /extend
+    }
+    $process.WaitForExit()
+
+    $code = $process.ExitCode
+    if ($code -ne 0) {
+        throw "vdisplay start failed with exit code $code; see $(Split-Path $vdisplayExe)\vdisplay.log"
+    }
+}
+catch {
+    Exit-StreamDesktop
+    throw
 }
 
 $settle = [int]$env:SUNSHINE_PLUGIN_OPT_SETTLE_SECONDS

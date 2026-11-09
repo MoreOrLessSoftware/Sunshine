@@ -1,7 +1,7 @@
 {
   "id": "virtual-display",
   "name": "Virtual Display",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Creates a virtual display that matches the client's resolution and frame rate for the length of the stream, then removes it. Uses sunshine-vdisplay and the SudoVDA driver.",
   "author": "Sunshine",
   "homepage": "https://github.com/Zayrick/sunshine-vdisplay",
@@ -23,21 +23,18 @@
       "default": true
     },
     {
+      "id": "new_desktop",
+      "type": "boolean",
+      "label": "Start the stream on a new desktop",
+      "description": "Create a new Windows desktop before setting up the virtual display, and remove it when the stream ends. Default: Off",
+      "default": false
+    },
+    {
       "id": "shared",
       "type": "boolean",
       "label": "Shared virtual monitor for all clients",
       "description": "Use one virtual monitor for every client, so Windows keeps the same display settings for all of them. Turn this off to give each client its own monitor, which lets Windows remember settings such as scaling per client.",
       "default": false
-    },
-    {
-      "id": "fps_multiplier",
-      "type": "number",
-      "label": "Refresh rate multiplier",
-      "description": "Run the virtual display at the client frame rate times this value. A higher refresh rate can lower latency. Use the RTSS Frame Limit plugin to keep games capped at the client frame rate.",
-      "default": 2,
-      "min": 1,
-      "max": 8,
-      "step": 1
     },
     {
       "id": "hdr",
@@ -50,6 +47,16 @@
         {"value": "on", "label": "Always on"},
         {"value": "off", "label": "Always off"}
       ]
+    },
+    {
+      "id": "fps_multiplier",
+      "type": "number",
+      "label": "Refresh rate multiplier",
+      "description": "Run the virtual display at the client frame rate times this value. A higher refresh rate can lower latency. Use the RTSS Frame Limit plugin to keep games capped at the client frame rate.",
+      "default": 2,
+      "min": 1,
+      "max": 8,
+      "step": 1
     },
     {
       "id": "settle_seconds",

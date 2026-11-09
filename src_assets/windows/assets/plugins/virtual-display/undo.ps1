@@ -1,6 +1,9 @@
-# Removes the virtual display and restores the previous display layout.
+# Removes the virtual display, restores the previous display layout, and removes the temporary desktop if there is one.
 
 . (Join-Path $PSScriptRoot 'vdisplay.ps1')
+. (Join-Path $PSScriptRoot 'desktop.ps1')
 
 Write-Output 'Stopping virtual display'
-exit (Invoke-Vdisplay @('stop'))
+$code = Invoke-Vdisplay @('stop')
+Exit-StreamDesktop
+exit $code
