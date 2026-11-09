@@ -206,10 +206,10 @@
                 {{ taskFailedText(plugin) }}
                 ({{ $t('plugins.exit_code', { code: plugin.task.exit_code }) }})
               </div>
-              <button type="button" class="btn btn-link btn-sm px-0" @click="toggleLog(plugin)">
+              <a href="#" class="small d-inline-flex align-items-center gap-1 mt-1" role="button" @click.prevent="toggleLog(plugin)">
                 <file-text :size="14" class="icon"></file-text>
                 {{ logs[plugin.id] !== undefined ? $t('plugins.hide_log') : $t('plugins.view_log') }}
-              </button>
+              </a>
               <pre v-if="logs[plugin.id] !== undefined" class="plugin-log border rounded p-2 mb-0">{{ logs[plugin.id] }}</pre>
             </div>
 
