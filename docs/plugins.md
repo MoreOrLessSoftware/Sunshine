@@ -36,6 +36,7 @@ is resuming.
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Virtual Display  | Creates a virtual display matching the client's resolution and frame rate using [sunshine-vdisplay](https://github.com/Zayrick/sunshine-vdisplay), and removes it when the stream ends. The refresh rate can be a multiple of the client frame rate. Each client gets its own virtual monitor unless *Shared virtual monitor for all clients* is on. |
 | RTSS Frame Limit | Sets the [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) frame rate limit to the client frame rate and restores the previous limit afterwards. RTSS 7.3.7 or newer must already be installed. If RTSS isn't running, it is started for the stream and closed afterwards. The limit is set again when a client resumes, using that client's frame rate, unless *Re-apply the limit when a client resumes* is off. |
+| Nyrna            | Adds a *Nyrna Suspend* command to the [client commands](client_commands.md) in Moonlight's in-stream menu. It suspends the game or application in the foreground with [Nyrna](https://nyrna.merritt.codes/), minimizing it unless *Minimize while suspended* is off, and resumes it the next time it's picked, wherever it is then. Games with anti-cheat usually can't be suspended. |
 | Stadia Controller | Runs the [Stadiacast](https://github.com/MoreOrLessSoftware/stadiacast) receiver while a stream is running, so a Stadia Controller in Wi-Fi mode becomes a virtual Xbox Series controller (with the *Xbox Series Controller Driver* component) or Xbox 360 controller (with ViGEmBus). Wake the controller once the stream has started. *Start test* runs the receiver without a stream, and the card shows the controller connecting and every button, stick and trigger live. The controller must use this PC as its DNS server; see the [Stadiacast setup guide](https://github.com/MoreOrLessSoftware/stadiacast/blob/main/docs/setup.md). |
 | V-Sync Toggle    | Changes the graphics driver's global V-Sync setting and restores the previous setting afterwards. On NVIDIA GPUs it uses [vsync-toggle](https://github.com/xanderfrangos/vsync-toggle). On AMD GPUs it sets the driver's *Wait for Vertical Refresh* setting, which applies to games started after the change. |
 
@@ -82,6 +83,17 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
     "port": 8008,
     "height": 360
   },
+  "icon": "material:extension",
+  "client_commands": [
+    {
+      "id": "toggle",
+      "label": "Toggle Something",
+      "icon": "material:toggle_on",
+      "top_level": true,
+      "script": "toggle.ps1",
+      "args": ["on"]
+    }
+  ],
   "options": [
     {
       "id": "level",
@@ -112,6 +124,8 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 | `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |
 | `panel`       | No       | A page shown on the plugin's card once it is installed: `file` (an `.html` file directly inside the plugin folder), and optionally `port` and `height` (in pixels, 100 to 2000, default 360). |
+| `client_commands` | No   | Commands added to Moonlight's in-stream menu while the plugin is active; see [Client commands](#client-commands). |
+| `icon`        | No       | Icon of the plugin's group of client commands in the menu, such as `material:extension` (a [Material Symbols](https://fonts.google.com/icons) name). |
 
 Each option has an `id` (lowercase letters, digits and `_`, starting with a letter), a `type`, and optionally a
 `label`, `description` and `default`.
@@ -122,6 +136,26 @@ Each option has an `id` (lowercase letters, digits and `_`, starting with a lett
 | `number`  | A number                                 | `min`, `max` and `step`                                                                       |
 | `string`  | Text                                     |                                                                                               |
 | `choice`  | One of the listed values                 | `choices`: an array of strings, or of objects with a `value` and a `label`                    |
+
+### Client commands
+A plugin can add commands to the [client commands](client_commands.md) that Moonlight clients show in their in-stream
+menu. They're offered while the plugin is installed and active and not turned off for the application being
+streamed. By default a plugin's commands are on a page of their own in the menu, opened by a button named after the
+plugin; a command with `"top_level": true` is shown with the menu's own commands instead.
+
+| Field        | Required | Description                                                                                        |
+|--------------|----------|----------------------------------------------------------------------------------------------------|
+| `id`         | Yes      | Like an option ID, unique within the plugin.                                                       |
+| `label`      | No       | The button's text. Defaults to `id`.                                                               |
+| `icon`       | No       | The button's icon, such as `material:pause_circle`.                                                |
+| `script`     | One of   | A `.ps1` file directly inside the plugin folder, run with the [script environment](#script-environment) in the plugin folder, without a console window, and left running. |
+| `args`       | No       | Arguments passed to `script`.                                                                      |
+| `steps`      | One of   | Key chords to type instead of running a script, as in [client commands](client_commands.md#files). |
+| `elevated`   | No       | Whether `script` runs as administrator. Defaults to the plugin's `elevated`.                       |
+| `top_level`  | No       | Show the command with the menu's own commands rather than on the plugin's page. Defaults to `false`. |
+| `close_menu` | No       | Whether the client closes its menu after running the command. Defaults to `true`.                  |
+
+Client commands only run while a stream is running, so they can rely on the plugin's do script having run.
 
 ### Panels
 A panel is an HTML page from the plugin folder that the web UI shows in a frame on the plugin's card, for example a

@@ -17,6 +17,9 @@ Open the **Client Commands** page in the web UI.
 * Each group under **Programs** has a name, an icon and the file names of one or more programs, such as
   `photoshop.exe`. While one of those programs is in the foreground on this host when the client opens its menu, the
   menu shows a button with the group's name, which opens a page of its commands. This works on Windows only for now.
+* **Plugins** lists the commands that come with [plugins](plugins.md#client-commands), such as *Nyrna Suspend*. They
+  can't be changed here. They're offered while the plugin is active and not turned off for the application being
+  streamed: those marked *Top level* with the menu's own commands, and the rest on a page named after the plugin.
 
 For each command, set:
 
@@ -27,7 +30,7 @@ For each command, set:
   * **Command Line** — a command started on this host and left running, optionally in a working directory and
     elevated. Its environment has `SUNSHINE_CLIENT_COMMAND_ID` and `SUNSHINE_CLIENT_COMMAND_LABEL`, the name of the
     client that picked it in `SUNSHINE_CLIENT_NAME`, and the application being streamed in `SUNSHINE_APP_ID` and
-    `SUNSHINE_APP_NAME`.
+    `SUNSHINE_APP_NAME`. It starts without a console window.
 * **Close the menu after running it** — turn this off for commands you may want to run several times in a row.
 
 Select **Save** to save every list at once. Changes apply the next time a client opens its menu.
@@ -64,7 +67,7 @@ Clients use two requests on the paired HTTPS port:
 
 * `GET /clientcommands` lists the commands offered now:
   `{"version": 1, "commands": [...], "groups": [{"kind": "app", "label": "...", "icon": "", "commands": [...]}]}`,
-  where a group's `kind` is `app` or `program`, and each command has `id`, `label`, `icon` and `close-menu`.
+  where a group's `kind` is `app`, `program` or `plugin`, and each command has `id`, `label`, `icon` and `close-menu`.
 * `GET /runclientcommand?id=<id>` runs one and answers `{"status": "ok"}`, or `{"status": "error", "message": "..."}`
   with 403 when the client isn't streaming, 404 when the command is no longer offered, 409 while another key sequence
   is being typed, and 500 when a command line couldn't start.

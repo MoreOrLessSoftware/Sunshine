@@ -142,6 +142,22 @@
             {{ $t('client_commands.add_program') }}
           </button>
         </div>
+
+        <!-- Commands that come with plugins, shown here to see but changed with the plugin -->
+        <template v-if="plugins.length > 0">
+          <div class="config-nav-heading">{{ $t('client_commands.plugins') }}</div>
+          <ul class="nav config-nav-list">
+            <li class="nav-item" v-for="plugin in plugins" :key="plugin.id">
+              <a class="nav-link" :class="{'active': currentView === 'plugin-' + plugin.id, 'text-decoration-line-through': !pluginRuns(plugin)}"
+                 :href="'#plugin-' + plugin.id" :aria-current="currentView === 'plugin-' + plugin.id ? 'page' : null"
+                 :title="pluginRuns(plugin) ? '' : $t('client_commands.plugin_inactive')">
+                <puzzle :size="18" class="icon"></puzzle>
+                <span class="text-truncate">{{ plugin.name }}</span>
+                <span class="badge rounded-pill text-bg-secondary command-count">{{ plugin.client_commands.length }}</span>
+              </a>
+            </li>
+          </ul>
+        </template>
       </nav>
 
       <div class="config-content">
@@ -193,6 +209,35 @@
             </div>
           </div>
 
+          <!-- A plugin's commands, read only -->
+          <template v-if="currentPlugin">
+            <div class="alert py-2" :class="pluginRuns(currentPlugin) ? 'alert-secondary' : 'alert-warning'">
+              {{ pluginRuns(currentPlugin) ? $t('client_commands.plugin_note') : $t('client_commands.plugin_inactive') }}
+              <a :href="'./plugins#plugin-' + encodeURIComponent(currentPlugin.id)">{{ $t('client_commands.plugin_settings') }}</a>
+            </div>
+            <ul class="list-group mb-3">
+              <li class="list-group-item d-flex align-items-center gap-3" v-for="command in currentPlugin.client_commands" :key="command.id">
+                <span class="command-icon">
+                  <span class="material-icon" v-if="glyph(command.icon)">{{ glyph(command.icon) }}</span>
+                </span>
+                <div class="flex-grow-1 min-w-0">
+                  <div class="fw-semibold">
+                    {{ command.label }}
+                    <span class="badge bg-info text-dark ms-1">{{ command.top_level ? $t('client_commands.top_level') : $t('client_commands.in_plugin_group') }}</span>
+                    <span class="badge bg-warning text-dark ms-1" v-if="command.script && command.elevated">{{ $t('_common.elevated') }}</span>
+                    <span class="badge bg-light text-dark border ms-1" v-if="!command.close_menu">{{ $t('client_commands.keeps_menu_open') }}</span>
+                  </div>
+                  <div class="command-summary text-muted">
+                    <square-terminal :size="14" class="icon" v-if="command.script"></square-terminal>
+                    <keyboard :size="14" class="icon" v-else></keyboard>
+                    {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}
+                  </div>
+                </div>
+              </li>
+            </ul>
+          </template>
+
+          <template v-else>
           <!-- The list -->
           <div v-if="currentList.length === 0 && !editor" class="alert alert-secondary">{{ $t('client_commands.empty') }}</div>
           <ul class="list-group mb-3" v-if="currentList.length > 0">
@@ -374,6 +419,7 @@
             <span class="small text-muted" v-if="dirty">{{ $t('client_commands.unsaved') }}</span>
           </div>
           <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
+          </template>
         </div>
       </div>
     </div>
@@ -386,7 +432,7 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search, SquareMousePointer, SquareTerminal, Trash2 } from '@lucide/vue'
+  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search, SquareMousePointer, SquareTerminal, Trash2 } from '@lucide/vue'
 
   // Recording stops after this long without a key
   const RECORD_IDLE_MS = 15000;
@@ -540,7 +586,7 @@
 
   const app = createApp({
     components: {
-      Navbar, IconChooser, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Save, Search,
+      Navbar, IconChooser, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search,
       SquareMousePointer, SquareTerminal, Trash2,
     },
     inject: ['i18n'],
@@ -555,9 +601,11 @@
         apps: [],
         // The groups shown while a program is in the foreground: {id, label, icon, programs, commands}
         programGroups: [],
+        // Plugins with client commands, as /api/plugins lists them
+        plugins: [],
         // The same as saved on the server, to tell what changed
         saved: {global: '[]', apps: {}, programGroups: '[]'},
-        // 'global', 'app-<index>' or 'program-<id>'
+        // 'global', 'app-<index>', 'program-<id>' or 'plugin-<id>'
         currentView: 'global',
         // The command being edited: {view, index (-1 for a new one), draft, error}
         editor: null,
@@ -585,6 +633,9 @@
       currentGroup() {
         return this.programGroups.find((group) => 'program-' + group.id === this.currentView) || null;
       },
+      currentPlugin() {
+        return this.plugins.find((plugin) => 'plugin-' + plugin.id === this.currentView) || null;
+      },
       viewTitle() {
         if (this.currentView === 'global') {
           return this.i18n.t('client_commands.global');
@@ -592,12 +643,18 @@
         if (this.currentGroup) {
           return this.currentGroup.label || this.i18n.t('client_commands.new_program');
         }
+        if (this.currentPlugin) {
+          return this.currentPlugin.name;
+        }
         const app = this.apps.find((a) => 'app-' + a.index === this.currentView);
         return app ? app.name : '';
       },
       viewDescription() {
         if (this.currentView === 'global') {
           return this.i18n.t('client_commands.global_desc');
+        }
+        if (this.currentPlugin) {
+          return this.i18n.t('client_commands.plugin_desc');
         }
         return this.i18n.t(this.currentGroup ? 'client_commands.program_desc' : 'client_commands.app_desc');
       },
@@ -654,12 +711,13 @@
             throw new Error(`HTTP ${response.status}`);
           }
           const body = await response.json();
+          this.plugins = await this.loadPlugins();
           this.global = (body.commands || []).map(normalize);
           this.apps = (body.apps || []).map((app) => ({index: app.index, name: app.name, commands: (app['client-commands'] || []).map(normalize)}));
           this.programGroups = (body['program-groups'] || []).map(normalizeGroup);
           this.markSaved();
           this.loadError = null;
-          if (this.currentView !== 'global' && !this.currentGroup && !this.apps.some((a) => 'app-' + a.index === this.currentView)) {
+          if (this.currentView !== 'global' && !this.currentGroup && !this.currentPlugin && !this.apps.some((a) => 'app-' + a.index === this.currentView)) {
             this.showView('global', true);
           }
         } catch (error) {
@@ -668,6 +726,23 @@
         } finally {
           this.loading = false;
         }
+      },
+      // The plugins that have client commands; none when they can't be listed
+      async loadPlugins() {
+        try {
+          const response = await apiFetch('./api/plugins', {method: 'GET'});
+          if (!response.ok) {
+            return [];
+          }
+          const body = await response.json();
+          return (body.plugins || []).filter((plugin) => (plugin.client_commands || []).length > 0);
+        } catch (error) {
+          console.error('Failed to load plugins', error);
+          return [];
+        }
+      },
+      pluginRuns(plugin) {
+        return plugin.installed && plugin.active;
       },
       markSaved() {
         this.saved.global = JSON.stringify(this.global.map(forServer));
@@ -739,7 +814,7 @@
       // --- Views
       viewFromHash() {
         const hash = window.location.hash.substring(1);
-        return /^app-\d+$/.test(hash) || /^program-[\w-]+$/.test(hash) ? hash : 'global';
+        return /^app-\d+$/.test(hash) || /^program-[\w-]+$/.test(hash) || /^plugin-[\w.-]+$/.test(hash) ? hash : 'global';
       },
       onHashChange() {
         const view = this.viewFromHash();

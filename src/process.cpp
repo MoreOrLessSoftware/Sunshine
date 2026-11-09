@@ -836,6 +836,7 @@ namespace proc {
           add_cmd(std::move(plugin_cmd));
         }
         ctx.display_plugin = plugins::display_plugin(exclude_plugins);
+        ctx.exclude_plugins = exclude_plugins;
 
         if (!exclude_global_prep.value_or(false)) {
           for (auto &prep_cmd : config::sunshine.prep_cmds) {

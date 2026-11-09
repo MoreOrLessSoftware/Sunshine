@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -50,13 +51,15 @@ namespace client_commands {
     std::string cmd;  ///< Command line of a `script` command.
     std::string working_dir;  ///< Directory a `script` command starts in, or empty to derive it from the command.
     bool elevated = false;  ///< Whether a `script` command runs elevated.
+    std::map<std::string, std::string> env;  ///< Variables added to a `script` command's environment, such as a plugin's.
+    std::filesystem::path log_file;  ///< File a `script` command's output is added to, or empty to discard it.
   };
 
   /**
    * @brief Commands shown together on one page of the client's menu.
    */
   struct group_t {
-    std::string kind;  ///< Where the group comes from: `app` or `program`.
+    std::string kind;  ///< Where the group comes from: `app`, `program` or `plugin`.
     std::string label;  ///< Text shown on the client's button for the group.
     std::string icon;  ///< Icon for the client's button, or empty for the client's default.
     std::vector<command_t> commands;  ///< Commands in the group, in menu order.
@@ -296,8 +299,8 @@ namespace client_commands {
   /**
    * @brief Build what is offered to a client now.
    *
-   * @return The global commands, those of the application being streamed, and those of the program in the
-   *         foreground.
+   * @return The global commands followed by the active plugins' top-level commands, then the groups of the
+   *         application being streamed, of the program in the foreground, and of the active plugins.
    */
   offer_t current_offer();
 

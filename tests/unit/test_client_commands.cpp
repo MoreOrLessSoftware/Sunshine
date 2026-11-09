@@ -355,6 +355,30 @@ TEST_F(ClientCommandsTest, ScriptsGetTheClientAndApp) {
   EXPECT_EQ(text.substr(0, text.find_first_of("\r\n")), "Living Room|1234|Desktop|env");
 }
 
+TEST_F(ClientCommandsTest, ScriptOutputGoesToTheLogFile) {
+  auto log = dir_ / "logs" / "plugin.log";
+  fs::create_directories(log.parent_path());
+  client_commands::command_t command {
+    .id = "log",
+    .label = "Logged",
+    .type = client_commands::type_e::script,
+    .cmd = "cmd.exe /c echo hello from the command",
+    .working_dir = dir_.string(),
+    .log_file = log,
+  };
+  std::string error;
+  ASSERT_EQ(client_commands::run(command, error), client_commands::run_result_e::ok) << error;
+
+  std::string text;
+  for (int i = 0; i < 100 && text.find("hello from the command") == std::string::npos; i++) {
+    std::this_thread::sleep_for(50ms);
+    std::ifstream in {log};
+    text.assign(std::istreambuf_iterator<char>(in), {});
+  }
+  EXPECT_NE(text.find("Running client command Logged"), std::string::npos) << text;
+  EXPECT_NE(text.find("hello from the command"), std::string::npos) << text;
+}
+
 TEST_F(ClientCommandsTest, RunStartsAScript) {
   client_commands::command_t command {.id = "x", .label = "Exit", .type = client_commands::type_e::script, .cmd = "cmd.exe /c exit 0", .working_dir = dir_.string()};
   std::string error;

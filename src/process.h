@@ -81,6 +81,7 @@ namespace proc {
     std::string id;  ///< Stable identifier for the configured application.
     std::string display_plugin;  ///< Name of an active plugin that sets up the display for this app; empty when Sunshine's display device configuration applies.
     std::vector<client_commands::command_t> client_commands;  ///< Commands a client can run from its overlay menu while this app is streamed.
+    std::vector<std::string> exclude_plugins;  ///< IDs of plugins this app opted out of.
     bool elevated;  ///< Whether the process should be launched elevated.
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.

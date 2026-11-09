@@ -1,0 +1,39 @@
+{
+  "id": "nyrna",
+  "name": "Nyrna",
+  "version": "1.0.0",
+  "description": "Adds a Nyrna Suspend command to Moonlight's in-stream menu, which suspends the game or application in the foreground and resumes it the next time it's picked, using Nyrna. If Nyrna is already running on this PC, the command presses its hotkey. Games with anti-cheat usually can't be suspended.",
+  "author": "Sunshine",
+  "homepage": "https://nyrna.merritt.codes/",
+  "order": 400,
+  "elevated": true,
+  "icon": "material:pause_circle",
+  "scripts": {
+    "install": "install.ps1"
+  },
+  "options": [
+    {
+      "id": "hotkey",
+      "type": "string",
+      "label": "Nyrna's hotkey",
+      "description": "The hotkey set in Nyrna, such as Pause or Ctrl+Alt+P. When Nyrna is already running (for example installed, with its tray icon), the command presses this hotkey instead, since a second Nyrna can't run alongside it.",
+      "default": "Pause"
+    },
+    {
+      "id": "minimize",
+      "type": "boolean",
+      "label": "Minimize while suspended",
+      "description": "Minimize the window when it's suspended, and restore it when it's resumed. Turn this off to leave the frozen window on screen. When Nyrna is already running, its own setting applies instead.",
+      "default": true
+    }
+  ],
+  "client_commands": [
+    {
+      "id": "toggle",
+      "label": "Nyrna Suspend",
+      "icon": "material:pause_circle",
+      "top_level": true,
+      "script": "toggle.ps1"
+    }
+  ]
+}

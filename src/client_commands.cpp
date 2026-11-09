@@ -5,11 +5,16 @@
 // standard includes
 #include <algorithm>
 #include <condition_variable>
+#include <cstdio>
 #include <format>
 #include <fstream>
 #include <mutex>
 #include <stop_token>
 #include <thread>
+
+#ifdef _WIN32
+  #include <share.h>
+#endif
 
 // lib includes
 #include <boost/algorithm/string/predicate.hpp>
@@ -20,6 +25,7 @@
 #include "client_commands.h"
 #include "input.h"
 #include "logging.h"
+#include "plugins.h"
 #include "process.h"
 
 using namespace std::literals;
@@ -212,6 +218,9 @@ namespace client_commands {
       if (!context.app_name.empty()) {
         env["SUNSHINE_APP_NAME"] = context.app_name;
       }
+      for (const auto &[name, value] : command.env) {
+        env[name] = value;
+      }
 
       boost::filesystem::path working_dir = command.working_dir.empty() ?
                                               proc::find_working_directory(command.cmd, env) :
@@ -219,8 +228,23 @@ namespace client_commands {
 
       BOOST_LOG(info) << "Running client command ["sv << command.label << "]: ["sv << command.cmd << "] in ["sv << working_dir << ']';
 
+      // The output goes to the log file when there is one, with a heading for each run
+      std::unique_ptr<FILE, decltype(&std::fclose)> log {nullptr, &std::fclose};
+      if (!command.log_file.empty()) {
+#ifdef _WIN32
+        log.reset(_wfsopen(command.log_file.wstring().c_str(), L"a", _SH_DENYNO));
+#else
+        log.reset(std::fopen(command.log_file.c_str(), "a"));
+#endif
+        if (log) {
+          std::fputs(std::format("\nRunning client command {}\n", command.label).c_str(), log.get());
+          std::fflush(log.get());
+        }
+      }
+
       std::error_code ec;
-      auto child = platf::run_command(command.elevated, true, command.cmd, working_dir, env, nullptr, ec, nullptr);
+      // Without a console window, which would show over the game and could take the foreground
+      auto child = platf::run_command(command.elevated, false, command.cmd, working_dir, env, log.get(), ec, nullptr);
       if (ec) {
         error = std::format("Couldn't start [{}]: {}", command.cmd, ec.message());
         BOOST_LOG(warning) << error;
@@ -631,12 +655,14 @@ namespace client_commands {
     std::string app_id;
     std::string app_name;
     std::vector<command_t> app_commands;
+    std::vector<std::string> excluded_plugins;
 
     if (const int running_id = proc::proc.running(); running_id > 0) {
       for (const auto &app : proc::proc.get_apps()) {
         if (app.id == std::to_string(running_id)) {
           app_id = app.id;
           app_name = app.name;
+          excluded_plugins = app.exclude_plugins;
           app_commands = app.client_commands;
           break;
         }
@@ -650,6 +676,16 @@ namespace client_commands {
       auto program = foreground_program();
       for (auto &group : program_offer(groups, program)) {
         offer.groups.push_back(std::move(group));
+      }
+    }
+
+    // The active plugins' commands: some with the menu's own, the rest in a group for each plugin
+    for (auto &plugin : plugins::offered_client_commands(excluded_plugins)) {
+      for (auto &command : plugin.top_level) {
+        offer.commands.push_back(std::move(command));
+      }
+      if (!plugin.grouped.empty()) {
+        offer.groups.push_back(group_t {"plugin", plugin.name, plugin.icon, std::move(plugin.grouped)});
       }
     }
 

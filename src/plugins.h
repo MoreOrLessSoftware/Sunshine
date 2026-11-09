@@ -27,6 +27,7 @@
 #include <nlohmann/json.hpp>
 
 // local includes
+#include "client_commands.h"
 #include "config.h"
 #include "platform/common.h"
 
@@ -87,6 +88,23 @@ namespace plugins {
   };
 
   /**
+   * @brief A command the plugin adds to clients' in-stream overlay menus (see `client_commands`).
+   *
+   * It either runs one of the plugin's scripts, with the plugin's environment, or types key chords.
+   */
+  struct client_command_t {
+    std::string id;  ///< Identifier, unique within the plugin.
+    std::string label;  ///< Text shown on the client's button.
+    std::string icon;  ///< Icon for the client's button, such as `material:<name>`, or empty for none.
+    bool close_menu = true;  ///< Whether the client closes its menu after running the command.
+    bool top_level = false;  ///< Whether the command is shown with the menu's own commands rather than in the plugin's group.
+    std::string script;  ///< Script file relative to the plugin directory, or empty for a command that types keys.
+    std::vector<std::string> args;  ///< Arguments passed to the script.
+    std::vector<std::vector<std::uint16_t>> steps;  ///< Key chords a command without a script types.
+    bool elevated = false;  ///< Whether the script runs elevated; defaults to the plugin's `elevated`.
+  };
+
+  /**
    * @brief An HTML page from the plugin directory shown on the plugin's card.
    *
    * The page may read data from one local port through `/api/plugins/proxy`, so a plugin that starts a local
@@ -114,6 +132,8 @@ namespace plugins {
     scripts_t scripts;  ///< Scripts the plugin provides.
     std::vector<option_t> options;  ///< Configuration options.
     std::vector<action_t> actions;  ///< Buttons that run scripts on demand.
+    std::vector<client_command_t> client_commands;  ///< Commands added to clients' overlay menus.
+    std::string icon;  ///< Icon of the plugin's group in clients' overlay menus, or empty for the clients' default.
     std::optional<panel_t> panel;  ///< Page shown on the plugin's card.
     std::filesystem::path dir;  ///< Directory containing the manifest.
     bool builtin;  ///< Whether the plugin ships with Sunshine.
@@ -346,6 +366,28 @@ namespace plugins {
    *         `manages_display`, or an empty string when there is none.
    */
   std::string display_plugin(const std::vector<std::string> &excluded);
+
+  /**
+   * @brief The client commands of one plugin, as offered to clients.
+   */
+  struct offered_commands_t {
+    std::string id;  ///< Plugin ID.
+    std::string name;  ///< Plugin name, the label of its group.
+    std::string icon;  ///< Icon of the plugin's group.
+    std::vector<client_commands::command_t> grouped;  ///< Commands shown in the plugin's group.
+    std::vector<client_commands::command_t> top_level;  ///< Commands shown with the menu's own commands.
+  };
+
+  /**
+   * @brief Build the client commands of the active plugins.
+   *
+   * A script command runs with the plugin's environment, in the plugin directory; its ID is
+   * `plugin:<plugin id>/<command id>`.
+   *
+   * @param excluded IDs of plugins the application being streamed opted out of.
+   * @return In plugin order, the commands of each active, installed plugin that has any.
+   */
+  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded);
 
   /**
    * @brief Change whether a plugin is active and the values of its options.

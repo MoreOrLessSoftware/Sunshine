@@ -455,6 +455,110 @@ namespace plugins {
     }
 
     /**
+     * @brief Parse the client commands of a manifest.
+     *
+     * @param node Array of command objects.
+     * @param dir Plugin directory.
+     * @param elevated Whether a script runs elevated when its command doesn't say.
+     * @param out Receives the parsed commands.
+     * @param error Receives the reason when the list is invalid.
+     * @return `false` when the list is invalid.
+     */
+    bool parse_client_commands(const json &node, const fs::path &dir, bool elevated, std::vector<client_command_t> &out, std::string &error) {
+      if (!node.is_array()) {
+        error = "'client_commands' must be an array";
+        return false;
+      }
+      for (const auto &entry : node) {
+        if (!entry.is_object()) {
+          error = "each client command must be an object";
+          return false;
+        }
+        client_command_t command;
+        command.elevated = elevated;
+        if (!read_string(entry, "id", command.id, error) ||
+            !read_string(entry, "label", command.label, error) ||
+            !read_string(entry, "icon", command.icon, error) ||
+            !read_string(entry, "script", command.script, error)) {
+          return false;
+        }
+        if (!is_valid_option_id(command.id)) {
+          error = std::format("invalid client command id '{}'", command.id);
+          return false;
+        }
+        if (std::ranges::any_of(out, [&command](const client_command_t &existing) {
+              return existing.id == command.id;
+            })) {
+          error = std::format("duplicate client command id '{}'", command.id);
+          return false;
+        }
+        for (const auto &[key, member] : {std::pair {"close_menu", &command.close_menu}, std::pair {"top_level", &command.top_level}, std::pair {"elevated", &command.elevated}}) {
+          if (entry.contains(key)) {
+            if (!entry[key].is_boolean()) {
+              error = std::format("client command '{}': '{}' must be a boolean", command.id, key);
+              return false;
+            }
+            *member = entry[key].get<bool>();
+          }
+        }
+        if (command.label.empty()) {
+          command.label = command.id;
+        }
+
+        if (entry.contains("args")) {
+          if (!entry["args"].is_array() || !std::ranges::all_of(entry["args"], [](const json &arg) {
+                return arg.is_string();
+              })) {
+            error = std::format("client command '{}': 'args' must be an array of strings", command.id);
+            return false;
+          }
+          for (const auto &arg : entry["args"]) {
+            command.args.push_back(arg.get<std::string>());
+          }
+        }
+
+        const bool has_steps = entry.contains("steps");
+        if (command.script.empty() == !has_steps) {
+          error = std::format("client command '{}' needs either a script or steps", command.id);
+          return false;
+        }
+        if (has_steps) {
+          // Checked as a command of the host's own would be
+          std::string reason;
+          auto keys = client_commands::parse_command({{"id", command.id}, {"label", command.label}, {"type", "keys"}, {"steps", entry["steps"]}}, command.id, reason);
+          if (!keys) {
+            error = std::format("client command '{}': {}", command.id, reason);
+            return false;
+          }
+          command.steps = std::move(keys->steps);
+        } else if (!is_valid_script(command.script, dir, error)) {
+          return false;
+        }
+
+        out.emplace_back(std::move(command));
+      }
+      return true;
+    }
+
+    /**
+     * @brief Quote an argument for a command line.
+     *
+     * @param arg Argument.
+     * @return The argument in double quotes, with embedded quotes escaped.
+     */
+    std::string quote_arg(const std::string &arg) {
+      std::string quoted = "\"";
+      for (const char c : arg) {
+        if (c == '"') {
+          quoted += "\\\"";
+        } else {
+          quoted += c;
+        }
+      }
+      return quoted + "\"";
+    }
+
+    /**
      * @brief Parse the panel of a manifest.
      *
      * @param node Panel object.
@@ -826,6 +930,12 @@ namespace plugins {
     if (node.contains("actions") && !parse_actions(node["actions"], dir, manifest.actions, error)) {
       return std::nullopt;
     }
+    if (node.contains("client_commands") && !parse_client_commands(node["client_commands"], dir, manifest.elevated, manifest.client_commands, error)) {
+      return std::nullopt;
+    }
+    if (!read_string(node, "icon", manifest.icon, error)) {
+      return std::nullopt;
+    }
     if (node.contains("panel")) {
       manifest.panel = parse_panel(node["panel"], dir, error);
       if (!manifest.panel) {
@@ -1122,6 +1232,20 @@ namespace plugins {
       for (const auto &action : manifest.actions) {
         actions.push_back({{"id", action.id}, {"label", action.label}, {"description", action.description}});
       }
+      json client_commands = json::array();
+      for (const auto &command : manifest.client_commands) {
+        client_commands.push_back({
+          {"id", command.id},
+          {"label", command.label},
+          {"icon", command.icon},
+          {"close_menu", command.close_menu},
+          {"top_level", command.top_level},
+          {"script", command.script},
+          {"args", command.args},
+          {"steps", command.steps},
+          {"elevated", command.elevated},
+        });
+      }
       json panel = nullptr;
       if (manifest.panel) {
         panel = {{"height", manifest.panel->height}, {"proxy", manifest.panel->port != 0}};
@@ -1140,6 +1264,8 @@ namespace plugins {
         {"order", manifest.order},
         {"options", std::move(options)},
         {"actions", std::move(actions)},
+        {"client_commands", std::move(client_commands)},
+        {"icon", manifest.icon},
         {"panel", std::move(panel)},
         {"installed", state.installed},
         {"active", state.active},
@@ -1178,6 +1304,49 @@ namespace plugins {
       add(manifest.scripts.connect_script, manifest.scripts.disconnect_script, config::prep_cmd_t::type_e::connect);
     }
     return cmds;
+  }
+
+  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    std::vector<offered_commands_t> offered;
+    for (const auto &manifest : reg.manifests) {
+      if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end()) {
+        continue;
+      }
+      const auto it = reg.state.find(manifest.id);
+      if (it == reg.state.end() || !it->second.active || !it->second.installed) {
+        continue;
+      }
+
+      offered_commands_t plugin {manifest.id, manifest.name, manifest.icon, {}, {}};
+      const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
+      for (const auto &source : manifest.client_commands) {
+        client_commands::command_t command;
+        command.id = std::format("plugin:{}/{}", manifest.id, source.id);
+        command.label = source.label;
+        command.icon = source.icon;
+        command.close_menu = source.close_menu;
+        if (source.script.empty()) {
+          command.type = client_commands::type_e::keys;
+          command.steps = source.steps;
+        } else {
+          command.type = client_commands::type_e::script;
+          command.cmd = script_command(manifest.dir / source.script);
+          for (const auto &arg : source.args) {
+            command.cmd += ' ' + quote_arg(arg);
+          }
+          command.working_dir = path_to_utf8(manifest.dir);
+          command.elevated = source.elevated;
+          command.env = env;
+          command.log_file = plugin_log_file(reg.paths, manifest.id);
+        }
+        (source.top_level ? plugin.top_level : plugin.grouped).push_back(std::move(command));
+      }
+      offered.push_back(std::move(plugin));
+    }
+    return offered;
   }
 
   std::string display_plugin(const std::vector<std::string> &excluded) {

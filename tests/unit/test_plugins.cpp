@@ -1505,3 +1505,158 @@ TEST_F(PluginsPowerShellTest, CancelStopsRunningScript) {
   EXPECT_EQ(plugin["task"]["exit_code"], -1);
 }
 #endif
+
+
+TEST_F(PluginsTest, ParseManifestReadsClientCommands) {
+  write_text(builtin_dir / "toggle.ps1", "exit 0\n");
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(R"({
+    "id": "p", "elevated": true, "icon": "material:pause",
+    "client_commands": [
+      {"id": "toggle", "label": "Suspend", "icon": "material:pause_circle", "top_level": true, "script": "toggle.ps1", "args": ["on", "two words"]},
+      {"id": "keys", "steps": [[17, 27]], "close_menu": false, "elevated": false}
+    ]
+  })"),
+                                          builtin_dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->icon, "material:pause");
+  ASSERT_EQ(manifest->client_commands.size(), 2);
+
+  const auto &toggle = manifest->client_commands[0];
+  EXPECT_EQ(toggle.label, "Suspend");
+  EXPECT_EQ(toggle.icon, "material:pause_circle");
+  EXPECT_TRUE(toggle.top_level);
+  EXPECT_TRUE(toggle.close_menu);
+  EXPECT_TRUE(toggle.elevated);
+  EXPECT_EQ(toggle.script, "toggle.ps1");
+  EXPECT_EQ(toggle.args, (std::vector<std::string> {"on", "two words"}));
+
+  const auto &keys = manifest->client_commands[1];
+  EXPECT_EQ(keys.label, "keys");
+  EXPECT_FALSE(keys.top_level);
+  EXPECT_FALSE(keys.close_menu);
+  EXPECT_FALSE(keys.elevated);
+  EXPECT_EQ(keys.steps, (std::vector<std::vector<std::uint16_t>> {{17, 27}}));
+}
+
+TEST_F(PluginsTest, InvalidClientCommandsAreRejected) {
+  write_text(builtin_dir / "exists.ps1", "exit 0\n");
+  const std::vector<std::pair<std::string, std::string>> cases {
+    {R"({"id":"p","client_commands":{}})", "'client_commands' must be an array"},
+    {R"({"id":"p","client_commands":[1]})", "each client command must be an object"},
+    {R"({"id":"p","client_commands":[{"id":"Bad","script":"exists.ps1"}]})", "invalid client command id 'Bad'"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1"},{"id":"a","script":"exists.ps1"}]})", "duplicate client command id 'a'"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","top_level":"yes"}]})", "'top_level' must be a boolean"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","close_menu":1}]})", "'close_menu' must be a boolean"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","elevated":"no"}]})", "'elevated' must be a boolean"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","args":"x"}]})", "'args' must be an array of strings"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","args":[1]}]})", "'args' must be an array of strings"},
+    {R"({"id":"p","client_commands":[{"id":"a"}]})", "needs either a script or steps"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","steps":[[27]]}]})", "needs either a script or steps"},
+    {R"({"id":"p","client_commands":[{"id":"a","steps":[[0]]}]})", "key codes"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"missing.ps1"}]})", "does not exist"},
+    {R"({"id":"p","client_commands":[{"id":"a","label":5,"script":"exists.ps1"}]})", "'label' must be a string"},
+    {R"({"id":"p","icon":5})", "'icon' must be a string"},
+  };
+  for (const auto &[manifest, expected] : cases) {
+    std::string error;
+    EXPECT_FALSE(plugins::parse_manifest(json::parse(manifest), builtin_dir, true, error)) << manifest;
+    EXPECT_TRUE(error.contains(expected)) << manifest << ": " << error;
+  }
+}
+
+TEST_F(PluginsTest, ActivePluginsOfferTheirClientCommands) {
+  const auto dir = write_plugin(builtin_dir, "nyrna", {
+                                                       {"id", "nyrna"},
+                                                       {"name", "Nyrna"},
+                                                       {"icon", "material:pause"},
+                                                       {"elevated", true},
+                                                       {"order", 10},
+                                                       {"options", json::array({{{"id", "minimize"}, {"type", "boolean"}, {"default", true}}})},
+                                                     });
+  write_text(dir / "toggle.ps1", "exit 0\n");
+  auto manifest = json::parse(read_text(dir / "plugin.json"));
+  manifest["client_commands"] = json::parse(R"([
+    {"id": "toggle", "label": "Nyrna Suspend", "top_level": true, "script": "toggle.ps1", "args": ["say \"hi\""]},
+    {"id": "esc", "label": "Escape", "steps": [[27]]}
+  ])");
+  write_text(dir / "plugin.json", manifest.dump());
+  write_plugin(builtin_dir, "inactive", {{"id", "inactive"}, {"client_commands", json::parse(R"([{"id": "esc", "steps": [[27]]}])")}});
+  write_plugin(builtin_dir, "none", {{"id", "none"}});
+  write_text(state_file, R"({"plugins":{
+    "nyrna":{"installed":true,"active":true},
+    "inactive":{"installed":true,"active":false},
+    "none":{"installed":true,"active":true}
+  }})");
+  plugins::load(paths());
+
+  const auto offered = plugins::offered_client_commands({});
+  ASSERT_EQ(offered.size(), 1);
+  EXPECT_EQ(offered[0].id, "nyrna");
+  EXPECT_EQ(offered[0].name, "Nyrna");
+  EXPECT_EQ(offered[0].icon, "material:pause");
+
+  ASSERT_EQ(offered[0].top_level.size(), 1);
+  const auto &toggle = offered[0].top_level[0];
+  EXPECT_EQ(toggle.id, "plugin:nyrna/toggle");
+  EXPECT_EQ(toggle.type, client_commands::type_e::script);
+  EXPECT_EQ(toggle.cmd, plugins::script_command(dir / "toggle.ps1") + R"( "say \"hi\"")");
+  EXPECT_EQ(fs::path(toggle.working_dir), dir);
+  EXPECT_TRUE(toggle.elevated);
+  EXPECT_EQ(toggle.env.at("SUNSHINE_PLUGIN_ID"), "nyrna");
+  EXPECT_EQ(toggle.env.at("SUNSHINE_PLUGIN_OPT_MINIMIZE"), "true");
+  EXPECT_EQ(toggle.log_file.filename(), "nyrna.log");
+
+  ASSERT_EQ(offered[0].grouped.size(), 1);
+  EXPECT_EQ(offered[0].grouped[0].id, "plugin:nyrna/esc");
+  EXPECT_EQ(offered[0].grouped[0].type, client_commands::type_e::keys);
+  EXPECT_TRUE(offered[0].grouped[0].env.empty());
+
+  // An app that opts out of the plugin doesn't get them
+  EXPECT_TRUE(plugins::offered_client_commands({"nyrna"}).empty());
+
+  const auto listed = find_plugin(plugins::list(), "nyrna");
+  EXPECT_EQ(listed["icon"], "material:pause");
+  ASSERT_EQ(listed["client_commands"].size(), 2);
+  EXPECT_EQ(listed["client_commands"][0]["top_level"], true);
+  EXPECT_EQ(listed["client_commands"][0]["script"], "toggle.ps1");
+  EXPECT_EQ(listed["client_commands"][1]["steps"], json::parse("[[27]]"));
+}
+
+#ifdef _WIN32
+TEST(PluginsBundledTest, NyrnaManifestIsValid) {
+  // The bundled plugins sit next to the shaders in the source tree
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "nyrna";
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  ASSERT_EQ(manifest->client_commands.size(), 1);
+  EXPECT_EQ(manifest->client_commands[0].label, "Nyrna Suspend");
+  EXPECT_TRUE(manifest->client_commands[0].top_level);
+  EXPECT_TRUE(manifest->client_commands[0].elevated);
+}
+#endif
+
+TEST_F(PluginsTest, TheClientsOfferShowsTopLevelCommandsWithTheMenusOwn) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"name", "Plugin"},
+                                   {"client_commands", json::parse(R"([{"id": "top", "label": "Top", "top_level": true, "steps": [[27]]}, {"id": "grouped", "label": "Grouped", "steps": [[27]]}])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  write_text(root / "client_commands.json", R"({"commands": [{"id": "own", "label": "Own", "type": "keys", "steps": [[27]]}]})");
+  client_commands::set_file_for_testing(root / "client_commands.json");
+  const auto offer = client_commands::current_offer();
+  client_commands::set_file_for_testing({});
+
+  ASSERT_EQ(offer.commands.size(), 2);
+  EXPECT_EQ(offer.commands[0].id, "own");
+  EXPECT_EQ(offer.commands[1].id, "plugin:p/top");
+  ASSERT_EQ(offer.groups.size(), 1);
+  EXPECT_EQ(offer.groups[0].kind, "plugin");
+  EXPECT_EQ(offer.groups[0].label, "Plugin");
+  ASSERT_EQ(offer.groups[0].commands.size(), 1);
+  EXPECT_EQ(offer.groups[0].commands[0].id, "plugin:p/grouped");
+}
