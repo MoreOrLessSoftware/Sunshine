@@ -102,6 +102,7 @@ namespace plugins {
     std::vector<std::string> args;  ///< Arguments passed to the script.
     std::vector<std::vector<std::uint16_t>> steps;  ///< Key chords a command without a script types.
     bool elevated = false;  ///< Whether the script runs elevated; defaults to the plugin's `elevated`.
+    std::string status_file;  ///< JSON file in the plugin's data directory whose `label` and `icon` replace the command's while it exists, or empty for none.
   };
 
   /**

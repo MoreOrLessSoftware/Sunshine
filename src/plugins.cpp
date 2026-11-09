@@ -479,7 +479,13 @@ namespace plugins {
         if (!read_string(entry, "id", command.id, error) ||
             !read_string(entry, "label", command.label, error) ||
             !read_string(entry, "icon", command.icon, error) ||
-            !read_string(entry, "script", command.script, error)) {
+            !read_string(entry, "script", command.script, error) ||
+            !read_string(entry, "status_file", command.status_file, error)) {
+          return false;
+        }
+        if (!command.status_file.empty() &&
+            (command.status_file.find_first_of("/\\:") != std::string::npos || command.status_file.starts_with('.'))) {
+          error = std::format("client command '{}': 'status_file' must be a file name in the plugin's data directory", command.id);
           return false;
         }
         if (!is_valid_option_id(command.id)) {
@@ -538,6 +544,34 @@ namespace plugins {
         out.emplace_back(std::move(command));
       }
       return true;
+    }
+
+    /**
+     * @brief Apply a client command's status file, which a script writes to change the command while it exists.
+     *
+     * @param file Status file.
+     * @param command Command to change: its label and icon, when the file sets them.
+     */
+    void apply_status_file(const fs::path &file, client_commands::command_t &command) {
+      std::error_code ec;
+      if (!fs::is_regular_file(file, ec)) {
+        return;
+      }
+      try {
+        std::ifstream in {file};
+        const auto status = json::parse(in);
+        if (!status.is_object()) {
+          return;
+        }
+        if (status.contains("label") && status["label"].is_string() && !status["label"].get<std::string>().empty()) {
+          command.label = status["label"].get<std::string>();
+        }
+        if (status.contains("icon") && status["icon"].is_string()) {
+          command.icon = status["icon"].get<std::string>();
+        }
+      } catch (const std::exception &e) {
+        BOOST_LOG(warning) << "Ignoring the status file ["sv << path_to_utf8(file) << "]: "sv << e.what();
+      }
     }
 
     /**
@@ -1244,6 +1278,7 @@ namespace plugins {
           {"args", command.args},
           {"steps", command.steps},
           {"elevated", command.elevated},
+          {"status_file", command.status_file},
         });
       }
       json panel = nullptr;
@@ -1321,6 +1356,7 @@ namespace plugins {
       }
 
       offered_commands_t plugin {manifest.id, manifest.name, manifest.icon, {}, {}};
+      const auto data_dir = plugin_data_dir(reg.paths, manifest.id);
       const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
       for (const auto &source : manifest.client_commands) {
         client_commands::command_t command;
@@ -1328,6 +1364,9 @@ namespace plugins {
         command.label = source.label;
         command.icon = source.icon;
         command.close_menu = source.close_menu;
+        if (!source.status_file.empty()) {
+          apply_status_file(data_dir / source.status_file, command);
+        }
         if (source.script.empty()) {
           command.type = client_commands::type_e::keys;
           command.steps = source.steps;

@@ -1660,3 +1660,44 @@ TEST_F(PluginsTest, TheClientsOfferShowsTopLevelCommandsWithTheMenusOwn) {
   ASSERT_EQ(offer.groups[0].commands.size(), 1);
   EXPECT_EQ(offer.groups[0].commands[0].id, "plugin:p/grouped");
 }
+
+
+TEST_F(PluginsTest, AStatusFileChangesACommandWhileItExists) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"client_commands", json::parse(R"([{"id": "toggle", "label": "Suspend", "icon": "material:pause", "steps": [[27]], "status_file": "menu.json"}])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  auto command = [] {
+    return plugins::offered_client_commands({}).at(0).grouped.at(0);
+  };
+  EXPECT_EQ(command().label, "Suspend");
+
+  write_text(data_dir / "p" / "menu.json", R"j({"label": "Resume (Notepad)", "icon": "material:play_arrow"})j");
+  EXPECT_EQ(command().label, "Resume (Notepad)");
+  EXPECT_EQ(command().icon, "material:play_arrow");
+
+  // Only what it sets, and only when it's readable
+  write_text(data_dir / "p" / "menu.json", R"({"label": ""})");
+  EXPECT_EQ(command().label, "Suspend");
+  EXPECT_EQ(command().icon, "material:pause");
+  write_text(data_dir / "p" / "menu.json", "[]");
+  EXPECT_EQ(command().label, "Suspend");
+  write_text(data_dir / "p" / "menu.json", "{ broken");
+  EXPECT_EQ(command().label, "Suspend");
+
+  fs::remove(data_dir / "p" / "menu.json");
+  EXPECT_EQ(command().label, "Suspend");
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["client_commands"][0]["status_file"], "menu.json");
+}
+
+TEST_F(PluginsTest, StatusFilesMustBeInTheDataDirectory) {
+  for (const auto *name : {"../menu.json", "sub/menu.json", "C:menu.json", ".hidden"}) {
+    std::string error;
+    json manifest = {{"id", "p"}, {"client_commands", json::array({{{"id", "a"}, {"steps", json::parse("[[27]]")}, {"status_file", name}}})}};
+    EXPECT_FALSE(plugins::parse_manifest(manifest, builtin_dir, true, error)) << name;
+    EXPECT_TRUE(error.contains("'status_file' must be a file name")) << name << ": " << error;
+  }
+}

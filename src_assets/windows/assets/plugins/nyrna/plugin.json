@@ -1,15 +1,16 @@
 {
   "id": "nyrna",
   "name": "Nyrna",
-  "version": "1.0.0",
-  "description": "Adds a Nyrna Suspend command to Moonlight's in-stream menu, which suspends the game or application in the foreground and resumes it the next time it's picked, using Nyrna. If Nyrna is already running on this PC, the command presses its hotkey. Games with anti-cheat usually can't be suspended.",
+  "version": "1.1.0",
+  "description": "Adds a Nyrna Suspend command to Moonlight's in-stream menu, which suspends the game or application in the foreground using Nyrna. While it's suspended, a notification on this PC shows it with a Resume button, and the command becomes Nyrna Resume. If Nyrna is already running on this PC, the command presses its hotkey. Games with anti-cheat usually can't be suspended.",
   "author": "Sunshine",
   "homepage": "https://nyrna.merritt.codes/",
   "order": 400,
   "elevated": true,
   "icon": "material:pause_circle",
   "scripts": {
-    "install": "install.ps1"
+    "install": "install.ps1",
+    "uninstall": "uninstall.ps1"
   },
   "options": [
     {
@@ -22,8 +23,8 @@
     {
       "id": "minimize",
       "type": "boolean",
-      "label": "Minimize while suspended",
-      "description": "Minimize the window when it's suspended, and restore it when it's resumed. Turn this off to leave the frozen window on screen. When Nyrna is already running, its own setting applies instead.",
+      "label": "Allow minimizing",
+      "description": "Turn this off to leave the frozen window on screen while it's suspended. When it's on, Nyrna's own setting decides whether the window is minimized.",
       "default": true
     }
   ],
@@ -33,7 +34,8 @@
       "label": "Nyrna Suspend",
       "icon": "material:pause_circle",
       "top_level": true,
-      "script": "toggle.ps1"
+      "script": "toggle.ps1",
+      "status_file": "menu.json"
     }
   ]
 }
