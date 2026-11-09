@@ -550,6 +550,17 @@ namespace plugins {
           }
         }
 
+        if (entry.contains("programs")) {
+          const auto &programs = entry["programs"];
+          if (!programs.is_array() || programs.empty() || !std::ranges::all_of(programs, [](const json &program) {
+                return program.is_string() && !program.get<std::string>().empty();
+              })) {
+            error = std::format("client command '{}': 'programs' must be a non-empty array of file names", command.id);
+            return false;
+          }
+          command.programs = programs.get<std::vector<std::string>>();
+        }
+
         const bool has_steps = entry.contains("steps");
         if (command.script.empty() == !has_steps) {
           error = std::format("client command '{}' needs either a script or steps", command.id);
@@ -1374,6 +1385,7 @@ namespace plugins {
           {"steps", command.steps},
           {"elevated", command.elevated},
           {"status_file", command.status_file},
+          {"programs", command.programs},
         });
       }
       json panel = nullptr;
@@ -1441,6 +1453,7 @@ namespace plugins {
     std::scoped_lock lock {reg.mutex};
 
     std::vector<offered_commands_t> offered;
+    std::optional<std::string> foreground;  // Only looked up when a command is limited to programs
     for (const auto &manifest : reg.manifests) {
       if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end()) {
         continue;
@@ -1454,12 +1467,24 @@ namespace plugins {
       const auto data_dir = plugin_data_dir(reg.paths, manifest.id);
       const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
       for (const auto &source : manifest.client_commands) {
+        const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id));
+        const bool has_override = entry != overrides.end();
+        const auto &programs = has_override && entry->second.programs ? *entry->second.programs : source.programs;
+        if (!programs.empty()) {
+          if (!foreground) {
+            foreground = client_commands::foreground_program();
+          }
+          if (!client_commands::matches(programs, *foreground)) {
+            continue;
+          }
+        }
+
         client_commands::command_t command;
         command.id = std::format("plugin:{}/{}", manifest.id, source.id);
         command.label = source.label;
         command.icon = source.icon;
         command.close_menu = source.close_menu;
-        if (const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id)); entry != overrides.end()) {
+        if (has_override) {
           if (!entry->second.label.empty()) {
             command.label = entry->second.label;
           }

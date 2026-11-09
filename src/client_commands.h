@@ -77,11 +77,12 @@ namespace client_commands {
   };
 
   /**
-   * @brief The user's label and icon for a command that comes with a plugin.
+   * @brief The user's label, icon and programs for a command that comes with a plugin.
    */
   struct plugin_override_t {
     std::string label;  ///< Label to show instead of the plugin's, or empty to keep it.
     std::string icon;  ///< Icon to show instead of the plugin's, such as `material:<name>`, or empty to keep it.
+    std::optional<std::vector<std::string>> programs;  ///< Programs to limit the command to instead of the plugin's, empty for no limit, or `std::nullopt` to keep the plugin's.
   };
 
   /**
@@ -173,6 +174,15 @@ namespace client_commands {
    * @return Groups from its `program-groups` array; empty when the file is missing or unreadable.
    */
   std::vector<program_group_t> load_program_groups(const std::filesystem::path &file);
+
+  /**
+   * @brief Check whether a list of programs includes a program.
+   *
+   * @param programs File names of the programs. A path matches by its file name.
+   * @param program File name of the program, such as `notepad.exe`.
+   * @return `true` when one of the programs has the same file name, ignoring case.
+   */
+  bool matches(const std::vector<std::string> &programs, std::string_view program);
 
   /**
    * @brief Check whether a program group is for a program.

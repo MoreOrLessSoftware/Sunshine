@@ -695,6 +695,35 @@ TEST(ClientCommandsPluginOverrides, ParsesAndRoundTrips) {
   EXPECT_TRUE(client_commands::parse_plugin_overrides(json::array()).empty());
 }
 
+TEST(ClientCommandsPluginOverrides, ProgramsKeepTheDifferenceBetweenAbsentAndEmpty) {
+  auto overrides = client_commands::parse_plugin_overrides(json::parse(R"({
+    "p/only": {"programs": ["game.exe", "other.exe"]},
+    "p/any": {"programs": []},
+    "p/label": {"label": "L"},
+    "p/bad-type": {"programs": "game.exe"},
+    "p/bad-item": {"programs": [1]},
+    "p/bad-empty": {"programs": [""]}
+  })"));
+  ASSERT_EQ(overrides.size(), 3);
+  EXPECT_EQ(overrides["p/only"].programs, (std::vector<std::string> {"game.exe", "other.exe"}));
+  ASSERT_TRUE(overrides["p/any"].programs);  // an empty list on its own still changes something
+  EXPECT_TRUE(overrides["p/any"].programs->empty());
+  EXPECT_FALSE(overrides["p/label"].programs);
+
+  EXPECT_EQ(client_commands::to_json(overrides), json::parse(R"({
+    "p/only": {"programs": ["game.exe", "other.exe"]},
+    "p/any": {"programs": []},
+    "p/label": {"label": "L"}
+  })"));
+
+  std::string error;
+  EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::parse(R"({"a/b": {"programs": [""]}})"), error));
+  EXPECT_NE(error.find("\"programs\" must be an array of file names"), std::string::npos) << error;
+  const auto strict = client_commands::parse_plugin_overrides_strict(json::parse(R"({"a/b": {"programs": []}})"), error);
+  ASSERT_TRUE(strict);
+  EXPECT_EQ(strict->size(), 1);
+}
+
 TEST(ClientCommandsPluginOverrides, StrictParsingRejectsAnythingInvalid) {
   std::string error;
   EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::array(), error));

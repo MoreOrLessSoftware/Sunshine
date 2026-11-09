@@ -151,6 +151,8 @@ protected:
     plugins::reset_script_runner_for_testing();
     plugins::set_change_callback({});
     plugins::load({});
+    client_commands::set_foreground_program_for_testing(std::nullopt);
+    client_commands::set_file_for_testing({});
     fs::remove_all(root);
     BaseTest::TearDown();
   }
@@ -1724,6 +1726,10 @@ TEST_F(PluginsTest, InvalidClientCommandsAreRejected) {
   write_text(builtin_dir / "exists.ps1", "exit 0\n");
   const std::vector<std::pair<std::string, std::string>> cases {
     {R"({"id":"p","client_commands":{}})", "'client_commands' must be an array"},
+    {R"({"id":"p","client_commands":[{"id":"a","steps":[[27]],"programs":"a.exe"}]})", "'programs' must be a non-empty array"},
+    {R"({"id":"p","client_commands":[{"id":"a","steps":[[27]],"programs":[]}]})", "'programs' must be a non-empty array"},
+    {R"({"id":"p","client_commands":[{"id":"a","steps":[[27]],"programs":[1]}]})", "'programs' must be a non-empty array"},
+    {R"({"id":"p","client_commands":[{"id":"a","steps":[[27]],"programs":[""]}]})", "'programs' must be a non-empty array"},
     {R"({"id":"p","client_commands":[1]})", "each client command must be an object"},
     {R"({"id":"p","client_commands":[{"id":"Bad","script":"exists.ps1"}]})", "invalid client command id 'Bad'"},
     {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1"},{"id":"a","script":"exists.ps1"}]})", "duplicate client command id 'a'"},
@@ -1744,6 +1750,127 @@ TEST_F(PluginsTest, InvalidClientCommandsAreRejected) {
     EXPECT_FALSE(plugins::parse_manifest(json::parse(manifest), builtin_dir, true, error)) << manifest;
     EXPECT_TRUE(error.contains(expected)) << manifest << ": " << error;
   }
+}
+
+TEST_F(PluginsTest, CommandsLimitedToProgramsFollowTheForegroundProgram) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"name", "P"},
+                                   {"client_commands", json::parse(R"([
+                                     {"id": "always", "steps": [[27]]},
+                                     {"id": "paint", "steps": [[27]], "programs": ["C:\\Apps\\Photoshop.exe", "gimp.exe"]},
+                                     {"id": "top", "top_level": true, "steps": [[27]], "programs": ["gimp.exe"]}
+                                   ])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto ids = [](const std::vector<client_commands::command_t> &commands) {
+    std::vector<std::string> out;
+    for (const auto &command : commands) {
+      out.push_back(command.id);
+    }
+    return out;
+  };
+  using ids_t = std::vector<std::string>;
+
+  client_commands::set_foreground_program_for_testing("GIMP.EXE");
+  auto offered = plugins::offered_client_commands({}).at(0);
+  EXPECT_EQ(ids(offered.grouped), (ids_t {"plugin:p/always", "plugin:p/paint"}));
+  EXPECT_EQ(ids(offered.top_level), (ids_t {"plugin:p/top"}));
+
+  // A path in the manifest matches by its file name
+  client_commands::set_foreground_program_for_testing("photoshop.exe");
+  offered = plugins::offered_client_commands({}).at(0);
+  EXPECT_EQ(ids(offered.grouped), (ids_t {"plugin:p/always", "plugin:p/paint"}));
+  EXPECT_TRUE(offered.top_level.empty());
+
+  for (const auto *program : {"notepad.exe", ""}) {
+    client_commands::set_foreground_program_for_testing(program);
+    offered = plugins::offered_client_commands({}).at(0);
+    EXPECT_EQ(ids(offered.grouped), (ids_t {"plugin:p/always"})) << program;
+    EXPECT_TRUE(offered.top_level.empty()) << program;
+  }
+
+  const auto listed = find_plugin(plugins::list(), "p")["client_commands"];
+  EXPECT_EQ(listed[0]["programs"], json::array());
+  EXPECT_EQ(listed[2]["programs"], json::array({"gimp.exe"}));
+}
+
+TEST_F(PluginsTest, OverridesReplaceTheProgramsACommandIsLimitedTo) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"name", "P"},
+                                   {"client_commands", json::parse(R"([
+                                     {"id": "limited", "steps": [[27]], "programs": ["gimp.exe"]},
+                                     {"id": "open", "steps": [[27]]}
+                                   ])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto offered_ids = [](const client_commands::plugin_overrides_t &overrides) {
+    std::vector<std::string> out;
+    for (const auto &command : plugins::offered_client_commands({}, overrides).at(0).grouped) {
+      out.push_back(command.id);
+    }
+    return out;
+  };
+  using ids_t = std::vector<std::string>;
+  using programs_t = std::vector<std::string>;
+  const ids_t both {"plugin:p/limited", "plugin:p/open"};
+  const ids_t only_open {"plugin:p/open"};
+  const ids_t none {};
+
+  client_commands::plugin_override_t replaced;
+  replaced.programs = programs_t {"game.exe"};
+  client_commands::plugin_override_t any;
+  any.programs = programs_t {};
+  client_commands::plugin_override_t label_only;
+  label_only.label = "Renamed";
+
+  // An override that doesn't set programs keeps the plugin's
+  client_commands::set_foreground_program_for_testing("notepad.exe");
+  EXPECT_EQ(offered_ids({{"p/limited", label_only}}), only_open);
+
+  // A list replaces the plugin's rather than adding to it
+  EXPECT_EQ(offered_ids({{"p/limited", replaced}}), only_open);
+  client_commands::set_foreground_program_for_testing("game.exe");
+  EXPECT_EQ(offered_ids({{"p/limited", replaced}}), both);
+  client_commands::set_foreground_program_for_testing("gimp.exe");
+  EXPECT_EQ(offered_ids({{"p/limited", replaced}}), only_open);
+
+  // An empty list removes the limit
+  client_commands::set_foreground_program_for_testing("notepad.exe");
+  EXPECT_EQ(offered_ids({{"p/limited", any}}), both);
+
+  // A command the plugin didn't limit can be limited
+  EXPECT_EQ(offered_ids({{"p/open", replaced}}), none);
+  client_commands::set_foreground_program_for_testing("game.exe");
+  EXPECT_EQ(offered_ids({{"p/open", replaced}}), only_open);
+}
+
+TEST_F(PluginsTest, ALimitedCommandOutOfScopeIsNotOfferedOrRunnable) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"name", "P"},
+                                   {"client_commands", json::parse(R"([{"id": "paint", "steps": [[27]], "programs": ["gimp.exe"]}])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+  client_commands::set_file_for_testing(root / "client_commands.json");
+
+  client_commands::set_foreground_program_for_testing("gimp.exe");
+  auto offer = client_commands::current_offer();
+  ASSERT_EQ(offer.groups.size(), 1);
+  EXPECT_EQ(offer.groups[0].kind, "plugin");
+  EXPECT_TRUE(client_commands::find(offer, "plugin:p/paint"));
+
+  // A plugin left with nothing to offer gets no empty page
+  client_commands::set_foreground_program_for_testing("notepad.exe");
+  offer = client_commands::current_offer();
+  EXPECT_TRUE(offer.groups.empty());
+  EXPECT_FALSE(client_commands::find(offer, "plugin:p/paint"));
 }
 
 TEST_F(PluginsTest, ActivePluginsOfferTheirClientCommands) {

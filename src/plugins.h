@@ -105,6 +105,7 @@ namespace plugins {
     std::vector<std::vector<std::uint16_t>> steps;  ///< Key chords a command without a script types.
     bool elevated = false;  ///< Whether the script runs elevated; defaults to the plugin's `elevated`.
     std::string status_file;  ///< JSON file in the plugin's data directory whose `label` and `icon` replace the command's while it exists, or empty for none.
+    std::vector<std::string> programs;  ///< File names of the programs the command is limited to while they're in the foreground, or empty for no limit.
   };
 
   /**
@@ -386,11 +387,12 @@ namespace plugins {
    * @brief Build the client commands of the active plugins.
    *
    * A script command runs with the plugin's environment, in the plugin directory; its ID is
-   * `plugin:<plugin id>/<command id>`.
+   * `plugin:<plugin id>/<command id>`. A command limited to programs is left out unless one of them is in the
+   * foreground on the host.
    *
    * @param excluded IDs of plugins the application being streamed opted out of.
-   * @param overrides The user's labels and icons, which replace the plugin's. A status file still replaces
-   *                  them while it exists, as it shows what the command will do next.
+   * @param overrides The user's labels, icons and programs, which replace the plugin's. A status file still
+   *                  replaces the label and icon while it exists, as it shows what the command will do next.
    * @return In plugin order, the commands of each active, installed plugin that has any.
    */
   std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides = {});

@@ -2628,4 +2628,5 @@ TEST_F(ClientCommandsConfigHttpTest, ListsAndSavesPluginCommandOverrides) {
 TEST_F(ClientCommandsConfigHttpTest, RejectsInvalidPluginCommandOverrides) {
   expect_rejected(R"({"plugin-commands": []})", "the plugin command overrides must be an object");
   expect_rejected(R"({"plugin-commands": {"a/b": {"icon": "x.png"}}})", "\"a/b\": the icon must be material:<name>");
+  expect_rejected(R"({"plugin-commands": {"a/b": {"programs": "x.exe"}}})", "\"a/b\": \"programs\" must be an array of file names");
 }

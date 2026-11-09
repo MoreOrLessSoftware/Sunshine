@@ -166,6 +166,7 @@ plugin; a command with `"top_level": true` is shown with the menu's own commands
 | `elevated`   | No       | Whether `script` runs as administrator. Defaults to the plugin's `elevated`.                       |
 | `top_level`  | No       | Show the command with the menu's own commands rather than on the plugin's page. Defaults to `false`. |
 | `close_menu` | No       | Whether the client closes its menu after running the command. Defaults to `true`.                  |
+| `programs`   | No       | File names of programs, such as `["photoshop.exe"]`. The command is then only offered while one of them is in the foreground on this host when the client opens its menu. Windows only for now. |
 | `status_file` | No      | A JSON file name in the plugin's data folder. While it exists, its `label` and `icon` replace the command's, so a script can show what the command will do next, such as *Resume* after a *Suspend*. Sunshine reads it each time a client opens its menu. |
 
 Client commands only run while a stream is running, so they can rely on the plugin's do script having run.

@@ -458,7 +458,26 @@ namespace client_commands {
         error = std::format("\"{}\": the icon must be material:<name>", key);
         return std::nullopt;
       }
+      if (const auto programs = json.find("programs"); programs != json.end()) {
+        if (!programs->is_array() || !std::ranges::all_of(*programs, [](const nlohmann::json &program) {
+              return program.is_string() && !program.get<std::string>().empty();
+            })) {
+          error = std::format("\"{}\": \"programs\" must be an array of file names", key);
+          return std::nullopt;
+        }
+        entry.programs = programs->get<std::vector<std::string>>();
+      }
       return entry;
+    }
+
+    /**
+     * @brief Check whether an override of a plugin command changes anything.
+     *
+     * @param entry Override to check.
+     * @return `true` when it sets a label, an icon or programs.
+     */
+    bool changes_something(const plugin_override_t &entry) {
+      return !entry.label.empty() || !entry.icon.empty() || entry.programs.has_value();
     }
   }  // namespace
 
@@ -473,7 +492,7 @@ namespace client_commands {
       auto entry = parse_plugin_override(key, value, error);
       if (!entry) {
         BOOST_LOG(warning) << "Ignoring a plugin command override: "sv << error;
-      } else if (!entry->label.empty() || !entry->icon.empty()) {
+      } else if (changes_something(*entry)) {
         overrides[key] = std::move(*entry);
       }
     }
@@ -492,7 +511,7 @@ namespace client_commands {
       if (!entry) {
         return std::nullopt;
       }
-      if (!entry->label.empty() || !entry->icon.empty()) {
+      if (changes_something(*entry)) {
         overrides[key] = std::move(*entry);
       }
     }
@@ -525,6 +544,9 @@ namespace client_commands {
       if (!entry.icon.empty()) {
         item["icon"] = entry.icon;
       }
+      if (entry.programs) {
+        item["programs"] = *entry.programs;
+      }
       json[key] = std::move(item);
     }
     return json;
@@ -546,15 +568,19 @@ namespace client_commands {
     }
   }
 
-  bool matches(const program_group_t &group, std::string_view program) {
+  bool matches(const std::vector<std::string> &programs, std::string_view program) {
     if (program.empty()) {
       return false;
     }
-    return std::ranges::any_of(group.programs, [program](const std::string &name) {
+    return std::ranges::any_of(programs, [program](const std::string &name) {
       // A path matches by its file name
       auto file_name = std::filesystem::path {name}.filename().string();
       return boost::iequals(file_name, program);
     });
+  }
+
+  bool matches(const program_group_t &group, std::string_view program) {
+    return matches(group.programs, program);
   }
 
   std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, std::string_view program) {
