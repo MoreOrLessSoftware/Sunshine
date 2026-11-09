@@ -423,6 +423,29 @@
         </div>
       </div>
     </div>
+
+    <!-- Delete confirmation modal -->
+    <div class="modal fade" ref="deleteModal" tabindex="-1" aria-labelledby="commandDeleteModalLabel" aria-hidden="true">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content" v-if="deleteTarget">
+          <div class="modal-header">
+            <h5 class="modal-title" id="commandDeleteModalLabel">{{ deleteTarget.title }}</h5>
+            <button type="button" class="btn-close" @click="closeDeleteModal" :aria-label="$t('_common.close')"></button>
+          </div>
+          <div class="modal-body">{{ deleteTarget.message }}</div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="closeDeleteModal">
+              <x :size="18" class="icon"></x>
+              {{ $t('_common.cancel') }}
+            </button>
+            <button type="button" class="btn btn-danger" @click="confirmDelete">
+              <trash-2 :size="18" class="icon"></trash-2>
+              {{ $t('client_commands.delete') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </body>
 
@@ -432,7 +455,8 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search, SquareMousePointer, SquareTerminal, Trash2 } from '@lucide/vue'
+  import { Modal } from 'bootstrap/dist/js/bootstrap'
+  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search, SquareMousePointer, SquareTerminal, Trash2, X } from '@lucide/vue'
 
   // Recording stops after this long without a key
   const RECORD_IDLE_MS = 15000;
@@ -587,7 +611,7 @@
   const app = createApp({
     components: {
       Navbar, IconChooser, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search,
-      SquareMousePointer, SquareTerminal, Trash2,
+      SquareMousePointer, SquareTerminal, Trash2, X,
     },
     inject: ['i18n'],
     data() {
@@ -609,6 +633,8 @@
         currentView: 'global',
         // The command being edited: {view, index (-1 for a new one), draft, error}
         editor: null,
+        // What the delete dialog is asking about: {title, message, remove}
+        deleteTarget: null,
         recorder: {recording: false, held: [], chord: [], idleTimer: null},
         keyPicker: {modifiers: [], key: 0},
         // The command or program group whose icon is being chosen
@@ -694,6 +720,8 @@
       this.currentView = this.viewFromHash();
       window.addEventListener('hashchange', this.onHashChange);
       window.addEventListener('beforeunload', this.onBeforeUnload);
+      // However the dialog closes (Cancel, Esc, a click outside), it no longer asks about anything
+      this.$refs.deleteModal.addEventListener('hidden.bs.modal', this.onDeleteModalHidden);
       this.loadIcons();
       this.load();
     },
@@ -787,12 +815,11 @@
       },
       removeProgramGroup(group) {
         const name = group.label || this.i18n.t('client_commands.new_program');
-        if (!window.confirm(this.i18n.t('client_commands.delete_program_confirm', {label: name}))) {
-          return;
-        }
-        this.cancelEdit();
-        this.programGroups.splice(this.programGroups.indexOf(group), 1);
-        this.showView('global', true);
+        this.askToDelete(this.i18n.t('client_commands.delete_program'), this.i18n.t('client_commands.delete_program_confirm', {label: name}), () => {
+          this.cancelEdit();
+          this.programGroups.splice(this.programGroups.indexOf(group), 1);
+          this.showView('global', true);
+        });
       },
       // From what's typed: file names separated by commas or semicolons
       setPrograms(group, text) {
@@ -896,9 +923,31 @@
         list.splice(index + delta, 0, command);
       },
       remove(index) {
-        if (window.confirm(this.i18n.t('client_commands.delete_confirm', {label: this.currentList[index].label}))) {
-          this.currentList.splice(index, 1);
+        // The list and command themselves, as the view could change while the dialog is open
+        const list = this.currentList;
+        const command = list[index];
+        this.askToDelete(this.i18n.t('client_commands.delete_command_title'), this.i18n.t('client_commands.delete_confirm', {label: command.label}), () => {
+          list.splice(list.indexOf(command), 1);
+        });
+      },
+      askToDelete(title, message, remove) {
+        this.deleteTarget = {title, message, remove};
+        this.$nextTick(() => {
+          Modal.getOrCreateInstance(this.$refs.deleteModal).show();
+        });
+      },
+      closeDeleteModal() {
+        const modal = Modal.getInstance(this.$refs.deleteModal);
+        if (modal) {
+          modal.hide();
         }
+      },
+      confirmDelete() {
+        this.deleteTarget.remove();
+        this.closeDeleteModal();
+      },
+      onDeleteModalHidden() {
+        this.deleteTarget = null;
       },
       addPickedChord() {
         const chord = [...this.keyPicker.modifiers];
