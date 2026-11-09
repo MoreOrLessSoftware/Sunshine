@@ -10,7 +10,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $version = '1.1.0'
 $url = "https://github.com/MoreOrLessSoftware/stadiacast/releases/download/v$version/stadiacast-$version-windows-x86_64.zip"
-$sha256 = ''  # set when the release is published
+$sha256 = 'c49973d5ae0961216e020b94a8f254402a1b86266e58a1d6ff5413b545658eeb'
 
 $zip = Join-Path $DataDir 'stadiacast.zip'
 $local = Join-Path $DataDir 'stadiacast-local.zip'
