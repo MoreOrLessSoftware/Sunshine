@@ -42,12 +42,6 @@
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="./featured">
-                <Star :size="18" class="icon"></Star>
-                {{ $t('navbar.featured') }}
-              </a>
-            </li>
-            <li class="nav-item">
               <a class="nav-link" href="./config">
                 <Settings :size="18" class="icon"></Settings>
                 {{ $t('navbar.configuration') }}
@@ -61,6 +55,12 @@
             </li>
           </ul>
           <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
+            <li class="nav-item">
+              <a class="nav-link" href="./featured">
+                <Star :size="18" class="icon"></Star>
+                {{ $t('navbar.featured') }}
+              </a>
+            </li>
             <li class="nav-item">
               <ThemeToggle/>
             </li>
