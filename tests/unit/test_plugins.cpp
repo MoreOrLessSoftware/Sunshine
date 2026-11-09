@@ -108,6 +108,19 @@ namespace {
                   })},
     };
   }
+
+  /**
+   * @brief A manifest with an apply script that runs when the `mode` option changes.
+   *
+   * @param id Plugin ID.
+   * @return Manifest JSON.
+   */
+  json apply_manifest(const std::string &id) {
+    auto manifest = full_manifest(id);
+    manifest["scripts"]["apply"] = "apply.ps1";
+    manifest["options"][3]["apply"] = true;
+    return manifest;
+  }
 }  // namespace
 
 /**
@@ -326,6 +339,10 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"OptionStringDefaultWrongType", R"({"id":"p","options":[{"id":"o","type":"string","default":1}]})", "invalid default"},
     invalid_manifest_t {"OptionChoiceDefaultUnknown", R"({"id":"p","options":[{"id":"o","type":"choice","choices":["a"],"default":"b"}]})", "invalid default"},
     invalid_manifest_t {"OptionDuplicate", R"({"id":"p","options":[{"id":"o","type":"string"},{"id":"o","type":"string"}]})", "duplicate option id 'o'"},
+    invalid_manifest_t {"ApplyScriptNotString", R"({"id":"p","scripts":{"apply":1}})", "'apply' must be a string"},
+    invalid_manifest_t {"ApplyScriptMissing", R"({"id":"p","scripts":{"apply":"missing.ps1"}})", "does not exist"},
+    invalid_manifest_t {"OptionApplyNotBoolean", R"({"id":"p","scripts":{"apply":"exists.ps1"},"options":[{"id":"o","type":"string","apply":1}]})", "'apply' must be a boolean"},
+    invalid_manifest_t {"OptionApplyWithoutScript", R"({"id":"p","options":[{"id":"o","type":"string","apply":true}]})", "has no apply script"},
     invalid_manifest_t {"ChoicesMissing", R"({"id":"p","options":[{"id":"o","type":"choice"}]})", "'choices' must be a non-empty array"},
     invalid_manifest_t {"ChoicesEmpty", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[]}]})", "'choices' must be a non-empty array"},
     invalid_manifest_t {"ChoiceInvalid", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[1]}]})", "each choice must be"},
@@ -548,6 +565,170 @@ TEST_F(PluginsTest, ConfigureValidatesRequests) {
   EXPECT_EQ(plugins::configure("p", false, json {{"multiplier", 5}}, error), plugins::result_e::ok);
   EXPECT_EQ(find_plugin(plugins::list(), "p")["config"]["multiplier"], 5);
   EXPECT_EQ(plugins::load_state(state_file).at("p").options["multiplier"], 5);
+}
+
+TEST_F(PluginsTest, ParseManifestReadsApplyScriptAndOption) {
+  const auto dir = write_plugin(builtin_dir, "p", apply_manifest("p"));
+  std::string error;
+  const auto manifest = plugins::parse_manifest(apply_manifest("p"), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->scripts.apply, "apply.ps1");
+  EXPECT_FALSE(manifest->options[0].apply);
+  EXPECT_TRUE(manifest->options[3].apply);
+}
+
+TEST_F(PluginsTest, SavingAnApplyOptionRunsTheScriptThenCommits) {
+  const auto dir = write_plugin(builtin_dir, "p", apply_manifest("p"));
+  plugins::load(paths());
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  calls.clear();
+
+  int changes = 0;
+  plugins::set_change_callback([&changes]() {
+    ++changes;
+  });
+
+  bool applying = false;
+  ASSERT_EQ(plugins::configure("p", std::nullopt, json {{"mode", "on"}, {"multiplier", 5}}, error, &applying), plugins::result_e::ok) << error;
+  EXPECT_TRUE(applying);
+  plugins::wait_for_task();
+
+  ASSERT_EQ(calls.size(), 1);
+  EXPECT_EQ(calls[0].command, plugins::script_command(dir / "apply.ps1"));
+  EXPECT_TRUE(calls[0].elevated);
+  EXPECT_EQ(calls[0].working_dir, data_dir / "p");
+  EXPECT_EQ(calls[0].env.at("SUNSHINE_PLUGIN_OPT_MODE"), "on");
+  EXPECT_EQ(calls[0].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+
+  const auto plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["config"]["mode"], "on");
+  EXPECT_EQ(plugin["config"]["multiplier"], 5);
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_EQ(plugin["task"], json({{"action", "apply"}, {"status", "succeeded"}, {"exit_code", 0}}));
+  EXPECT_EQ(plugins::load_state(state_file).at("p").options["mode"], "on");
+  EXPECT_EQ(changes, 1);
+  const auto log = plugins::read_log("p");
+  ASSERT_TRUE(log);
+  EXPECT_TRUE(log->contains("Applying options for Plugin p")) << *log;
+}
+
+TEST_F(PluginsTest, FailedApplyKeepsTheOldOptionsUntilRetried) {
+  write_plugin(builtin_dir, "p", apply_manifest("p"));
+  plugins::load(paths());
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  int changes = 0;
+  plugins::set_change_callback([&changes]() {
+    ++changes;
+  });
+
+  const json updated {{"mode", "on"}, {"multiplier", 5}};
+  runner_exit_code = 3;
+  bool applying = false;
+  ASSERT_EQ(plugins::configure("p", std::nullopt, updated, error, &applying), plugins::result_e::ok) << error;
+  EXPECT_TRUE(applying);
+  plugins::wait_for_task();
+
+  auto plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["config"]["mode"], "off");
+  EXPECT_EQ(plugin["config"]["multiplier"], 2);  // an unrelated edit in the same save is held back too
+  EXPECT_EQ(plugin["task"]["action"], "apply");
+  EXPECT_EQ(plugin["task"]["status"], "failed");
+  EXPECT_EQ(plugin["task"]["exit_code"], 3);
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_EQ(changes, 0);
+
+  runner_exit_code = 0;
+  ASSERT_EQ(plugins::configure("p", std::nullopt, updated, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["config"]["mode"], "on");
+  EXPECT_EQ(plugin["config"]["multiplier"], 5);
+  EXPECT_EQ(changes, 1);
+}
+
+TEST_F(PluginsTest, SavesThatNeedNoApplyAreImmediate) {
+  write_plugin(builtin_dir, "p", apply_manifest("p"));
+  plugins::load(paths());
+  std::string error;
+  bool applying = false;
+
+  // Before the install, the install script is what picks up the value.
+  ASSERT_EQ(plugins::configure("p", std::nullopt, json {{"mode", "on"}}, error, &applying), plugins::result_e::ok) << error;
+  EXPECT_FALSE(applying);
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["config"]["mode"], "on");
+  EXPECT_TRUE(calls.empty());
+
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  calls.clear();
+
+  // The marked option keeps its value.
+  ASSERT_EQ(plugins::configure("p", std::nullopt, json {{"mode", "on"}, {"multiplier", 7}}, error, &applying), plugins::result_e::ok) << error;
+  EXPECT_FALSE(applying);
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["config"]["multiplier"], 7);
+
+  // No options at all.
+  ASSERT_EQ(plugins::configure("p", true, std::nullopt, error, &applying), plugins::result_e::ok) << error;
+  EXPECT_FALSE(applying);
+  EXPECT_TRUE(calls.empty());
+}
+
+TEST_F(PluginsTest, ActiveChangeInAnApplyingSaveIsImmediate) {
+  write_plugin(builtin_dir, "p", apply_manifest("p"));
+  plugins::load(paths());
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  runner_exit_code = 1;
+  ASSERT_EQ(plugins::configure("p", true, json {{"mode", "on"}}, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  const auto plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["active"], true);
+  EXPECT_EQ(plugin["config"]["mode"], "off");
+}
+
+TEST_F(PluginsTest, SavesAreRejectedWhileAnApplyCannotStartOrIsRunning) {
+  write_plugin(builtin_dir, "p", apply_manifest("p"));
+  write_plugin(builtin_dir, "other", full_manifest("other"));
+  plugins::load(paths());
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  plugins::set_script_runner_for_testing([released](const std::string &, bool, const std::map<std::string, std::string> &, const fs::path &, const fs::path &, std::stop_token) {
+    released.wait();
+    return 0;
+  });
+
+  bool applying = false;
+  ASSERT_EQ(plugins::configure("p", std::nullopt, json {{"mode", "on"}}, error, &applying), plugins::result_e::ok) << error;
+  ASSERT_TRUE(applying);
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["config"]["mode"], "off");  // not committed yet
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["task"]["status"], "running");
+
+  // Another change to the marked option needs the worker that is busy.
+  EXPECT_EQ(plugins::configure("p", std::nullopt, json {{"mode", "on"}, {"multiplier", 3}}, error), plugins::result_e::busy);
+  EXPECT_EQ(error, "another plugin operation is still running");
+  // The running script's options would overwrite any other save of this plugin.
+  EXPECT_EQ(plugins::configure("p", std::nullopt, json {{"mode", "off"}, {"multiplier", 3}}, error), plugins::result_e::busy);
+  EXPECT_TRUE(error.contains("still being applied")) << error;
+
+  // Neither limit applies to switching the plugin off or to saving another plugin.
+  EXPECT_EQ(plugins::configure("p", false, std::nullopt, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(plugins::configure("other", std::nullopt, json {{"multiplier", 4}}, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(find_plugin(plugins::list(), "other")["config"]["multiplier"], 4);
+
+  release.set_value();
+  plugins::wait_for_task();
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["config"]["mode"], "on");
 }
 
 TEST_F(PluginsTest, InstallActivateAndUninstall) {

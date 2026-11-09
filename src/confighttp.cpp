@@ -2688,6 +2688,9 @@ namespace confighttp {
    * }
    * @endcode
    *
+   * When `applying` is true in the response, the plugin's apply script is running and the options are saved only
+   * if it succeeds. Poll the plugin list for the outcome of its `apply` task.
+   *
    * @api_examples{/api/plugins/config| POST| {"id":"virtual-display","active":true}}
    */
   void savePluginConfig(const resp_https_t &response, const req_https_t &request) {
@@ -2725,7 +2728,8 @@ namespace confighttp {
     }
 
     std::string error;
-    if (const auto result = plugins::configure(*id, active, options, error); result != plugins::result_e::ok) {
+    bool applying = false;
+    if (const auto result = plugins::configure(*id, active, options, error, &applying); result != plugins::result_e::ok) {
       send_plugin_error(response, request, result, error);
       return;
     }
@@ -2734,6 +2738,7 @@ namespace confighttp {
 
     nlohmann::json output_tree;
     output_tree["status"] = true;
+    output_tree["applying"] = applying;
     send_response(response, output_tree);
   }
 

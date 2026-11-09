@@ -249,6 +249,26 @@ namespace plugins {
     }
 
     /**
+     * @brief Return the name of a plugin operation used by the web UI.
+     *
+     * @param action Operation.
+     * @return Operation name.
+     */
+    std::string_view task_action_name(action_e action) {
+      switch (action) {
+        case action_e::install:
+          return "install"sv;
+        case action_e::uninstall:
+          return "uninstall"sv;
+        case action_e::apply:
+          return "apply"sv;
+        case action_e::run:
+          break;
+      }
+      return "run"sv;
+    }
+
+    /**
      * @brief Parse the list of values a choice option accepts.
      *
      * @param node Array of strings or of objects with `value` and optional `label`.
@@ -321,6 +341,13 @@ namespace plugins {
           !read_number(node, "max", option.max, error) ||
           !read_number(node, "step", option.step, error)) {
         return std::nullopt;
+      }
+      if (node.contains("apply")) {
+        if (!node["apply"].is_boolean()) {
+          error = std::format("option '{}': 'apply' must be a boolean", option.id);
+          return std::nullopt;
+        }
+        option.apply = node["apply"].get<bool>();
       }
       if (option.label.empty()) {
         option.label = option.id;
@@ -683,6 +710,32 @@ namespace plugins {
     }
 
     /**
+     * @brief Check whether new values change an option marked `apply`.
+     *
+     * @param manifest Plugin declaring the options.
+     * @param current Normalized current values.
+     * @param updated Normalized new values.
+     * @return `true` when at least one such option differs.
+     */
+    bool apply_option_changed(const manifest_t &manifest, const json &current, const json &updated) {
+      return std::ranges::any_of(manifest.options, [&current, &updated](const option_t &option) {
+        return option.apply && current.at(option.id) != updated.at(option.id);
+      });
+    }
+
+    /**
+     * @brief Check whether a plugin's apply script is running.
+     *
+     * @param reg Registry holding the tasks.
+     * @param id Plugin ID.
+     * @return `true` while new options are waiting for the script to finish.
+     */
+    bool is_applying(const registry_t &reg, const std::string &id) {
+      const auto it = reg.tasks.find(id);
+      return it != reg.tasks.end() && it->second.action == action_e::apply && it->second.status == task_status_e::running;
+    }
+
+    /**
      * @brief Return the directory holding a plugin's dependencies.
      *
      * @param paths Locations in use.
@@ -778,9 +831,11 @@ namespace plugins {
      * @param paths Locations in use.
      * @param runner Function that runs the script.
      * @param activate Whether to activate the plugin once an install succeeds.
+     * @param action_id Action to run when `action` is `action_e::run`.
+     * @param pending_options Options to save once an apply succeeds.
      * @param stop Requests the script be terminated early.
      */
-    void run_task(const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, const paths_t &paths, const script_runner_t &runner, bool activate, const std::string &action_id, std::stop_token stop) {
+    void run_task(const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, const paths_t &paths, const script_runner_t &runner, bool activate, const std::string &action_id, const std::optional<json> &pending_options, std::stop_token stop) {
       std::string script;
       std::string heading;
       switch (action) {
@@ -799,6 +854,10 @@ namespace plugins {
               heading = std::format("{}: {}", manifest.name, candidate.label);
             }
           }
+          break;
+        case action_e::apply:
+          script = manifest.scripts.apply;
+          heading = std::format("Applying options for {}", manifest.name);
           break;
       }
       const auto data_dir = plugin_data_dir(paths, id);
@@ -827,7 +886,7 @@ namespace plugins {
         std::fputs(std::format("\n{} (exit code {})\n", success ? "Completed"sv : "Failed"sv, exit_code).c_str(), file.get());
       }
 
-      const auto what = action == action_e::run ? std::format("action '{}'", action_id) : std::string {action == action_e::install ? "install"sv : "uninstall"sv};
+      const auto what = action == action_e::run ? std::format("action '{}'", action_id) : std::string {task_action_name(action)};
       if (success) {
         BOOST_LOG(info) << "Plugin ["sv << id << "] "sv << what << " succeeded"sv;
       } else {
@@ -840,8 +899,12 @@ namespace plugins {
         std::scoped_lock lock {reg.mutex};
         if (success && action != action_e::run) {
           auto &state = reg.state[id];
-          state.installed = action == action_e::install;
-          state.active = state.installed && (state.active || activate);
+          if (action == action_e::apply) {
+            state.options = *pending_options;
+          } else {
+            state.installed = action == action_e::install;
+            state.active = state.installed && (state.active || activate);
+          }
           save_state(paths.state_file, reg.state);
           on_change = reg.on_change;
         }
@@ -853,6 +916,34 @@ namespace plugins {
       if (on_change) {
         on_change();
       }
+    }
+
+    /**
+     * @brief Mark a plugin operation as running and start it on the worker thread.
+     *
+     * The caller holds the registry lock and has checked that no other operation is running.
+     *
+     * @param reg Registry to update.
+     * @param id Plugin ID.
+     * @param action Operation to run.
+     * @param manifest Plugin running the script.
+     * @param env Variables passed to the script.
+     * @param activate Whether to activate the plugin once an install succeeds.
+     * @param action_id Action to run when `action` is `action_e::run`.
+     * @param pending_options Options to save once an apply succeeds.
+     */
+    void launch_task(registry_t &reg, const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, bool activate, const std::string &action_id, std::optional<json> pending_options) {
+      reg.task_running = true;
+      reg.tasks[id] = {action, task_status_e::running, 0, action == action_e::run ? action_id : std::string {}};
+
+      // The previous worker has already finished since task_running was false.
+      if (reg.worker.joinable()) {
+        reg.worker.join();
+      }
+
+      reg.worker = std::jthread([id, action, manifest, env, paths = reg.paths, runner = reg.runner, activate, action_id, pending_options = std::move(pending_options)](std::stop_token stop) {
+        run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, action_id, pending_options, stop);
+      });
     }
   }  // namespace
 
@@ -930,10 +1021,11 @@ namespace plugins {
           !read_string(scripts, "do", manifest.scripts.do_script, error) ||
           !read_string(scripts, "undo", manifest.scripts.undo_script, error) ||
           !read_string(scripts, "connect", manifest.scripts.connect_script, error) ||
-          !read_string(scripts, "disconnect", manifest.scripts.disconnect_script, error)) {
+          !read_string(scripts, "disconnect", manifest.scripts.disconnect_script, error) ||
+          !read_string(scripts, "apply", manifest.scripts.apply, error)) {
         return std::nullopt;
       }
-      for (const auto *script : {&manifest.scripts.install, &manifest.scripts.uninstall, &manifest.scripts.do_script, &manifest.scripts.undo_script, &manifest.scripts.connect_script, &manifest.scripts.disconnect_script}) {
+      for (const auto *script : {&manifest.scripts.install, &manifest.scripts.uninstall, &manifest.scripts.do_script, &manifest.scripts.undo_script, &manifest.scripts.connect_script, &manifest.scripts.disconnect_script, &manifest.scripts.apply}) {
         if (!is_valid_script(*script, dir, error)) {
           return std::nullopt;
         }
@@ -955,6 +1047,10 @@ namespace plugins {
               return existing.id == option->id;
             })) {
           error = std::format("duplicate option id '{}'", option->id);
+          return std::nullopt;
+        }
+        if (option->apply && manifest.scripts.apply.empty()) {
+          error = std::format("option '{}' sets 'apply' but the plugin has no apply script", option->id);
           return std::nullopt;
         }
         manifest.options.emplace_back(std::move(*option));
@@ -1252,8 +1348,7 @@ namespace plugins {
       if (const auto task_it = reg.tasks.find(manifest.id); task_it != reg.tasks.end()) {
         const auto &info = task_it->second;
         task = {
-          {"action", info.action == action_e::install ? "install" : info.action == action_e::uninstall ? "uninstall" :
-                                                                                                         "run"},
+          {"action", task_action_name(info.action)},
           {"status", task_status_name(info.status)},
           {"exit_code", info.exit_code}
         };
@@ -1412,7 +1507,7 @@ namespace plugins {
     return {};
   }
 
-  result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error) {
+  result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error, bool *applying) {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
 
@@ -1436,10 +1531,27 @@ namespace plugins {
       return result_e::not_installed;
     }
 
+    const bool needs_apply = normalized && state.installed && !manifest->scripts.apply.empty() && apply_option_changed(*manifest, effective_options(reg, *manifest), *normalized);
+    if (needs_apply && reg.task_running) {
+      error = "another plugin operation is still running";
+      return result_e::busy;
+    }
+    // The running script's options would overwrite these when it finishes.
+    if (normalized && is_applying(reg, id)) {
+      error = std::format("the options of plugin '{}' are still being applied", id);
+      return result_e::busy;
+    }
+
     if (active) {
       state.active = *active;
     }
-    if (normalized) {
+    if (needs_apply) {
+      const auto env = script_env(*manifest, *normalized, plugin_data_dir(reg.paths, id));
+      launch_task(reg, id, action_e::apply, *manifest, env, false, {}, std::move(normalized));
+      if (applying) {
+        *applying = true;
+      }
+    } else if (normalized) {
       state.options = std::move(*normalized);
     }
     save_state(reg.paths.state_file, reg.state);
@@ -1474,24 +1586,13 @@ namespace plugins {
 
     const auto manifest = *found;
     const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, id));
-    auto runner = reg.runner;
 
     if (action == action_e::uninstall) {
       reg.state[id].active = false;
       save_state(reg.paths.state_file, reg.state);
     }
 
-    reg.task_running = true;
-    reg.tasks[id] = {action, task_status_e::running, 0, action == action_e::run ? action_id : std::string {}};
-
-    // The previous worker has already finished since task_running was false.
-    if (reg.worker.joinable()) {
-      reg.worker.join();
-    }
-
-    reg.worker = std::jthread([id, action, manifest, env, paths = reg.paths, runner, activate, action_id](std::stop_token stop) {
-      run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, action_id, stop);
-    });
+    launch_task(reg, id, action, manifest, env, activate, action_id, std::nullopt);
 
     return result_e::ok;
   }

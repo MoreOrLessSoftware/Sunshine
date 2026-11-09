@@ -17,6 +17,8 @@ Open the **Plugins** page in the web UI. Each plugin can be:
   application, or select *Apps & plugins* to see every application against every active plugin. In that grid,
   the checkbox next to an application or under a plugin changes the whole row or column.
 * **Configured** — change the plugin's options and select *Save options*. The new values apply to the next stream.
+  Some options take effect right away by running a script as administrator. If that script fails, the card shows the
+  failure, nothing is saved, and you can select *Save options* again once the problem is fixed.
 * **Tested** — some plugins add buttons to their card, such as *Start test*, and a live view below them. A button
   runs one of the plugin's scripts right away, as administrator; its output is shown under *View log*.
 * **Uninstalled** — deactivates the plugin, runs its uninstall script, and deletes the files it downloaded.
@@ -34,7 +36,7 @@ is resuming.
 
 | Plugin           | What it does                                                                                                                                                                                                                                          |
 |------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Virtual Display  | Creates a virtual display matching the client's resolution and frame rate using [sunshine-vdisplay](https://github.com/Zayrick/sunshine-vdisplay), and removes it when the stream ends. The refresh rate can be a multiple of the client frame rate. Each client gets its own virtual monitor unless *Shared virtual monitor for all clients* is on. *Start the stream on a new desktop* creates a temporary Windows desktop first using the [VirtualDesktop](https://github.com/MScholtes/PSVirtualDesktop) PowerShell module, and removes it when the stream ends. If you installed this plugin before that option existed, uninstall and reinstall it to add the module, and turn off *Remove the driver when uninstalling* first to keep the driver. |
+| Virtual Display  | Creates a virtual display matching the client's resolution and frame rate using [sunshine-vdisplay](https://github.com/Zayrick/sunshine-vdisplay), and removes it when the stream ends. The refresh rate can be a multiple of the client frame rate. Each client gets its own virtual monitor unless *Shared virtual monitor for all clients* is on. *Start the stream on a new desktop* creates a temporary Windows desktop first using the [VirtualDesktop](https://github.com/MScholtes/PSVirtualDesktop) PowerShell module, and removes it when the stream ends. If you installed this plugin before that option existed, uninstall and reinstall it to add the module, and turn off *Remove the driver when uninstalling* first to keep the driver. *10-bit SDR* sets the driver's `sdrBits` registry value and turns on Windows' Auto Color Management for the virtual monitor at the start of each stream, since Windows otherwise keeps composing the desktop in 8 bits. Saving a change reloads the driver, so end any stream first. Turning the option off leaves Auto Color Management as it is on monitors that already have it. |
 | RTSS Frame Limit | Sets the [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) frame rate limit to the client frame rate and restores the previous limit afterwards. RTSS 7.3.7 or newer must already be installed. If RTSS isn't running, it is started for the stream and closed afterwards. The limit is set again when a client resumes, using that client's frame rate, unless *Re-apply the limit when a client resumes* is off. |
 | Nyrna            | Adds a *Suspend* command to the [client commands](client_commands.md) in Moonlight's in-stream menu. It suspends the game or application in the foreground with [Nyrna](https://nyrna.merritt.codes/). While it's suspended, a notification on this PC shows a picture of it with a *Resume* button, and the command becomes *Resume (name)*, which you can change with the *Resume command label* option. If Nyrna is already running here (installed, with its tray icon), the command presses its hotkey, set in the plugin's options. Nyrna runs through scheduled tasks in the *Sunshine* folder of Task Scheduler, as the signed-in user with full rights, so it can also resume games that run as administrator. Games with anti-cheat usually can't be suspended. |
 | Stadia Controller | Runs the [Stadiacast](https://github.com/MoreOrLessSoftware/stadiacast) receiver while a stream is running, so a Stadia Controller in Wi-Fi mode becomes a virtual Xbox Series controller (with the *Xbox Series Controller Driver* component) or Xbox 360 controller (with ViGEmBus). Wake the controller once the stream has started. *Start test* runs the receiver without a stream, and the card shows the controller connecting and every button, stick and trigger live. The controller must use this PC as its DNS server; see the [Stadiacast setup guide](https://github.com/MoreOrLessSoftware/stadiacast/blob/main/docs/setup.md). |
@@ -120,7 +122,7 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 | `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50, 100, 200, 300.                  |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. Defaults to `false`. |
-| `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect` and `disconnect`. Each must be a `.ps1` file directly inside the plugin folder. |
+| `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect` and `apply`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply`. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 | `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |
 | `panel`       | No       | A page shown on the plugin's card once it is installed: `file` (an `.html` file directly inside the plugin folder), and optionally `port` and `height` (in pixels, 100 to 2000, default 360). |
@@ -128,7 +130,7 @@ then select *Rescan*. A custom plugin cannot reuse the ID of a bundled plugin.
 | `icon`        | No       | Icon of the plugin's group of client commands in the menu, such as `material:extension` (a [Material Symbols](https://fonts.google.com/icons) name). |
 
 Each option has an `id` (lowercase letters, digits and `_`, starting with a letter), a `type`, and optionally a
-`label`, `description` and `default`.
+`label`, `description`, `default` and `apply`.
 
 | Type      | Value                                    | Extra fields                                                                                  |
 |-----------|------------------------------------------|-----------------------------------------------------------------------------------------------|
@@ -136,6 +138,16 @@ Each option has an `id` (lowercase letters, digits and `_`, starting with a lett
 | `number`  | A number                                 | `min`, `max` and `step`                                                                       |
 | `string`  | Text                                     |                                                                                               |
 | `choice`  | One of the listed values                 | `choices`: an array of strings, or of objects with a `value` and a `label`                    |
+
+### Applying options
+An option that needs more than a new value at the next stream, such as a driver setting, can set `"apply": true`.
+The manifest must then have an `apply` script. When *Save options* changes such an option on an installed plugin,
+the script runs as administrator with the new values in the [script environment](#script-environment).
+
+Every new value of that save is stored only if the script exits with 0. If it fails, the old values stay and the
+user can select *Save options* again, so the script should leave things as they were before it exits with an error.
+Saves that change no such option don't run the script. An option changed before the plugin is installed doesn't
+run it either, so the install script should read the option too.
 
 ### Client commands
 A plugin can add commands to the [client commands](client_commands.md) that Moonlight clients show in their in-stream

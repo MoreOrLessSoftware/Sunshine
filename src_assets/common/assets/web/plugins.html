@@ -243,7 +243,7 @@
                 </div>
               </div>
               <div class="d-flex align-items-center gap-2 mt-3">
-                <button type="button" class="btn btn-success" :disabled="!isDirty(plugin) || saving[plugin.id]" @click="saveOptions(plugin)">
+                <button type="button" class="btn btn-success" :disabled="!isDirty(plugin) || saving[plugin.id] || isApplying(plugin)" @click="saveOptions(plugin)">
                   <save :size="18" class="icon"></save>
                   {{ $t('plugins.save_options') }}
                 </button>
@@ -374,6 +374,9 @@
         }
         for (const plugin of plugins) {
           const old = previous[plugin.id];
+          if (old && this.isApplying(old) && plugin.task && plugin.task.status === 'succeeded') {
+            notifyKey.success('plugins.saved');
+          }
           if (!this.drafts[plugin.id] || (old && !this.isDirtyAgainst(plugin.id, old.config))) {
             this.drafts[plugin.id] = {...plugin.config};
           }
@@ -385,6 +388,13 @@
 
       isBusy(plugin) {
         return plugin.task && plugin.task.status === 'running';
+      },
+
+      /**
+       * Whether new options are waiting for the plugin's apply script to finish.
+       */
+      isApplying(plugin) {
+        return this.isBusy(plugin) && plugin.task.action === 'apply';
       },
 
       isDirtyAgainst(id, config) {
@@ -402,6 +412,7 @@
 
       /**
        * Send a JSON POST to a plugin endpoint and report failures on the plugin's page.
+       * Returns the response body, or false when the request failed.
        */
       async post(plugin, url, payload) {
         this.errors[plugin.id] = null;
@@ -416,7 +427,7 @@
             this.errors[plugin.id] = result.error || this.i18n.t('plugins.action_failure');
             return false;
           }
-          return true;
+          return result;
         } catch (error) {
           console.error('Plugin request failed', error);
           this.errors[plugin.id] = this.i18n.t('plugins.action_failure');
@@ -465,9 +476,10 @@
         }
 
         this.saving[plugin.id] = true;
-        const ok = await this.post(plugin, './api/plugins/config', {options});
+        const result = await this.post(plugin, './api/plugins/config', {options});
         this.saving[plugin.id] = false;
-        if (ok) {
+        // While the apply script runs the draft stays, so a failure leaves the edits ready to save again.
+        if (result && !result.applying) {
           this.drafts[plugin.id] = null;
           notifyKey.success('plugins.saved');
         }
@@ -488,6 +500,8 @@
             return this.i18n.t('plugins.installing');
           case 'uninstall':
             return this.i18n.t('plugins.uninstalling');
+          case 'apply':
+            return this.i18n.t('plugins.applying');
           default:
             return this.i18n.t('plugins.running', {action: this.actionLabel(plugin)});
         }
@@ -499,6 +513,8 @@
             return this.i18n.t('plugins.install_failed');
           case 'uninstall':
             return this.i18n.t('plugins.uninstall_failed');
+          case 'apply':
+            return this.i18n.t('plugins.apply_failed');
           default:
             return this.i18n.t('plugins.action_failed', {action: this.actionLabel(plugin)});
         }

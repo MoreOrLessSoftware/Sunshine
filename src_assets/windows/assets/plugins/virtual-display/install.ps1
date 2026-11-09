@@ -77,6 +77,11 @@ finally {
 
 . (Join-Path $PSScriptRoot 'vdisplay.ps1')
 
+# Written before the driver is installed so that a newly loaded driver picks it up.
+if ($env:SUNSHINE_PLUGIN_OPT_SDR_10BIT -eq 'true') {
+    Set-SudoVdaSdrBits 10
+}
+
 # Adapters left behind by an earlier SudoVDA or Apollo install pick up the driver again when it is installed,
 # leaving several adapters, and vdisplay can then attach the display to the wrong one. Remove the ones that
 # are not working, and reuse a working adapter instead of creating another.

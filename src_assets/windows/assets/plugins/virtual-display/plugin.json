@@ -1,7 +1,7 @@
 {
   "id": "virtual-display",
   "name": "Virtual Display",
-  "version": "1.2.0",
+  "version": "1.5.0",
   "description": "Creates a virtual display that matches the client's resolution and frame rate for the length of the stream, then removes it. Uses sunshine-vdisplay and the SudoVDA driver.",
   "author": "Sunshine",
   "homepage": "https://github.com/Zayrick/sunshine-vdisplay",
@@ -12,7 +12,8 @@
     "install": "install.ps1",
     "uninstall": "uninstall.ps1",
     "do": "do.ps1",
-    "undo": "undo.ps1"
+    "undo": "undo.ps1",
+    "apply": "apply.ps1"
   },
   "options": [
     {
@@ -35,6 +36,14 @@
       "label": "Shared virtual monitor for all clients",
       "description": "Use one virtual monitor for every client, so Windows keeps the same display settings for all of them. Turn this off to give each client its own monitor, which lets Windows remember settings such as scaling per client.",
       "default": false
+    },
+    {
+      "id": "sdr_10bit",
+      "type": "boolean",
+      "label": "10-bit SDR",
+      "description": "Make the virtual display 10-bit in SDR mode instead of 8-bit, and turn on Auto Color Management for it at the start of each stream so the desktop is captured in more than 8 bits. Saving a change reloads the driver, so end any stream first. This is a driver-wide setting, so it also affects Apollo if it is installed.",
+      "default": false,
+      "apply": true
     },
     {
       "id": "hdr",

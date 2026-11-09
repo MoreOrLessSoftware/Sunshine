@@ -17,4 +17,7 @@ if ($env:SUNSHINE_PLUGIN_OPT_REMOVE_DRIVER -eq 'true') {
     if ($code -ne 0) {
         throw "vdisplay uninstall-driver failed with exit code $code"
     }
+    if ($env:SUNSHINE_PLUGIN_OPT_SDR_10BIT -eq 'true') {
+        Set-SudoVdaSdrBits $null
+    }
 }

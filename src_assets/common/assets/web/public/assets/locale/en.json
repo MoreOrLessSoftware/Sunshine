@@ -678,6 +678,8 @@
     "action_failure": "The request failed.",
     "activate": "Active",
     "active": "Active",
+    "apply_failed": "Could not apply the options, so they were not saved",
+    "applying": "Applying options...",
     "builtin": "Built-in",
     "custom": "Custom",
     "default_off": "Off",

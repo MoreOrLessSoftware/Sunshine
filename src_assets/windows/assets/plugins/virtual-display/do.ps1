@@ -5,6 +5,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vdisplay.ps1')
 . (Join-Path $PSScriptRoot 'desktop.ps1')
+. (Join-Path $PSScriptRoot 'color.ps1')
 
 $invariant = [Globalization.CultureInfo]::InvariantCulture
 
@@ -54,6 +55,10 @@ try {
 catch {
     Exit-StreamDesktop
     throw
+}
+
+if ($env:SUNSHINE_PLUGIN_OPT_SDR_10BIT -eq 'true') {
+    Enable-VirtualDisplayWideColor
 }
 
 $settle = [int]$env:SUNSHINE_PLUGIN_OPT_SETTLE_SECONDS

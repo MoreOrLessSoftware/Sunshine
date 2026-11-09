@@ -63,6 +63,7 @@ namespace plugins {
     std::optional<double> max;  ///< Largest accepted value of a number option.
     std::optional<double> step;  ///< Increment suggested to the web UI for a number option.
     std::vector<choice_t> choices;  ///< Accepted values of a choice option.
+    bool apply = false;  ///< Whether saving a new value runs the plugin's `apply` script.
   };
 
   /**
@@ -75,6 +76,7 @@ namespace plugins {
     std::string undo_script;  ///< Runs after the application exits.
     std::string connect_script;  ///< Runs when a client resumes the running application.
     std::string disconnect_script;  ///< Runs when the last client leaves the application running.
+    std::string apply;  ///< Puts changed options into effect when they are saved. Always runs elevated.
   };
 
   /**
@@ -155,7 +157,8 @@ namespace plugins {
   enum class action_e {
     install,  ///< Run the install script.
     uninstall,  ///< Run the uninstall script.
-    run  ///< Run the script of one of the plugin's actions.
+    run,  ///< Run the script of one of the plugin's actions.
+    apply  ///< Run the apply script, then save the new options if it succeeds.
   };
 
   /**
@@ -395,13 +398,17 @@ namespace plugins {
   /**
    * @brief Change whether a plugin is active and the values of its options.
    *
+   * When the plugin is installed and a new value changes an option marked `apply`, the plugin's apply script runs
+   * in the background and all the new values are saved only if it succeeds. Otherwise they are saved immediately.
+   *
    * @param id Plugin ID.
    * @param active Whether the plugin should be active, or `std::nullopt` to keep the current value.
    * @param options Option values, or `std::nullopt` to keep the current values.
    * @param error Receives the reason when the request is rejected.
+   * @param applying Set to `true` when the apply script was started, so the new values aren't saved yet. May be null.
    * @return Outcome of the request.
    */
-  result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error);
+  result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error, bool *applying = nullptr);
 
   /**
    * @brief Start installing or uninstalling a plugin in the background.
