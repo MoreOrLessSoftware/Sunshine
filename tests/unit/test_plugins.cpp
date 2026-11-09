@@ -1812,7 +1812,7 @@ TEST(PluginsBundledTest, NyrnaManifestIsValid) {
   auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
   ASSERT_TRUE(manifest) << error;
   ASSERT_EQ(manifest->client_commands.size(), 1);
-  EXPECT_EQ(manifest->client_commands[0].label, "Nyrna Suspend");
+  EXPECT_EQ(manifest->client_commands[0].label, "Suspend");
   EXPECT_TRUE(manifest->client_commands[0].top_level);
   EXPECT_TRUE(manifest->client_commands[0].elevated);
 }
