@@ -41,7 +41,7 @@
 
     .chord-badge {
       font-family: var(--bs-font-monospace);
-      font-size: 0.9rem;
+      font-size: 1.05rem;
     }
 
     .recording {
@@ -373,9 +373,6 @@
                     <button type="button" class="btn-close btn-close-white ms-1" style="font-size: 0.6rem"
                             :aria-label="$t('client_commands.remove_chord')" @click="editor.draft.steps.splice(i, 1)"></button>
                   </span>
-                  <a href="#" class="small" role="button" v-if="editor.draft.steps.length > 0" @click.prevent="editor.draft.steps = []">
-                    {{ $t('client_commands.clear_keys') }}
-                  </a>
                 </div>
 
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
@@ -384,6 +381,9 @@
                     <circle-stop :size="16" class="icon" v-if="recorder.recording"></circle-stop>
                     <circle-dot :size="16" class="icon" v-else></circle-dot>
                     {{ recorder.recording ? $t('client_commands.stop_recording') : $t('client_commands.record') }}
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm" v-if="editor.draft.steps.length > 0" @click="editor.draft.steps = []">
+                    {{ $t('client_commands.clear_keys') }}
                   </button>
                   <span class="small text-muted" v-if="recorder.recording">
                     {{ recorder.chord.length ? describeChord(recorder.chord) : $t('client_commands.recording_hint') }}
