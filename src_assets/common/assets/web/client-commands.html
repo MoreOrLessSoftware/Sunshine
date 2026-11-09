@@ -105,7 +105,6 @@
         </ul>
         <div class="config-nav-heading">{{ $t('client_commands.apps') }}</div>
         <p v-if="!loading && apps.length === 0" class="small text-muted px-3 mb-0">{{ $t('client_commands.no_apps') }}</p>
-        <p v-else-if="!loading && listedApps.length === 0" class="small text-muted px-3 mb-2">{{ $t('client_commands.no_app_commands') }}</p>
         <ul class="nav config-nav-list">
           <li class="nav-item" v-for="app in listedApps" :key="app.index">
             <a class="nav-link" :class="{'active': currentView === 'app-' + app.index}" :href="'#app-' + app.index"
