@@ -260,7 +260,7 @@ function Invoke-NyrnaToggle([string]$hotkey, [bool]$minimize) {
     # Through Task Scheduler (see Register-ToggleTask), so Nyrna's own window can't take the foreground
     $task = Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue
     if (-not $task) {
-        throw 'The scheduled task that runs Nyrna is missing; pick Nyrna Suspend in Moonlight once to set it up again.'
+        throw 'The scheduled task that runs Nyrna is missing; pick the Suspend command in Moonlight once to set it up again.'
     }
     $arguments = if ($minimize) { '--toggle' } else { '--toggle --no-minimize' }
     if ($task.Actions[0].Arguments -ne $arguments) {
@@ -333,10 +333,19 @@ function Set-SharedFile([string]$path, [string]$text) {
     [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding $false))
 }
 
+# The command's label while something is suspended, from the plugin's option. %APP% becomes its name.
+function Get-ResumeLabel([string]$name) {
+    $label = "$env:SUNSHINE_PLUGIN_OPT_RESUME_LABEL".Trim()
+    if (-not $label) {
+        $label = 'Resume (%APP%)'
+    }
+    return $label -replace '%APP%', $name.Replace('$', '$$')
+}
+
 function Set-Suspended($app, [string]$hotkey, [bool]$minimize, [bool]$hasImage) {
     $state = [ordered]@{ pid = $app.Pid; name = $app.Name; title = $app.Title; process = $app.ProcessName; hotkey = $hotkey; minimize = $minimize; image = $hasImage; time = (Get-Date -Format o) }
     Set-SharedFile $stateFile ($state | ConvertTo-Json)
-    Set-SharedFile $menuFile (@{ label = "Nyrna Resume ($($app.Name))"; icon = 'material:play_circle' } | ConvertTo-Json)
+    Set-SharedFile $menuFile (@{ label = (Get-ResumeLabel $app.Name); icon = 'material:play_circle' } | ConvertTo-Json)
 }
 
 # Forgets what was suspended.
@@ -392,7 +401,7 @@ function Show-Toast($app, [bool]$hasImage) {
   <visual>
     <binding template="ToastGeneric">
       <text>$name is suspended</text>
-      <text>Resume it here, or with Nyrna Resume in Moonlight's menu.</text>
+      <text>Resume it here, or from Moonlight's menu.</text>
       $image
     </binding>
   </visual>

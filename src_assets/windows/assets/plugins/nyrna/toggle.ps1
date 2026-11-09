@@ -1,8 +1,8 @@
 # Suspends the window in the foreground, or resumes the one suspended last, wherever it is.
-# Run by the plugin's "Nyrna Suspend" client command; its output goes to the plugin's log.
+# Run by the plugin's "Suspend" client command; its output goes to the plugin's log.
 #
 # Once something is suspended, a notification on this PC shows it, with a Resume button, and the command in
-# Moonlight's menu becomes "Nyrna Resume (<app>)".
+# Moonlight's menu changes to the plugin's "Resume command label" option.
 
 param()
 

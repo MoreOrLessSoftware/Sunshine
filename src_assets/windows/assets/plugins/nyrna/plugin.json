@@ -1,8 +1,8 @@
 {
   "id": "nyrna",
   "name": "Nyrna",
-  "version": "1.1.0",
-  "description": "Adds a Nyrna Suspend command to Moonlight's in-stream menu, which suspends the game or application in the foreground using Nyrna. While it's suspended, a notification on this PC shows it with a Resume button, and the command becomes Nyrna Resume. If Nyrna is already running on this PC, the command presses its hotkey. Games with anti-cheat usually can't be suspended.",
+  "version": "1.2.0",
+  "description": "Adds a Suspend command to Moonlight's in-stream menu, which suspends the game or application in the foreground using Nyrna. While it's suspended, a notification on this PC shows it with a Resume button, and the command becomes Resume. If Nyrna is already running on this PC, the command presses its hotkey. Games with anti-cheat usually can't be suspended.",
   "author": "Sunshine",
   "homepage": "https://nyrna.merritt.codes/",
   "order": 400,
@@ -26,12 +26,19 @@
       "label": "Allow minimizing",
       "description": "Turn this off to leave the frozen window on screen while it's suspended. When it's on, Nyrna's own setting decides whether the window is minimized.",
       "default": true
+    },
+    {
+      "id": "resume_label",
+      "type": "string",
+      "label": "Resume command label",
+      "description": "The command's label in Moonlight's menu while something is suspended. %APP% becomes the name of what's suspended.",
+      "default": "Resume (%APP%)"
     }
   ],
   "client_commands": [
     {
       "id": "toggle",
-      "label": "Nyrna Suspend",
+      "label": "Suspend",
       "icon": "material:pause_circle",
       "top_level": true,
       "script": "toggle.ps1",
