@@ -1341,7 +1341,7 @@ namespace plugins {
     return cmds;
   }
 
-  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded) {
+  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides) {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
 
@@ -1364,6 +1364,14 @@ namespace plugins {
         command.label = source.label;
         command.icon = source.icon;
         command.close_menu = source.close_menu;
+        if (const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id)); entry != overrides.end()) {
+          if (!entry->second.label.empty()) {
+            command.label = entry->second.label;
+          }
+          if (!entry->second.icon.empty()) {
+            command.icon = entry->second.icon;
+          }
+        }
         if (!source.status_file.empty()) {
           apply_status_file(data_dir / source.status_file, command);
         }

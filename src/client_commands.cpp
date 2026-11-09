@@ -433,6 +433,103 @@ namespace client_commands {
     return groups;
   }
 
+  namespace {
+    /**
+     * @brief Parse one override of a plugin command.
+     *
+     * @param key `<plugin id>/<command id>`.
+     * @param json Override object.
+     * @param error Receives the reason when it is rejected.
+     * @return The override, or `std::nullopt` when it is invalid.
+     */
+    std::optional<plugin_override_t> parse_plugin_override(const std::string &key, const nlohmann::json &json, std::string &error) {
+      const auto slash = key.find('/');
+      if (slash == std::string::npos || slash == 0 || slash == key.size() - 1) {
+        error = std::format("\"{}\" must be <plugin id>/<command id>", key);
+        return std::nullopt;
+      }
+      if (!json.is_object()) {
+        error = std::format("\"{}\" must be an object", key);
+        return std::nullopt;
+      }
+
+      plugin_override_t entry {string_member(json, "label"), string_member(json, "icon")};
+      if (!entry.icon.empty() && !entry.icon.starts_with("material:")) {
+        error = std::format("\"{}\": the icon must be material:<name>", key);
+        return std::nullopt;
+      }
+      return entry;
+    }
+  }  // namespace
+
+  plugin_overrides_t parse_plugin_overrides(const nlohmann::json &json) {
+    plugin_overrides_t overrides;
+    if (!json.is_object()) {
+      return overrides;
+    }
+
+    for (const auto &[key, value] : json.items()) {
+      std::string error;
+      auto entry = parse_plugin_override(key, value, error);
+      if (!entry) {
+        BOOST_LOG(warning) << "Ignoring a plugin command override: "sv << error;
+      } else if (!entry->label.empty() || !entry->icon.empty()) {
+        overrides[key] = std::move(*entry);
+      }
+    }
+    return overrides;
+  }
+
+  std::optional<plugin_overrides_t> parse_plugin_overrides_strict(const nlohmann::json &json, std::string &error) {
+    if (!json.is_object()) {
+      error = "the plugin command overrides must be an object";
+      return std::nullopt;
+    }
+
+    plugin_overrides_t overrides;
+    for (const auto &[key, value] : json.items()) {
+      auto entry = parse_plugin_override(key, value, error);
+      if (!entry) {
+        return std::nullopt;
+      }
+      if (!entry->label.empty() || !entry->icon.empty()) {
+        overrides[key] = std::move(*entry);
+      }
+    }
+    return overrides;
+  }
+
+  plugin_overrides_t load_plugin_overrides(const std::filesystem::path &file) {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(file, ec)) {
+      return {};
+    }
+
+    try {
+      std::ifstream in {file};
+      auto json = nlohmann::json::parse(in);
+      return parse_plugin_overrides(json.is_object() && json.contains("plugin-commands") ? json["plugin-commands"] : nlohmann::json {});
+    } catch (const std::exception &e) {
+      BOOST_LOG(warning) << "Couldn't read the client commands file: "sv << e.what();
+      return {};
+    }
+  }
+
+  nlohmann::json to_json(const plugin_overrides_t &overrides) {
+    nlohmann::json json = nlohmann::json::object();
+    for (const auto &[key, entry] : overrides) {
+      nlohmann::json item = nlohmann::json::object();
+      if (!entry.label.empty()) {
+        item["label"] = entry.label;
+      }
+      if (!entry.icon.empty()) {
+        item["icon"] = entry.icon;
+      }
+      json[key] = std::move(item);
+    }
+    return json;
+  }
+
   std::vector<program_group_t> load_program_groups(const std::filesystem::path &file) {
     std::error_code ec;
     if (!std::filesystem::is_regular_file(file, ec)) {
@@ -605,7 +702,7 @@ namespace client_commands {
     return save(path, commands, std::nullopt, error);
   }
 
-  bool save(const std::filesystem::path &path, const std::optional<std::vector<command_t>> &commands, const std::optional<std::vector<program_group_t>> &groups, std::string &error) {
+  bool save(const std::filesystem::path &path, const std::optional<std::vector<command_t>> &commands, const std::optional<std::vector<program_group_t>> &groups, std::string &error, const std::optional<plugin_overrides_t> &overrides) {
     nlohmann::json json = nlohmann::json::object();
 
     std::error_code ec;
@@ -627,6 +724,9 @@ namespace client_commands {
     }
     if (groups) {
       json["program-groups"] = to_json(*groups);
+    }
+    if (overrides) {
+      json["plugin-commands"] = to_json(*overrides);
     }
 
     std::filesystem::create_directories(path.parent_path(), ec);
@@ -680,7 +780,7 @@ namespace client_commands {
     }
 
     // The active plugins' commands: some with the menu's own, the rest in a group for each plugin
-    for (auto &plugin : plugins::offered_client_commands(excluded_plugins)) {
+    for (auto &plugin : plugins::offered_client_commands(excluded_plugins, load_plugin_overrides(file()))) {
       for (auto &command : plugin.top_level) {
         offer.commands.push_back(std::move(command));
       }

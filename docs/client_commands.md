@@ -17,9 +17,11 @@ Open the **Client Commands** page in the web UI.
 * Each group under **Programs** has a name, an icon and the file names of one or more programs, such as
   `photoshop.exe`. While one of those programs is in the foreground on this host when the client opens its menu, the
   menu shows a button with the group's name, which opens a page of its commands. This works on Windows only for now.
-* **Plugins** lists the commands that come with [plugins](plugins.md#client-commands), such as *Nyrna Suspend*. They
-  can't be changed here. They're offered while the plugin is active and not turned off for the application being
-  streamed: those marked *Top level* with the menu's own commands, and the rest on a page named after the plugin.
+* **Plugins** lists the commands that come with [plugins](plugins.md#client-commands), such as *Nyrna Suspend*. What
+  they do comes with the plugin, but the pencil button lets you give one your own label and icon. While a plugin is
+  reporting what a command will do next, such as *Nyrna Resume (name)*, its label and icon show instead. They're
+  offered while the plugin is active and not turned off for the application being streamed: those marked *Top level*
+  with the menu's own commands, and the rest on a page named after the plugin.
 
 For each command, set:
 
@@ -40,7 +42,9 @@ before another one starts. If a command fails, the client shows why on its butto
 
 ## Files
 The global commands are kept in the `commands` array of `client_commands.json` in the config directory, the program
-groups in its `program-groups` array, and an application's commands in a `client-commands` array on it in `apps.json`.
+groups in its `program-groups` array, your labels and icons for plugin commands in its `plugin-commands` object (such
+as `{"nyrna/toggle": {"label": "Pause Game", "icon": "material:pause"}}`), and an application's commands in a
+`client-commands` array on it in `apps.json`.
 A program group looks like this:
 
 ```json

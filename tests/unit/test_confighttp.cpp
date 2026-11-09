@@ -2609,3 +2609,23 @@ TEST_F(ClientCommandsConfigHttpTest, RejectsInvalidProgramGroups) {
   expect_rejected(R"({"program-groups": {}})", "the program groups must be an array");
   expect_rejected(R"({"program-groups": [{"id": "n", "label": "Notepad"}]})", "\"Notepad\": \"programs\" must name at least one program");
 }
+
+
+TEST_F(ClientCommandsConfigHttpTest, ListsAndSavesPluginCommandOverrides) {
+  EXPECT_TRUE(nlohmann::json::parse(send("GET", "/client-commands-test")->content.string())["plugin-commands"].empty());
+
+  ASSERT_EQ(send("POST", "/client-commands-test", R"({"plugin-commands": {"nyrna/toggle": {"label": "Pause Game", "icon": "material:pause"}}})")->status_code, "200 OK");
+
+  // The global commands were left out, so they're kept
+  const auto global = read_global();
+  EXPECT_EQ(global["commands"][0]["id"], "g1");
+  EXPECT_EQ(global["plugin-commands"]["nyrna/toggle"]["label"], "Pause Game");
+
+  const auto body = nlohmann::json::parse(send("GET", "/client-commands-test")->content.string());
+  EXPECT_EQ(body["plugin-commands"]["nyrna/toggle"]["icon"], "material:pause");
+}
+
+TEST_F(ClientCommandsConfigHttpTest, RejectsInvalidPluginCommandOverrides) {
+  expect_rejected(R"({"plugin-commands": []})", "the plugin command overrides must be an object");
+  expect_rejected(R"({"plugin-commands": {"a/b": {"icon": "x.png"}}})", "\"a/b\": the icon must be material:<name>");
+}

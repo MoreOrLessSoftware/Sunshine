@@ -208,29 +208,63 @@
             </div>
           </div>
 
-          <!-- A plugin's commands, read only -->
+          <!-- A plugin's commands: what they do comes with the plugin, their label and icon can be customized -->
           <template v-if="currentPlugin">
             <div class="alert py-2" :class="pluginRuns(currentPlugin) ? 'alert-secondary' : 'alert-warning'">
               {{ pluginRuns(currentPlugin) ? $t('client_commands.plugin_note') : $t('client_commands.plugin_inactive') }}
               <a :href="'./plugins#plugin-' + encodeURIComponent(currentPlugin.id)">{{ $t('client_commands.plugin_settings') }}</a>
             </div>
             <ul class="list-group mb-3">
-              <li class="list-group-item d-flex align-items-center gap-3" v-for="command in currentPlugin.client_commands" :key="command.id">
-                <span class="command-icon">
-                  <span class="material-icon" v-if="glyph(command.icon)">{{ glyph(command.icon) }}</span>
-                </span>
-                <div class="flex-grow-1 min-w-0">
-                  <div class="fw-semibold">
-                    {{ command.label }}
-                    <span class="badge bg-info text-dark ms-1">{{ command.top_level ? $t('client_commands.top_level') : $t('client_commands.in_plugin_group') }}</span>
-                    <span class="badge bg-warning text-dark ms-1" v-if="command.script && command.elevated">{{ $t('_common.elevated') }}</span>
-                    <span class="badge bg-light text-dark border ms-1" v-if="!command.close_menu">{{ $t('client_commands.keeps_menu_open') }}</span>
+              <li class="list-group-item" v-for="command in currentPlugin.client_commands" :key="command.id">
+                <div class="d-flex align-items-center gap-3">
+                  <span class="command-icon">
+                    <span class="material-icon" v-if="glyph(pluginIcon(command))">{{ glyph(pluginIcon(command)) }}</span>
+                  </span>
+                  <div class="flex-grow-1 min-w-0">
+                    <div class="fw-semibold">
+                      {{ pluginLabel(command) }}
+                      <span class="badge bg-info text-dark ms-1">{{ command.top_level ? $t('client_commands.top_level') : $t('client_commands.in_plugin_group') }}</span>
+                      <span class="badge bg-warning text-dark ms-1" v-if="command.script && command.elevated">{{ $t('_common.elevated') }}</span>
+                      <span class="badge bg-light text-dark border ms-1" v-if="!command.close_menu">{{ $t('client_commands.keeps_menu_open') }}</span>
+                      <span class="badge bg-light text-dark border ms-1" v-if="isPluginCommandCustomized(command)">{{ $t('client_commands.customized') }}</span>
+                    </div>
+                    <div class="command-summary text-muted">
+                      <square-terminal :size="14" class="icon" v-if="command.script"></square-terminal>
+                      <keyboard :size="14" class="icon" v-else></keyboard>
+                      {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}
+                    </div>
                   </div>
-                  <div class="command-summary text-muted">
-                    <square-terminal :size="14" class="icon" v-if="command.script"></square-terminal>
-                    <keyboard :size="14" class="icon" v-else></keyboard>
-                    {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}
+                  <button type="button" class="btn btn-outline-primary btn-sm" @click="editPluginCommand(command)"
+                          :title="$t('client_commands.customize')" :aria-label="$t('client_commands.customize')">
+                    <pencil :size="16"></pencil>
+                  </button>
+                </div>
+
+                <div v-if="pluginEditKey === pluginKey(command)" class="border-top mt-3 pt-3">
+                  <div class="mb-3">
+                    <label class="form-label" :for="'plugin-label-' + command.id">{{ $t('client_commands.label') }}</label>
+                    <input type="text" class="form-control" :id="'plugin-label-' + command.id" maxlength="64"
+                           v-model="pluginOverrides[pluginKey(command)].label" :placeholder="command.label">
                   </div>
+                  <div class="mb-2">
+                    <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                    <div class="d-flex align-items-center gap-2">
+                      <span class="command-icon">
+                        <span class="material-icon" v-if="glyph(pluginIcon(command))">{{ glyph(pluginIcon(command)) }}</span>
+                      </span>
+                      <span class="text-muted small">{{ pluginOverrides[pluginKey(command)].icon ? pluginOverrides[pluginKey(command)].icon.substring('material:'.length) : $t('client_commands.default_icon') }}</span>
+                      <button type="button" class="btn btn-outline-secondary btn-sm" @click="toggleIconPicker(pluginOverrides[pluginKey(command)])">
+                        <search :size="16" class="icon"></search>
+                        {{ $t('client_commands.choose_icon') }}
+                      </button>
+                      <a href="#" class="small" role="button" v-if="isPluginCommandCustomized(command)" @click.prevent="resetPluginCommand(command)">
+                        {{ $t('client_commands.reset_plugin_command') }}
+                      </a>
+                    </div>
+                    <icon-chooser v-if="iconPicker.target === pluginOverrides[pluginKey(command)]" :names="iconNames" :codepoints="codepoints"
+                                  :selected="pluginOverrides[pluginKey(command)].icon" @pick="pickIcon"></icon-chooser>
+                  </div>
+                  <div class="form-text" v-if="command.status_file">{{ $t('client_commands.plugin_status_hint') }}</div>
                 </div>
               </li>
             </ul>
@@ -406,6 +440,8 @@
             </div>
           </div>
 
+          </template>
+
           <!-- Saving covers every list -->
           <div class="d-flex flex-wrap align-items-center gap-2">
             <button type="button" class="btn btn-success" :disabled="!dirty || saving || !!editor" @click="save">
@@ -418,7 +454,6 @@
             <span class="small text-muted" v-if="dirty">{{ $t('client_commands.unsaved') }}</span>
           </div>
           <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
-          </template>
         </div>
       </div>
     </div>
@@ -626,8 +661,12 @@
         programGroups: [],
         // Plugins with client commands, as /api/plugins lists them
         plugins: [],
+        // The user's labels and icons for plugin commands, by <plugin id>/<command id>
+        pluginOverrides: {},
+        // The plugin command whose label and icon are being customized
+        pluginEditKey: null,
         // The same as saved on the server, to tell what changed
-        saved: {global: '[]', apps: {}, programGroups: '[]'},
+        saved: {global: '[]', apps: {}, programGroups: '[]', pluginOverrides: '{}'},
         // 'global', 'app-<index>', 'program-<id>' or 'plugin-<id>'
         currentView: 'global',
         // The command being edited: {view, index (-1 for a new one), draft, error}
@@ -683,6 +722,9 @@
         }
         return this.i18n.t(this.currentGroup ? 'client_commands.program_desc' : 'client_commands.app_desc');
       },
+      pluginOverridesChanged() {
+        return JSON.stringify(this.overridesForServer()) !== this.saved.pluginOverrides;
+      },
       programGroupsChanged() {
         return JSON.stringify(this.programGroups.map(groupForServer)) !== this.saved.programGroups;
       },
@@ -701,7 +743,7 @@
         return JSON.stringify(this.global.map(forServer)) !== this.saved.global;
       },
       dirty() {
-        return this.globalChanged || this.programGroupsChanged || this.changedApps.length > 0;
+        return this.globalChanged || this.programGroupsChanged || this.pluginOverridesChanged || this.changedApps.length > 0;
       },
       pickableKeys() {
         const keys = [];
@@ -742,6 +784,8 @@
           this.global = (body.commands || []).map(normalize);
           this.apps = (body.apps || []).map((app) => ({index: app.index, name: app.name, commands: (app['client-commands'] || []).map(normalize)}));
           this.programGroups = (body['program-groups'] || []).map(normalizeGroup);
+          this.pluginOverrides = Object.fromEntries(Object.entries(body['plugin-commands'] || {}).map(([key, value]) => [key, {label: value.label || '', icon: value.icon || ''}]));
+          this.pluginEditKey = null;
           this.markSaved();
           this.loadError = null;
           if (this.currentView !== 'global' && !this.currentGroup && !this.currentPlugin && !this.apps.some((a) => 'app-' + a.index === this.currentView)) {
@@ -771,10 +815,62 @@
       pluginRuns(plugin) {
         return plugin.installed && plugin.active;
       },
+      pluginKey(command) {
+        return this.currentPlugin.id + '/' + command.id;
+      },
+      pluginLabel(command) {
+        const override = this.pluginOverrides[this.pluginKey(command)];
+        return (override && override.label.trim()) || command.label;
+      },
+      pluginIcon(command) {
+        const override = this.pluginOverrides[this.pluginKey(command)];
+        return (override && override.icon) || command.icon;
+      },
+      isPluginCommandCustomized(command) {
+        const override = this.pluginOverrides[this.pluginKey(command)];
+        return !!override && (!!override.label.trim() || !!override.icon);
+      },
+      editPluginCommand(command) {
+        const key = this.pluginKey(command);
+        if (this.pluginEditKey === key) {
+          this.pluginEditKey = null;
+        } else {
+          if (!this.pluginOverrides[key]) {
+            this.pluginOverrides[key] = {label: '', icon: ''};
+          }
+          this.pluginEditKey = key;
+        }
+        this.iconPicker.target = null;
+      },
+      resetPluginCommand(command) {
+        const override = this.pluginOverrides[this.pluginKey(command)];
+        override.label = '';
+        override.icon = '';
+        this.iconPicker.target = null;
+      },
+      // Only what changes something, in a fixed order so saved and edited can be compared
+      overridesForServer() {
+        const out = {};
+        for (const key of Object.keys(this.pluginOverrides).sort()) {
+          const override = this.pluginOverrides[key];
+          const entry = {};
+          if (override.label.trim()) {
+            entry.label = override.label.trim();
+          }
+          if (override.icon) {
+            entry.icon = override.icon;
+          }
+          if (Object.keys(entry).length > 0) {
+            out[key] = entry;
+          }
+        }
+        return out;
+      },
       markSaved() {
         this.saved.global = JSON.stringify(this.global.map(forServer));
         this.saved.apps = Object.fromEntries(this.apps.map((app) => [app.index, JSON.stringify(app.commands.map(forServer))]));
         this.saved.programGroups = JSON.stringify(this.programGroups.map(groupForServer));
+        this.saved.pluginOverrides = JSON.stringify(this.overridesForServer());
       },
       async loadIcons() {
         try {
@@ -877,6 +973,8 @@
       },
       showView(view, replaceUrl) {
         this.currentView = view;
+        this.pluginEditKey = null;
+        this.iconPicker.target = null;
         if (replaceUrl) {
           window.history.replaceState(null, '', '#' + view);
         }
@@ -1069,6 +1167,9 @@
         }
         if (this.programGroupsChanged) {
           payload['program-groups'] = this.programGroups.map(groupForServer);
+        }
+        if (this.pluginOverridesChanged) {
+          payload['plugin-commands'] = this.overridesForServer();
         }
 
         this.saving = true;

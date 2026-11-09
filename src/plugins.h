@@ -386,9 +386,11 @@ namespace plugins {
    * `plugin:<plugin id>/<command id>`.
    *
    * @param excluded IDs of plugins the application being streamed opted out of.
+   * @param overrides The user's labels and icons, which replace the plugin's. A status file still replaces
+   *                  them while it exists, as it shows what the command will do next.
    * @return In plugin order, the commands of each active, installed plugin that has any.
    */
-  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded);
+  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides = {});
 
   /**
    * @brief Change whether a plugin is active and the values of its options.

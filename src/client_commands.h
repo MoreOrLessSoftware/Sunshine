@@ -77,6 +77,19 @@ namespace client_commands {
   };
 
   /**
+   * @brief The user's label and icon for a command that comes with a plugin.
+   */
+  struct plugin_override_t {
+    std::string label;  ///< Label to show instead of the plugin's, or empty to keep it.
+    std::string icon;  ///< Icon to show instead of the plugin's, such as `material:<name>`, or empty to keep it.
+  };
+
+  /**
+   * @brief The user's overrides of plugin commands, by `<plugin id>/<command id>`.
+   */
+  using plugin_overrides_t = std::map<std::string, plugin_override_t>;
+
+  /**
    * @brief Every command offered to a client at one moment.
    */
   struct offer_t {
@@ -194,6 +207,39 @@ namespace client_commands {
   void set_foreground_program_for_testing(std::optional<std::string> program);
 
   /**
+   * @brief Parse the overrides of plugin commands, skipping and logging invalid ones.
+   *
+   * @param json Object of overrides by `<plugin id>/<command id>`; anything else yields none.
+   * @return Valid overrides that change something.
+   */
+  plugin_overrides_t parse_plugin_overrides(const nlohmann::json &json);
+
+  /**
+   * @brief Parse the overrides of plugin commands, rejecting them when any is invalid.
+   *
+   * @param json Object of overrides by `<plugin id>/<command id>`.
+   * @param error Receives the reason when they are rejected, naming the command.
+   * @return The overrides that change something, or `std::nullopt` when rejected.
+   */
+  std::optional<plugin_overrides_t> parse_plugin_overrides_strict(const nlohmann::json &json, std::string &error);
+
+  /**
+   * @brief Read the overrides of plugin commands.
+   *
+   * @param file `client_commands.json` to read.
+   * @return Overrides from its `plugin-commands` object; empty when the file is missing or unreadable.
+   */
+  plugin_overrides_t load_plugin_overrides(const std::filesystem::path &file);
+
+  /**
+   * @brief Turn the overrides of plugin commands back into their definition, as it is saved.
+   *
+   * @param overrides Overrides to describe.
+   * @return Object of overrides by `<plugin id>/<command id>`, with only the members that are set.
+   */
+  nlohmann::json to_json(const plugin_overrides_t &overrides);
+
+  /**
    * @brief Read the global commands.
    *
    * @param file `client_commands.json` to read.
@@ -276,15 +322,16 @@ namespace client_commands {
   bool save_global(const std::filesystem::path &path, const std::vector<command_t> &commands, std::string &error);
 
   /**
-   * @brief Save the global commands and the program groups, keeping anything else the file holds.
+   * @brief Save the global commands, the program groups and the overrides of plugin commands, keeping anything else the file holds.
    *
    * @param path File to write.
    * @param commands Commands to save, or `std::nullopt` to keep those in the file.
    * @param groups Program groups to save, or `std::nullopt` to keep those in the file.
    * @param error Receives the reason when the file cannot be written.
+   * @param overrides Overrides of plugin commands to save, or `std::nullopt` to keep those in the file.
    * @return `true` on success.
    */
-  bool save(const std::filesystem::path &path, const std::optional<std::vector<command_t>> &commands, const std::optional<std::vector<program_group_t>> &groups, std::string &error);
+  bool save(const std::filesystem::path &path, const std::optional<std::vector<command_t>> &commands, const std::optional<std::vector<program_group_t>> &groups, std::string &error, const std::optional<plugin_overrides_t> &overrides = std::nullopt);
 
   /**
    * @brief Build what is offered with the given commands available.

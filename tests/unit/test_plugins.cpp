@@ -1701,3 +1701,51 @@ TEST_F(PluginsTest, StatusFilesMustBeInTheDataDirectory) {
     EXPECT_TRUE(error.contains("'status_file' must be a file name")) << name << ": " << error;
   }
 }
+
+
+TEST_F(PluginsTest, TheUsersLabelAndIconReplaceThePluginsUntilAStatusFileDoes) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"client_commands", json::parse(R"([
+                                     {"id": "toggle", "label": "Suspend", "icon": "material:pause", "steps": [[27]], "status_file": "menu.json"},
+                                     {"id": "other", "label": "Other", "icon": "material:star", "steps": [[27]]}
+                                   ])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const client_commands::plugin_overrides_t overrides {{"p/toggle", {"Pause Game", "material:bedtime"}}, {"p/other", {"", "material:bolt"}}, {"q/toggle", {"Not This", ""}}};
+  auto commands = [&] {
+    return plugins::offered_client_commands({}, overrides).at(0).grouped;
+  };
+  EXPECT_EQ(commands()[0].label, "Pause Game");
+  EXPECT_EQ(commands()[0].icon, "material:bedtime");
+
+  // Only what's set
+  EXPECT_EQ(commands()[1].label, "Other");
+  EXPECT_EQ(commands()[1].icon, "material:bolt");
+
+  // The status file shows what the command will do next
+  write_text(data_dir / "p" / "menu.json", R"({"label": "Resume", "icon": "material:play_arrow"})");
+  EXPECT_EQ(commands()[0].label, "Resume");
+  EXPECT_EQ(commands()[0].icon, "material:play_arrow");
+  fs::remove(data_dir / "p" / "menu.json");
+
+  // Without any, the plugin's own
+  EXPECT_EQ(plugins::offered_client_commands({}).at(0).grouped[0].label, "Suspend");
+}
+
+TEST_F(PluginsTest, TheClientsOfferUsesTheSavedOverrides) {
+  write_plugin(builtin_dir, "p", {{"id", "p"}, {"client_commands", json::parse(R"([{"id": "top", "label": "Top", "top_level": true, "steps": [[27]]}])")}});
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  write_text(root / "client_commands.json", R"({"plugin-commands": {"p/top": {"label": "Renamed"}}})");
+  client_commands::set_file_for_testing(root / "client_commands.json");
+  const auto offer = client_commands::current_offer();
+  client_commands::set_file_for_testing({});
+
+  ASSERT_EQ(offer.commands.size(), 1);
+  EXPECT_EQ(offer.commands[0].id, "plugin:p/top");
+  EXPECT_EQ(offer.commands[0].label, "Renamed");
+}

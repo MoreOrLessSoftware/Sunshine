@@ -677,3 +677,59 @@ TEST(ClientCommandsPrograms, ThePlatformCanBeAsked) {
   auto program = client_commands::foreground_program();
   EXPECT_EQ(program.find_first_of("\\/"), std::string::npos) << program;
 }
+
+
+TEST(ClientCommandsPluginOverrides, ParsesAndRoundTrips) {
+  auto overrides = client_commands::parse_plugin_overrides(json::parse(R"({
+    "nyrna/toggle": {"label": "Pause Game", "icon": "material:pause"},
+    "p/label-only": {"label": "Only"},
+    "p/nothing": {"label": "", "icon": ""},
+    "no-slash": {"label": "Bad"},
+    "p/bad-icon": {"icon": "image:x.png"},
+    "p/not-object": 5
+  })"));
+  ASSERT_EQ(overrides.size(), 2);
+  EXPECT_EQ(overrides["nyrna/toggle"].label, "Pause Game");
+  EXPECT_EQ(overrides["nyrna/toggle"].icon, "material:pause");
+  EXPECT_EQ(client_commands::to_json(overrides), json::parse(R"({"nyrna/toggle": {"label": "Pause Game", "icon": "material:pause"}, "p/label-only": {"label": "Only"}})"));
+  EXPECT_TRUE(client_commands::parse_plugin_overrides(json::array()).empty());
+}
+
+TEST(ClientCommandsPluginOverrides, StrictParsingRejectsAnythingInvalid) {
+  std::string error;
+  EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::array(), error));
+  EXPECT_EQ(error, "the plugin command overrides must be an object");
+  for (const auto *text : {R"({"nope": {"label": "x"}})", R"({"/a": {"label": "x"}})", R"({"a/": {"label": "x"}})"}) {
+    EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::parse(text), error)) << text;
+    EXPECT_NE(error.find("<plugin id>/<command id>"), std::string::npos) << error;
+  }
+  EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::parse(R"({"a/b": 5})"), error));
+  EXPECT_NE(error.find("must be an object"), std::string::npos);
+  EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::parse(R"({"a/b": {"icon": "x"}})"), error));
+  EXPECT_NE(error.find("material:<name>"), std::string::npos);
+
+  auto valid = client_commands::parse_plugin_overrides_strict(json::parse(R"({"a/b": {"label": "x"}, "a/c": {}})"), error);
+  ASSERT_TRUE(valid);
+  EXPECT_EQ(valid->size(), 1);
+}
+
+TEST_F(ClientCommandsTest, LoadsAndSavesPluginOverridesKeepingTheRest) {
+  auto file = dir_ / "client_commands.json";
+  EXPECT_TRUE(client_commands::load_plugin_overrides(file).empty());
+  write_file(file, "{ broken");
+  EXPECT_TRUE(client_commands::load_plugin_overrides(file).empty());
+
+  write_file(file, R"({"commands": [{"id": "g", "label": "G", "type": "keys", "steps": [[27]]}], "plugin-commands": {"a/b": {"label": "Old"}}})");
+  EXPECT_EQ(client_commands::load_plugin_overrides(file)["a/b"].label, "Old");
+
+  std::string error;
+  ASSERT_TRUE(client_commands::save(file, std::nullopt, std::nullopt, error, client_commands::plugin_overrides_t {{"c/d", {"New", ""}}})) << error;
+  EXPECT_EQ(client_commands::load_global(file).size(), 1);
+  auto saved = client_commands::load_plugin_overrides(file);
+  ASSERT_EQ(saved.size(), 1);
+  EXPECT_EQ(saved["c/d"].label, "New");
+
+  // Left out, they're kept
+  ASSERT_TRUE(client_commands::save(file, std::vector<client_commands::command_t> {}, std::nullopt, error)) << error;
+  EXPECT_EQ(client_commands::load_plugin_overrides(file).size(), 1);
+}
