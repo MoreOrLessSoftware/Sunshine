@@ -424,23 +424,23 @@
       </div>
     </div>
 
-    <!-- Delete confirmation modal -->
-    <div class="modal fade" ref="deleteModal" tabindex="-1" aria-labelledby="commandDeleteModalLabel" aria-hidden="true">
+    <!-- Confirmation modal, for deleting something or discarding an edit -->
+    <div class="modal fade" ref="confirmModal" tabindex="-1" aria-labelledby="commandConfirmModalLabel" aria-hidden="true">
       <div class="modal-dialog modal-dialog-centered">
-        <div class="modal-content" v-if="deleteTarget">
+        <div class="modal-content" v-if="confirmation">
           <div class="modal-header">
-            <h5 class="modal-title" id="commandDeleteModalLabel">{{ deleteTarget.title }}</h5>
-            <button type="button" class="btn-close" @click="closeDeleteModal" :aria-label="$t('_common.close')"></button>
+            <h5 class="modal-title" id="commandConfirmModalLabel">{{ confirmation.title }}</h5>
+            <button type="button" class="btn-close" @click="closeConfirmModal" :aria-label="$t('_common.close')"></button>
           </div>
-          <div class="modal-body">{{ deleteTarget.message }}</div>
+          <div class="modal-body">{{ confirmation.message }}</div>
           <div class="modal-footer">
-            <button type="button" class="btn btn-secondary" @click="closeDeleteModal">
+            <button type="button" class="btn btn-secondary" @click="closeConfirmModal">
               <x :size="18" class="icon"></x>
               {{ $t('_common.cancel') }}
             </button>
-            <button type="button" class="btn btn-danger" @click="confirmDelete">
+            <button type="button" class="btn btn-danger" @click="confirmModalAction">
               <trash-2 :size="18" class="icon"></trash-2>
-              {{ $t('client_commands.delete') }}
+              {{ confirmation.button }}
             </button>
           </div>
         </div>
@@ -633,8 +633,8 @@
         currentView: 'global',
         // The command being edited: {view, index (-1 for a new one), draft, error}
         editor: null,
-        // What the delete dialog is asking about: {title, message, remove}
-        deleteTarget: null,
+        // What the confirmation dialog is asking about: {title, message, button, action}
+        confirmation: null,
         recorder: {recording: false, held: [], chord: [], idleTimer: null},
         keyPicker: {modifiers: [], key: 0},
         // The command or program group whose icon is being chosen
@@ -721,7 +721,7 @@
       window.addEventListener('hashchange', this.onHashChange);
       window.addEventListener('beforeunload', this.onBeforeUnload);
       // However the dialog closes (Cancel, Esc, a click outside), it no longer asks about anything
-      this.$refs.deleteModal.addEventListener('hidden.bs.modal', this.onDeleteModalHidden);
+      this.$refs.confirmModal.addEventListener('hidden.bs.modal', this.onConfirmModalHidden);
       this.loadIcons();
       this.load();
     },
@@ -809,6 +809,14 @@
 
       // --- Program groups
       addProgramGroup() {
+        // Asked before adding it, so saying no doesn't leave an empty group behind
+        if (this.editor) {
+          this.askToDiscardEdit(() => {
+            this.cancelEdit();
+            this.addProgramGroup();
+          });
+          return;
+        }
         const group = normalizeGroup({});
         this.programGroups.push(group);
         window.location.hash = '#program-' + group.id;
@@ -848,13 +856,25 @@
         if (view === this.currentView) {
           return;
         }
-        // An unfinished edit belongs to the list it was started in
-        if (this.editor && !window.confirm(this.i18n.t('client_commands.discard_edit_confirm'))) {
+        // An unfinished edit belongs to the list it was started in: stay on it, and only go once
+        // it's been discarded
+        if (this.editor) {
           window.history.replaceState(null, '', '#' + this.currentView);
+          this.askToDiscardEdit(() => {
+            this.cancelEdit();
+            window.location.hash = '#' + view;
+          });
           return;
         }
-        this.cancelEdit();
         this.showView(view, false);
+      },
+      askToDiscardEdit(action) {
+        this.ask({
+          title: this.i18n.t('client_commands.discard_edit_title'),
+          message: this.i18n.t('client_commands.discard_edit_confirm'),
+          button: this.i18n.t('client_commands.discard_edit_button'),
+          action,
+        });
       },
       showView(view, replaceUrl) {
         this.currentView = view;
@@ -930,24 +950,27 @@
           list.splice(list.indexOf(command), 1);
         });
       },
-      askToDelete(title, message, remove) {
-        this.deleteTarget = {title, message, remove};
+      askToDelete(title, message, action) {
+        this.ask({title, message, button: this.i18n.t('client_commands.delete'), action});
+      },
+      ask(confirmation) {
+        this.confirmation = confirmation;
         this.$nextTick(() => {
-          Modal.getOrCreateInstance(this.$refs.deleteModal).show();
+          Modal.getOrCreateInstance(this.$refs.confirmModal).show();
         });
       },
-      closeDeleteModal() {
-        const modal = Modal.getInstance(this.$refs.deleteModal);
+      closeConfirmModal() {
+        const modal = Modal.getInstance(this.$refs.confirmModal);
         if (modal) {
           modal.hide();
         }
       },
-      confirmDelete() {
-        this.deleteTarget.remove();
-        this.closeDeleteModal();
+      confirmModalAction() {
+        this.confirmation.action();
+        this.closeConfirmModal();
       },
-      onDeleteModalHidden() {
-        this.deleteTarget = null;
+      onConfirmModalHidden() {
+        this.confirmation = null;
       },
       addPickedChord() {
         const chord = [...this.keyPicker.modifiers];
