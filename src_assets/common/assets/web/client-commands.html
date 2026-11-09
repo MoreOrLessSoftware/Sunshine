@@ -340,9 +340,9 @@
                     <button type="button" class="btn-close btn-close-white ms-1" style="font-size: 0.6rem"
                             :aria-label="$t('client_commands.remove_chord')" @click="editor.draft.steps.splice(i, 1)"></button>
                   </span>
-                  <button type="button" class="btn btn-link btn-sm p-0" v-if="editor.draft.steps.length > 0" @click="editor.draft.steps = []">
+                  <a href="#" class="small" role="button" v-if="editor.draft.steps.length > 0" @click.prevent="editor.draft.steps = []">
                     {{ $t('client_commands.clear_keys') }}
-                  </button>
+                  </a>
                 </div>
 
                 <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
