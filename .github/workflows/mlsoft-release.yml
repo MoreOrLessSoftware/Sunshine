@@ -1,0 +1,168 @@
+---
+# Builds the Windows MSI for a vX.X.X tag and attaches it to a draft release. This is
+# separate from the upstream workflows, so they can stay disabled and unchanged. The
+# build steps follow ci-windows.yml.
+name: mlsoft Release
+permissions: {}
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+concurrency:
+  group: release-${{ github.ref }}
+
+env:
+  # Not named TAG, which the CMake version script reads
+  RELEASE_TAG: ${{ github.ref_name }}
+  ASSET_VERSION: mlsoft-${{ github.ref_name }}
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      PYROWAVE_COMMIT: 7fe0e2667cd3076b8b2bf04bcb80bc8d691b800b
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          submodules: recursive
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884  # v2.32.0
+        with:
+          msystem: ucrt64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-nsis
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-qt6-static
+            mingw-w64-ucrt-x86_64-toolchain
+
+      - name: Setup dotnet  # needed for wix
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          dotnet-version: '10.x'
+
+      - name: Setup NodeJS
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
+        with:
+          node-version: 'lts/*'
+
+      - name: NodeJS Path
+        shell: pwsh
+        run: |
+          $NODEJS_PATH = Split-Path -Path (Get-Command node).Source -Parent
+          echo "NODEJS_PATH=$NODEJS_PATH" >> $env:GITHUB_ENV
+
+      # Cloned next to the repo, as in a local build
+      - name: Build PyroWave
+        run: |
+          set -e
+          cd ..
+          git clone https://github.com/Themaister/pyrowave
+          cd pyrowave
+          git checkout "$PYROWAVE_COMMIT"
+          ./checkout_granite.sh
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target pyrowave-shared
+          test -f build/libpyrowave-shared-1.dll
+
+      # BRANCH and BUILD_VERSION set the MSI and xgpad driver versions from the tag
+      - name: Build Sunshine
+        env:
+          BRANCH: ${{ github.ref_name }}
+          BUILD_VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          SUNSHINE_DISABLE_UPDATE_CHECK: '1'
+        run: |
+          set -e
+          export PATH="$PATH:$(cygpath "$NODEJS_PATH")"
+          PYROWAVE_DLL="$(cygpath -m "$(realpath ../pyrowave/build/libpyrowave-shared-1.dll)")"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_DOCS=OFF \
+            -DSUNSHINE_PYROWAVE_DLL="$PYROWAVE_DLL" \
+            -DSUNSHINE_BUILD_XGPAD_DRIVER=ON
+          cmake --build build
+
+      - name: Package MSI
+        working-directory: build
+        run: cpack -G WIX --config ./CPackConfig.cmake
+
+      - name: Show WiX log
+        if: always()
+        run: cat ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log || true
+
+      # A missing PyroWave library would still give a working MSI, without the codec
+      - name: Verify and Name Package
+        run: |
+          set -euo pipefail
+          grep -q '^SUNSHINE_DISABLE_UPDATE_CHECK:BOOL=ON' build/CMakeCache.txt
+          staged=build/cpack_artifacts/_CPack_Packages/win64/WIX
+          for file in libpyrowave-shared-1.dll xgpad.inf xgpad.dll xgpad.cat xgpad.cer; do
+            if [ -z "$(find "$staged" -name "$file" -print -quit)" ]; then
+              echo "$file is missing from the package" 1>&2
+              exit 1
+            fi
+          done
+          mkdir -p release
+          mv build/cpack_artifacts/Sunshine.msi "release/Sunshine-x64-${ASSET_VERSION}.msi"
+
+      - name: Upload Package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: windows
+          path: release/*
+          compression-level: 0
+          if-no-files-found: error
+
+  draft-release:
+    needs: [build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+      - name: Download Package
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create Draft Release
+        run: |
+          set -e
+          ls -l dist
+          if IS_DRAFT=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            if [ "$IS_DRAFT" != "true" ]; then
+              echo "$RELEASE_TAG is already published, so its files were left alone" 1>&2
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" dist/* --draft --verify-tag \
+              --title "Sunshine for Windows Experimental $RELEASE_TAG" --notes ""
+          fi
