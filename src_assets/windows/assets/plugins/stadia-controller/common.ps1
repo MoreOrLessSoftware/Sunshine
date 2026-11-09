@@ -15,8 +15,17 @@ $PidFile = Join-Path $DataDir 'receiver.pid'
 $TimeServiceFile = Join-Path $DataDir 'w32time-was-running'
 $FirewallRule = 'Sunshine Stadia Controller (Stadiacast)'
 
+function Test-ReceiverListening {
+    <# Whether anything listens on the receiver's port. Calling a closed local port takes the full request timeout. #>
+    $listeners = [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+    return @($listeners | Where-Object { $_.Port -eq $StadiacastPort }).Count -gt 0
+}
+
 function Get-ReceiverStatus {
     <# The receiver's /_status document, or $null when nothing answers on its port. #>
+    if (-not (Test-ReceiverListening)) {
+        return $null
+    }
     try {
         return Invoke-RestMethod -Uri "http://127.0.0.1:$StadiacastPort/_status" -TimeoutSec 2 -UseBasicParsing
     }
