@@ -9,7 +9,9 @@
 #pragma once
 
 // standard includes
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <string_view>
 
 // local includes
@@ -31,13 +33,65 @@ namespace platf::xgpad {
   using context_ptr = std::unique_ptr<context_t, decltype(&destroy)>;
 
   /**
+   * @brief Operations supported by the bundled driver management script.
+   */
+  enum class driver_action_e {
+    install,  ///< Trust the release certificate and add the driver package.
+    uninstall,  ///< Remove the device nodes, driver package and certificates.
+  };
+
+  /**
    * @brief Check whether the xgpad driver package is present in the driver store.
    *
-   * The result is computed once per process.
+   * The result is cached, because enumerating the class drivers is slow.
    *
+   * @param refresh Query the driver store again and update the cached result.
    * @return True when a HIDClass driver matching the xgpad hardware ID is installed.
    */
-  bool driver_installed();
+  bool driver_installed(bool refresh = false);
+
+  /**
+   * @brief Get the version of the installed xgpad driver package.
+   *
+   * Uses the result cached by `driver_installed()`.
+   *
+   * @return Dotted four-part version, or an empty string when the driver is not installed.
+   */
+  std::string driver_version();
+
+  /**
+   * @brief Get the folder Sunshine is installed in.
+   * @return Directory containing the running executable.
+   */
+  std::filesystem::path install_root();
+
+  /**
+   * @brief Check whether the driver package and its management script are on disk.
+   * @param root Sunshine install folder.
+   * @return True when the driver can be installed from `root`.
+   */
+  bool driver_package_available(const std::filesystem::path &root);
+
+  /**
+   * @brief Build the command line that runs the driver management script.
+   * @param powershell Full path of powershell.exe.
+   * @param script Full path of xgpad-driver.ps1.
+   * @param action Operation to run.
+   * @return Command line for CreateProcessW.
+   */
+  std::wstring driver_script_command(const std::filesystem::path &powershell, const std::filesystem::path &script, driver_action_e action);
+
+  /**
+   * @brief Run the driver management script and wait for it.
+   *
+   * The script runs with Sunshine's own privileges, which is SYSTEM for the service, so it works without
+   * a signed-in administrator. The script writes its output to config\\xgpad-driver.log.
+   *
+   * @param action Operation to run.
+   * @param root Sunshine install folder.
+   * @return Exit code of the script, or -1 when it could not run or timed out.
+   */
+  int run_driver_script(driver_action_e action, const std::filesystem::path &root);
 
   /**
    * @brief Check whether a device instance ID belongs to an xgpad virtual pad (software device or its HID child).

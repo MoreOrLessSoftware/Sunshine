@@ -291,9 +291,30 @@ namespace confighttp {
   /**
    * @brief Build the xgpad (virtual Xbox Series controller) driver installation status.
    *
-   * @return xgpad driver status JSON ({"installed": bool}).
+   * @return xgpad driver status JSON, including whether the driver package is bundled with this install.
    */
   nlohmann::json get_xgpad_driver_status();
+
+  /**
+   * @brief Inputs for an xgpad driver install or uninstall.
+   */
+  struct xgpad_driver_request_t {
+    bool install;  ///< True to install the driver, false to uninstall it.
+    bool stream_active;  ///< A stream is running, so the driver must not change.
+    bool package_available;  ///< The driver package is on disk.
+    std::function<int()> run_script;  ///< Runs the driver script and returns its exit code.
+    std::function<bool()> query_installed;  ///< Reports whether the driver is now installed.
+  };
+
+  /**
+   * @brief Install or uninstall the xgpad driver after checking that it is safe to do so.
+   *
+   * @param request Action to run and the current state.
+   * @return JSON with "status", plus "installed" once the script has run and an "error" code on failure.
+   */
+  nlohmann::json apply_xgpad_driver_action(const xgpad_driver_request_t &request);
+
+  void updateXgpadDriver(const resp_https_t &response, const req_https_t &request);
 
   void getVirtualInputStatus(const resp_https_t &response, const req_https_t &request);
 

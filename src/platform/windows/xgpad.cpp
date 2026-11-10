@@ -21,7 +21,10 @@
 #include <condition_variable>
 #include <cstring>
 #include <cwchar>
+#include <filesystem>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -119,6 +122,12 @@ namespace platf::xgpad {
      */
     constexpr std::wstring_view hardware_id_prefix = L"SunshineXgpad\\";
 
+    /**
+     * @brief Files that make up the bundled driver package.
+     */
+    constexpr std::wstring_view driver_package_files[] = {L"xgpad.inf", L"xgpad.dll", L"xgpad.cat", L"xgpad.cer"};
+
+    constexpr DWORD driver_script_timeout_ms = 120000;  ///< Longest the driver management script may run.
     constexpr auto create_timeout = 10s;  ///< Maximum time to wait for PnP to create a pad.
     constexpr int create_retries = 20;  ///< Retries while a just-removed instance ID is still registered.
 
@@ -598,15 +607,25 @@ namespace platf::xgpad {
       }
       return result;
     }
-  }  // namespace
 
-  bool driver_installed() {
-    static const bool installed = [] {
+    /**
+     * @brief What the driver store knows about the xgpad driver.
+     */
+    struct driver_info_t {
+      bool installed = false;  ///< A driver matching the xgpad hardware ID is in the driver store.
+      std::string version;  ///< Dotted driver version, empty when not installed.
+    };
+
+    /**
+     * @brief Search the driver store for the xgpad driver.
+     * @return Installation state and version.
+     */
+    driver_info_t query_driver_info() {
+      driver_info_t result;
       HDEVINFO set = SetupDiCreateDeviceInfoList(&hid_class_guid, nullptr);
       if (set == INVALID_HANDLE_VALUE) {
-        return false;
+        return result;
       }
-      bool found = false;
       // Without ALLOWEXCLUDEDDRVS the class driver list comes back empty for HIDClass.
       SP_DEVINSTALL_PARAMS_W params {};
       params.cbSize = sizeof(params);
@@ -617,7 +636,7 @@ namespace platf::xgpad {
       if (SetupDiBuildDriverInfoList(set, nullptr, SPDIT_CLASSDRIVER)) {
         SP_DRVINFO_DATA_W driver {};
         driver.cbSize = sizeof(driver);
-        for (DWORD i = 0; !found && SetupDiEnumDriverInfoW(set, nullptr, SPDIT_CLASSDRIVER, i, &driver); ++i) {
+        for (DWORD i = 0; !result.installed && SetupDiEnumDriverInfoW(set, nullptr, SPDIT_CLASSDRIVER, i, &driver); ++i) {
           DWORD size = 0;
           SetupDiGetDriverInfoDetailW(set, nullptr, &driver, nullptr, 0, &size);
           if (size < sizeof(SP_DRVINFO_DETAIL_DATA_W)) {
@@ -626,17 +645,109 @@ namespace platf::xgpad {
           std::vector<std::uint8_t> buffer(size);
           auto *detail = reinterpret_cast<SP_DRVINFO_DETAIL_DATA_W *>(buffer.data());
           detail->cbSize = sizeof(SP_DRVINFO_DETAIL_DATA_W);
-          if (SetupDiGetDriverInfoDetailW(set, nullptr, &driver, detail, size, nullptr)) {
-            found = _wcsnicmp(detail->HardwareID, hardware_id_prefix.data(), hardware_id_prefix.size()) == 0;
+          if (SetupDiGetDriverInfoDetailW(set, nullptr, &driver, detail, size, nullptr) &&
+              _wcsnicmp(detail->HardwareID, hardware_id_prefix.data(), hardware_id_prefix.size()) == 0) {
+            result.installed = true;
+            result.version = driver_version_text(driver.DriverVersion);
           }
         }
         SetupDiDestroyDriverInfoList(set, nullptr, SPDIT_CLASSDRIVER);
       }
       SetupDiDestroyDeviceInfoList(set);
-      BOOST_LOG(info) << "xgpad: driver package "sv << (found ? "found"sv : "not found"sv);
-      return found;
-    }();
-    return installed;
+      return result;
+    }
+
+    /**
+     * @brief Get the driver store state, querying it only when needed.
+     * @param refresh Query the driver store even when a result is cached.
+     * @return Installation state and version.
+     */
+    driver_info_t cached_driver_info(const bool refresh) {
+      static std::mutex mutex;
+      static std::optional<driver_info_t> cache;
+
+      std::lock_guard lock {mutex};
+      if (refresh || !cache) {
+        auto current = query_driver_info();
+        if (!cache || cache->installed != current.installed) {
+          BOOST_LOG(info) << "xgpad: driver package "sv << (current.installed ? "found"sv : "not found"sv);
+        }
+        cache = std::move(current);
+      }
+      return *cache;
+    }
+  }  // namespace
+
+  bool driver_installed(const bool refresh) {
+    return cached_driver_info(refresh).installed;
+  }
+
+  std::string driver_version() {
+    return cached_driver_info(false).version;
+  }
+
+  std::filesystem::path install_root() {
+    std::wstring path(32768, L'\0');
+    const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    path.resize(length);
+    return std::filesystem::path {path}.parent_path();
+  }
+
+  bool driver_package_available(const std::filesystem::path &root) {
+    std::error_code ec;
+    const auto package = root / "drivers" / "xgpad";
+    return std::filesystem::exists(root / "scripts" / "xgpad-driver.ps1", ec) &&
+           std::ranges::all_of(driver_package_files, [&](const std::wstring_view file) {
+             return std::filesystem::exists(package / file, ec);
+           });
+  }
+
+  std::wstring driver_script_command(const std::filesystem::path &powershell, const std::filesystem::path &script, const driver_action_e action) {
+    return L"\"" + powershell.wstring() + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" + script.wstring() + L"\" -Action " +
+           (action == driver_action_e::install ? L"install" : L"uninstall");
+  }
+
+  int run_driver_script(const driver_action_e action, const std::filesystem::path &root) {
+    const auto script = root / "scripts" / "xgpad-driver.ps1";
+    std::error_code ec;
+    if (!std::filesystem::exists(script, ec)) {
+      BOOST_LOG(error) << "xgpad: driver management script not found: "sv << script.string();
+      return -1;
+    }
+
+    // An absolute path keeps a powershell.exe elsewhere on PATH from running with Sunshine's privileges.
+    wchar_t system_dir[MAX_PATH];
+    const auto system_dir_length = GetSystemDirectoryW(system_dir, MAX_PATH);
+    if (system_dir_length == 0 || system_dir_length >= MAX_PATH) {
+      return -1;
+    }
+    const auto powershell = std::filesystem::path {system_dir} / "WindowsPowerShell" / "v1.0" / "powershell.exe";
+    auto command = driver_script_command(powershell, script, action);
+
+    STARTUPINFOW startup_info {};
+    startup_info.cb = sizeof(startup_info);
+    PROCESS_INFORMATION process {};
+    if (!CreateProcessW(powershell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, root.c_str(), &startup_info, &process)) {
+      BOOST_LOG(error) << "xgpad: couldn't run the driver management script: "sv << GetLastError();
+      return -1;
+    }
+    auto close_handles = util::fail_guard([&process]() {
+      CloseHandle(process.hThread);
+      CloseHandle(process.hProcess);
+    });
+
+    if (WaitForSingleObject(process.hProcess, driver_script_timeout_ms) != WAIT_OBJECT_0) {
+      BOOST_LOG(error) << "xgpad: the driver management script timed out"sv;
+      TerminateProcess(process.hProcess, 1);
+      WaitForSingleObject(process.hProcess, 5000);
+      return -1;
+    }
+
+    DWORD exit_code = 0;
+    if (!GetExitCodeProcess(process.hProcess, &exit_code)) {
+      return -1;
+    }
+    return static_cast<int>(exit_code);
   }
 
   bool is_xgpad_instance_id(const std::wstring_view instance_id) {

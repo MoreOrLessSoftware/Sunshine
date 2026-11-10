@@ -332,6 +332,7 @@ protected:
     server->resource["^/virtual-input-status-test$"]["GET"] = confighttp::getVirtualInputStatus;
     server->resource["^/virtual-input-license-test$"]["GET"] = confighttp::getVirtualInputLicense;
     server->resource["^/virtual-input-license-test$"]["POST"] = confighttp::updateVirtualInputLicense;
+    server->resource["^/virtual-input-xgpad-test$"]["POST"] = confighttp::updateXgpadDriver;
     server->resource["^/pairing-test$"]["DELETE"] = confighttp::cancelPairing;
     server->resource["^/pairing-test$"]["GET"] = confighttp::getPendingPairings;
     server->resource["^/pairing-test$"]["POST"] = confighttp::savePin;
@@ -519,6 +520,7 @@ INSTANTIATE_TEST_SUITE_P(
     endpoint_request_t {"VirtualInputStatus", "GET", "/virtual-input-status-test", ""},
     endpoint_request_t {"VirtualInputLicense", "GET", "/virtual-input-license-test", ""},
     endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
+    endpoint_request_t {"XgpadDriverUpdate", "POST", "/virtual-input-xgpad-test", R"({"action":"install"})"},
     endpoint_request_t {"Plugins", "GET", "/plugins-test", ""},
     endpoint_request_t {"PluginLog", "GET", "/plugins-log-test?id=p", ""},
     endpoint_request_t {"PluginGuide", "GET", "/plugins-guide-test", ""},
@@ -547,6 +549,7 @@ INSTANTIATE_TEST_SUITE_P(
     endpoint_request_t {"CsrfValidation", "POST", "/csrf-validate-test", ""},
     endpoint_request_t {"PortalTokenReset", "POST", "/portal-token-reset-test", ""},
     endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
+    endpoint_request_t {"XgpadDriverUpdate", "POST", "/virtual-input-xgpad-test", R"({"action":"install"})"},
     endpoint_request_t {"PluginRescan", "POST", "/plugins-rescan-test", ""}
   ),
   endpoint_request_name
@@ -1664,6 +1667,121 @@ TEST(ConfigHttpDriverStatusTest, BuildsLiveVirtualInputDriverStatus) {
   const auto xgpad = confighttp::get_xgpad_driver_status();
   ASSERT_TRUE(xgpad.contains("installed"));
   EXPECT_TRUE(xgpad["installed"].is_boolean());
+  EXPECT_TRUE(xgpad.contains("version"));
+  EXPECT_TRUE(xgpad.contains("version_compatible"));
+  EXPECT_TRUE(xgpad["package_available"].is_boolean());
+}
+
+/**
+ * @brief Build an xgpad driver request whose script counts its runs.
+ *
+ * @param install Whether the request installs the driver.
+ * @param exit_code Exit code reported by the script.
+ * @param installed_after Driver state reported after the script ran.
+ * @param runs Incremented every time the script runs.
+ * @return Request with no stream active and the package available.
+ */
+static confighttp::xgpad_driver_request_t make_xgpad_request(const bool install, const int exit_code, const bool installed_after, int &runs) {
+  return {
+    install,
+    false,
+    true,
+    [exit_code, &runs]() {
+      ++runs;
+      return exit_code;
+    },
+    [installed_after]() {
+      return installed_after;
+    },
+  };
+}
+
+TEST(ConfigHttpXgpadDriverTest, InstallSucceedsWhenScriptAndDriverStoreAgree) {
+  int runs = 0;
+  const auto result = confighttp::apply_xgpad_driver_action(make_xgpad_request(true, 0, true, runs));
+  EXPECT_EQ(runs, 1);
+  EXPECT_TRUE(result["status"].get<bool>());
+  EXPECT_TRUE(result["installed"].get<bool>());
+  EXPECT_FALSE(result.contains("error"));
+}
+
+TEST(ConfigHttpXgpadDriverTest, UninstallDoesNotNeedThePackage) {
+  int runs = 0;
+  auto request = make_xgpad_request(false, 0, false, runs);
+  request.package_available = false;
+  const auto result = confighttp::apply_xgpad_driver_action(request);
+  EXPECT_EQ(runs, 1);
+  EXPECT_TRUE(result["status"].get<bool>());
+  EXPECT_FALSE(result["installed"].get<bool>());
+}
+
+TEST(ConfigHttpXgpadDriverTest, ActiveStreamBlocksTheScript) {
+  int runs = 0;
+  auto request = make_xgpad_request(false, 0, false, runs);
+  request.stream_active = true;
+  const auto result = confighttp::apply_xgpad_driver_action(request);
+  EXPECT_EQ(runs, 0);
+  EXPECT_FALSE(result["status"].get<bool>());
+  EXPECT_EQ(result["error"].get<std::string>(), "stream_active");
+}
+
+TEST(ConfigHttpXgpadDriverTest, InstallRequiresThePackage) {
+  int runs = 0;
+  auto request = make_xgpad_request(true, 0, true, runs);
+  request.package_available = false;
+  const auto result = confighttp::apply_xgpad_driver_action(request);
+  EXPECT_EQ(runs, 0);
+  EXPECT_FALSE(result["status"].get<bool>());
+  EXPECT_EQ(result["error"].get<std::string>(), "package_missing");
+}
+
+TEST(ConfigHttpXgpadDriverTest, NonZeroExitCodeFails) {
+  int runs = 0;
+  const auto result = confighttp::apply_xgpad_driver_action(make_xgpad_request(true, 1, true, runs));
+  EXPECT_EQ(runs, 1);
+  EXPECT_FALSE(result["status"].get<bool>());
+  EXPECT_EQ(result["error"].get<std::string>(), "script_failed");
+}
+
+// The script exits 0 when pnputil cannot delete the package, as happens without administrator rights.
+TEST(ConfigHttpXgpadDriverTest, DriverStoreMismatchFailsDespiteCleanExit) {
+  int runs = 0;
+  const auto result = confighttp::apply_xgpad_driver_action(make_xgpad_request(false, 0, true, runs));
+  EXPECT_FALSE(result["status"].get<bool>());
+  EXPECT_TRUE(result["installed"].get<bool>());
+  EXPECT_EQ(result["error"].get<std::string>(), "script_failed");
+}
+
+TEST_F(ConfigHttpTest, XgpadDriverUpdateRejectsInvalidRequests) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+  headers.emplace("Origin", std::format("https://localhost:{}", port));
+
+  const auto invalid_json = client->request("POST", "/virtual-input-xgpad-test", "not-json", headers);
+  ASSERT_EQ(invalid_json->status_code, "400 Bad Request");
+  EXPECT_TRUE(invalid_json->content.string().contains("Invalid driver request"));
+
+  const auto unknown_action = client->request("POST", "/virtual-input-xgpad-test", R"({"action":"reboot"})", headers);
+  ASSERT_EQ(unknown_action->status_code, "400 Bad Request");
+  EXPECT_TRUE(unknown_action->content.string().contains("Unknown driver action"));
+}
+
+// The test executable's folder has no driver package, so this never touches the driver store.
+TEST_F(ConfigHttpTest, XgpadDriverInstallReportsMissingPackage) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+  headers.emplace("Origin", std::format("https://localhost:{}", port));
+
+  const auto response = client->request("POST", "/virtual-input-xgpad-test", R"({"action":"install"})", headers);
+#ifdef _WIN32
+  ASSERT_EQ(response->status_code, "200 OK");
+  const auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_FALSE(body.at("status").get<bool>());
+  EXPECT_EQ(body.at("error").get<std::string>(), "package_missing");
+#else
+  ASSERT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("only available on Windows"));
+#endif
 }
 
 TEST(ConfigHttpLicenseStatusTest, ClearsSensitiveRequestString) {

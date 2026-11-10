@@ -132,13 +132,19 @@ if(SUNSHINE_BUILD_XGPAD_DRIVER)
             VERBATIM)
     add_custom_target(xgpad_driver ALL DEPENDS ${XGPAD_PACKAGE_FILES})
 
+    # The package always ships so the web UI can install the driver later, and the uninstall script always
+    # ships so removing Sunshine also removes a driver installed that way. The component only decides
+    # whether setup installs the driver, because setup runs install-xgpad-driver.bat when it is present.
     install(FILES ${XGPAD_PACKAGE_FILES}
             DESTINATION "drivers/xgpad"
-            COMPONENT xgpad)
+            COMPONENT application)
     install(FILES
             "${XGPAD_DRIVER_DIR}/scripts/xgpad-driver.ps1"
-            "${XGPAD_DRIVER_DIR}/scripts/install-xgpad-driver.bat"
             "${XGPAD_DRIVER_DIR}/scripts/uninstall-xgpad-driver.bat"
+            DESTINATION "scripts"
+            COMPONENT application)
+    install(FILES
+            "${XGPAD_DRIVER_DIR}/scripts/install-xgpad-driver.bat"
             DESTINATION "scripts"
             COMPONENT xgpad)
 
@@ -146,7 +152,8 @@ if(SUNSHINE_BUILD_XGPAD_DRIVER)
     set(CPACK_COMPONENT_XGPAD_DESCRIPTION
             "Sunshine xgpad driver: virtual Xbox Series X|S controllers with Guide, Share and impulse triggers. \
 Trusts a self-signed certificate unique to this release (its private key was destroyed after signing). \
-Select 'Sunshine Xbox Series Driver (xgpad)' under Input in the web UI to use it.")
+Select 'Sunshine Xbox Series Driver (xgpad)' under Input in the web UI to use it. \
+You can also install or remove it later from the Troubleshooting page of the web UI.")
     set(CPACK_COMPONENT_XGPAD_GROUP "Drivers")
     set(CPACK_COMPONENT_XGPAD_DEPENDS application)
     set(CPACK_COMPONENT_XGPAD_DISABLED true)  # optional, unchecked by default

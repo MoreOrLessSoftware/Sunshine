@@ -2290,16 +2290,102 @@ namespace confighttp {
   /**
    * @brief Build the xgpad (virtual Xbox Series controller) driver installation status.
    *
-   * @return xgpad driver status JSON ({"installed": bool}).
+   * @return xgpad driver status JSON, including whether the driver package is bundled with this install.
    */
   nlohmann::json get_xgpad_driver_status() {
-    nlohmann::json output_tree;
 #ifdef _WIN32
-    output_tree["installed"] = platf::xgpad::driver_installed();
+    // Query the driver store each time so changes made outside Sunshine show up.
+    const auto installed = platf::xgpad::driver_installed(true);
+    auto output_tree = build_driver_status(installed, platf::xgpad::driver_version(), "");
+    output_tree["package_available"] = platf::xgpad::driver_package_available(platf::xgpad::install_root());
 #else
-    output_tree["installed"] = false;
+    auto output_tree = build_driver_status(false, "", "");
+    output_tree["package_available"] = false;
 #endif
     return output_tree;
+  }
+
+  nlohmann::json apply_xgpad_driver_action(const xgpad_driver_request_t &request) {
+    nlohmann::json output_tree;
+    output_tree["status"] = false;
+
+    // Removing the driver detaches virtual pads from a running game.
+    if (request.stream_active) {
+      output_tree["error"] = "stream_active";
+      return output_tree;
+    }
+    if (request.install && !request.package_available) {
+      output_tree["error"] = "package_missing";
+      return output_tree;
+    }
+
+    const auto exit_code = request.run_script();
+    const auto installed = request.query_installed();
+    output_tree["installed"] = installed;
+
+    // The script ignores some pnputil failures, so the driver store has the final say.
+    if (exit_code != 0 || installed != request.install) {
+      BOOST_LOG(error) << "xgpad driver script failed with exit code "sv << exit_code << ", driver installed: "sv << installed;
+      output_tree["error"] = "script_failed";
+      return output_tree;
+    }
+
+    output_tree["status"] = true;
+    return output_tree;
+  }
+
+  /**
+   * @brief Install or uninstall the bundled xgpad driver.
+   *
+   * @param response HTTP response object.
+   * @param request Authenticated HTTP request with a JSON action of "install" or "uninstall".
+   *
+   * @api_examples{/api/virtual-input/xgpad| POST| {"action":"install"}}
+   */
+  void updateXgpadDriver(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    const auto client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+    try {
+      std::stringstream content;
+      content << request->content.rdbuf();
+      const auto input_tree = nlohmann::json::parse(content);
+      const auto action = input_tree.value("action", "");
+      if (action != "install" && action != "uninstall") {
+        bad_request(response, request, "Unknown driver action");
+        return;
+      }
+
+#ifdef _WIN32
+      static std::mutex driver_action_mutex;
+      std::lock_guard lock {driver_action_mutex};
+
+      const auto root = platf::xgpad::install_root();
+      const bool install = action == "install";
+      send_response(response, apply_xgpad_driver_action({
+                                install,
+                                rtsp_stream::session_count() > 0,
+                                platf::xgpad::driver_package_available(root),
+                                [&]() {
+                                  return platf::xgpad::run_driver_script(install ? platf::xgpad::driver_action_e::install : platf::xgpad::driver_action_e::uninstall, root);
+                                },
+                                []() {
+                                  return platf::xgpad::driver_installed(true);
+                                },
+                              }));
+#else
+      bad_request(response, request, "The xgpad driver is only available on Windows");
+#endif
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid driver request");
+    }
   }
 
   /**
@@ -3296,6 +3382,7 @@ namespace confighttp {
     server.resource["^/api/virtual-input/license$"]["GET"] = getVirtualInputLicense;
     server.resource["^/api/virtual-input/license$"]["POST"] = updateVirtualInputLicense;
     server.resource["^/api/virtual-input/status$"]["GET"] = getVirtualInputStatus;
+    server.resource["^/api/virtual-input/xgpad$"]["POST"] = updateXgpadDriver;
 
     // static/dynamic resources
     server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;

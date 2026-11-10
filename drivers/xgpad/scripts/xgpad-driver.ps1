@@ -3,8 +3,9 @@
   Installs or removes the Sunshine xgpad driver (virtual Xbox Series controllers). Requires elevation.
 
 .DESCRIPTION
-  Used by the Sunshine installer through install-xgpad-driver.bat / uninstall-xgpad-driver.bat when the
-  optional "Xbox Series Controller Driver" component is selected.
+  Used by the Sunshine installer through install-xgpad-driver.bat / uninstall-xgpad-driver.bat (install only
+  runs when the optional "Xbox Series Controller Driver" component is selected), and directly by Sunshine for
+  the Install and Uninstall actions on the web UI's Troubleshooting page.
 
   install:
     1. Removes certificates and driver packages left behind by older xgpad versions.

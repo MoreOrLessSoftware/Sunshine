@@ -7,6 +7,14 @@
 #include "../../../tests_common.h"
 
 #ifdef _WIN32
+  // standard includes
+  #include <filesystem>
+  #include <format>
+  #include <fstream>
+
+  // platform includes
+  #include <Windows.h>
+
   // local includes
   #include <src/platform/windows/xgpad.h>
   #include <src/platform/windows/xgpad_report.h>
@@ -288,5 +296,105 @@ TEST_F(XgpadReportTest, DriverInstalledIsStable) {
   // Result depends on the machine; it must not crash and must be cached.
   const bool first = driver_installed();
   EXPECT_EQ(driver_installed(), first);
+}
+
+TEST_F(XgpadReportTest, RefreshMatchesTheDriverStoreAndReportsAVersion) {
+  const bool installed = driver_installed(true);
+  EXPECT_EQ(driver_installed(), installed);
+  EXPECT_EQ(!driver_version().empty(), installed);
+}
+
+TEST_F(XgpadReportTest, DriverVersionTextSplitsAllFourParts) {
+  EXPECT_EQ(driver_version_text(0x0001000200030004ull), "1.2.3.4");
+  EXPECT_EQ(driver_version_text(0xFFFF000000000000ull), "65535.0.0.0");
+  EXPECT_EQ(driver_version_text(0), "0.0.0.0");
+}
+
+TEST_F(XgpadReportTest, DriverScriptCommandQuotesPathsAndNamesTheAction) {
+  const std::filesystem::path powershell = L"C:\\Windows\\System32\\powershell.exe";
+  const std::filesystem::path script = L"C:\\Program Files\\Sunshine\\scripts\\xgpad-driver.ps1";
+
+  EXPECT_EQ(
+    driver_script_command(powershell, script, driver_action_e::install),
+    L"\"C:\\Windows\\System32\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File \"C:\\Program Files\\Sunshine\\scripts\\xgpad-driver.ps1\" -Action install"
+  );
+  EXPECT_TRUE(driver_script_command(powershell, script, driver_action_e::uninstall).ends_with(L" -Action uninstall"));
+}
+
+TEST_F(XgpadReportTest, InstallRootIsTheExecutableFolder) {
+  const auto root = install_root();
+  EXPECT_TRUE(std::filesystem::is_directory(root));
+  EXPECT_TRUE(std::filesystem::exists(root / "test_sunshine.exe"));
+}
+
+/**
+ * @brief Test fixture with a temporary Sunshine install folder.
+ */
+class XgpadDriverPackageTest: public BaseTest {
+protected:
+  std::filesystem::path root;  ///< Temporary install folder.
+
+  void SetUp() override {
+    BaseTest::SetUp();
+    root = std::filesystem::temp_directory_path() / std::format("xgpad-package-{}", GetCurrentProcessId());
+    std::filesystem::create_directories(root / "scripts");
+    std::filesystem::create_directories(root / "drivers" / "xgpad");
+  }
+
+  void TearDown() override {
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    BaseTest::TearDown();
+  }
+
+  /**
+   * @brief Create an empty file.
+   * @param path File to create.
+   */
+  static void touch(const std::filesystem::path &path) {
+    std::ofstream {path};
+  }
+
+  /**
+   * @brief Create the management script and every package file.
+   */
+  void create_complete_package() const {
+    touch(root / "scripts" / "xgpad-driver.ps1");
+    for (const auto *file : {"xgpad.inf", "xgpad.dll", "xgpad.cat", "xgpad.cer"}) {
+      touch(root / "drivers" / "xgpad" / file);
+    }
+  }
+};
+
+TEST_F(XgpadDriverPackageTest, CompletePackageIsAvailable) {
+  create_complete_package();
+  EXPECT_TRUE(driver_package_available(root));
+}
+
+TEST_F(XgpadDriverPackageTest, EmptyFolderIsNotAvailable) {
+  EXPECT_FALSE(driver_package_available(root));
+}
+
+TEST_F(XgpadDriverPackageTest, MissingCertificateIsNotAvailable) {
+  create_complete_package();
+  std::filesystem::remove(root / "drivers" / "xgpad" / "xgpad.cer");
+  EXPECT_FALSE(driver_package_available(root));
+}
+
+TEST_F(XgpadDriverPackageTest, MissingScriptIsNotAvailable) {
+  create_complete_package();
+  std::filesystem::remove(root / "scripts" / "xgpad-driver.ps1");
+  EXPECT_FALSE(driver_package_available(root));
+}
+
+TEST_F(XgpadDriverPackageTest, RunFailsWithoutTheScript) {
+  EXPECT_EQ(run_driver_script(driver_action_e::install, root), -1);
+  EXPECT_EQ(run_driver_script(driver_action_e::uninstall, root), -1);
+}
+
+TEST_F(XgpadDriverPackageTest, RunReturnsTheScriptExitCode) {
+  std::ofstream {root / "scripts" / "xgpad-driver.ps1"} << "param([string]$Action)\nif ($Action -eq 'install') { exit 7 }\nexit 3\n";
+  EXPECT_EQ(run_driver_script(driver_action_e::install, root), 7);
+  EXPECT_EQ(run_driver_script(driver_action_e::uninstall, root), 3);
 }
 #endif

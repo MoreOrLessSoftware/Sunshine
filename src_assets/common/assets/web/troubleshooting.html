@@ -93,7 +93,7 @@
                   <th scope="col">{{ $t('troubleshooting.driver_supported_versions') }}</th>
                   <th scope="col">{{ $t('troubleshooting.driver_status') }}</th>
                   <th scope="col" class="driver-download-column">
-                    <span class="visually-hidden">{{ $t('troubleshooting.driver_download') }}</span>
+                    <span class="visually-hidden">{{ $t('troubleshooting.driver_actions') }}</span>
                   </th>
                 </tr>
               </thead>
@@ -159,8 +159,60 @@
                     </a>
                   </td>
                 </tr>
+                <tr id="xgpad" v-if="showXgpad">
+                  <th scope="row">{{ $t('troubleshooting.xgpad_driver') }}</th>
+                  <td>{{ xgpadStatusLoading ? $t('troubleshooting.driver_release_checking') : driverVersion(xgpad) }}</td>
+                  <td>
+                    <div class="driver-release-state driver-release-neutral">
+                      <alert-circle :size="17"></alert-circle>
+                      <span>{{ $t('troubleshooting.driver_release_bundled') }}</span>
+                    </div>
+                  </td>
+                  <td>{{ xgpad.supported_versions }}</td>
+                  <td>
+                    <div class="driver-release-state driver-release-neutral" aria-live="polite" v-if="xgpadStatusLoading">
+                      <refresh-cw :size="17" class="driver-release-spinning"></refresh-cw>
+                      <span>{{ $t('troubleshooting.driver_release_checking') }}</span>
+                    </div>
+                    <span :class="driverStatusClass(xgpad)" v-else>
+                      {{ driverStatusText(xgpad) }}
+                    </span>
+                  </td>
+                  <td class="driver-download-column">
+                    <button class="btn btn-outline-danger driver-download-button"
+                            type="button"
+                            v-if="!xgpadStatusLoading && xgpad.installed"
+                            :disabled="xgpadBusy"
+                            @click="updateXgpadDriver('uninstall')">
+                      <refresh-cw v-if="xgpadBusy" :size="17" class="driver-release-spinning"></refresh-cw>
+                      <trash-2 v-else :size="17"></trash-2>
+                      {{ $t('troubleshooting.driver_uninstall') }}
+                    </button>
+                    <button class="btn btn-outline-primary driver-download-button"
+                            type="button"
+                            v-else-if="!xgpadStatusLoading && xgpad.package_available"
+                            :disabled="xgpadBusy"
+                            @click="updateXgpadDriver('install')">
+                      <refresh-cw v-if="xgpadBusy" :size="17" class="driver-release-spinning"></refresh-cw>
+                      <download v-else :size="17"></download>
+                      {{ $t('troubleshooting.driver_install') }}
+                    </button>
+                  </td>
+                </tr>
               </tbody>
             </table>
+          </div>
+
+          <div class="alert alert-danger alert-inline mt-3" role="alert" v-if="xgpadError">
+            <alert-circle :size="18" class="icon flex-shrink-0"></alert-circle>
+            <span>{{ xgpadError }}</span>
+          </div>
+          <div class="alert alert-warning alert-inline mt-3" role="status" v-if="xgpadRestartNeeded">
+            <alert-triangle :size="18" class="icon flex-shrink-0"></alert-triangle>
+            <span class="flex-grow-1">{{ $t('troubleshooting.xgpad_restart_required') }}</span>
+            <button class="btn btn-warning btn-sm" type="button" :disabled="restartPressed" @click="restart">
+              {{ $t('troubleshooting.restart_sunshine') }}
+            </button>
           </div>
         </section>
 
@@ -421,6 +473,7 @@
       Search,
       ShieldCheck,
       Sparkles,
+      Trash2,
       XCircle,
     } from '@lucide/vue'
 
@@ -446,6 +499,7 @@
         Search,
         ShieldCheck,
         Sparkles,
+        Trash2,
         XCircle,
       },
       data() {
@@ -500,6 +554,17 @@
             minimum_version: '',
             supported_versions: '',
           },
+          xgpad: {
+            installed: false,
+            version: '',
+            version_compatible: false,
+            supported_versions: '',
+            package_available: false,
+          },
+          xgpadBusy: false,
+          xgpadStatusLoading: true,
+          xgpadError: '',
+          xgpadRestartNeeded: false,
           currentLogIndex: -1,
           logLines: [],
         };
@@ -511,6 +576,10 @@
 
         showVigembus() {
           return this.gamepadDriver !== 'virtualhid';
+        },
+
+        showXgpad() {
+          return this.xgpadStatusLoading || this.xgpad.installed || this.xgpad.package_available;
         },
 
         showVirtualhidBenefits() {
@@ -842,11 +911,20 @@
             });
         },
         refreshVirtualInputStatus() {
+          this.xgpadStatusLoading = true;
           fetch("/api/virtual-input/status")
             .then((r) => r.json())
             .then((r) => {
               const virtualhid = r.virtualhid || {};
               const vigembus = r.vigembus || {};
+              const xgpad = r.xgpad || {};
+              this.xgpad = {
+                installed: xgpad.installed || false,
+                version: xgpad.version || '',
+                version_compatible: xgpad.version_compatible || false,
+                supported_versions: xgpad.supported_versions || '',
+                package_available: xgpad.package_available || false,
+              };
               this.virtualhid = {
                 installed: virtualhid.installed || false,
                 version: virtualhid.version || '',
@@ -864,6 +942,50 @@
             })
             .catch((err) => {
               console.error("Failed to fetch virtual input driver status:", err);
+            })
+            .finally(() => {
+              this.xgpadStatusLoading = false;
+            });
+        },
+        /**
+         * @brief Install or uninstall the bundled xgpad driver after the user confirms.
+         *
+         * @param {string} action Either 'install' or 'uninstall'.
+         */
+        updateXgpadDriver(action) {
+          if (!window.confirm(this.$t(`troubleshooting.xgpad_${action}_confirm`))) {
+            return;
+          }
+
+          this.xgpadBusy = true;
+          this.xgpadError = '';
+          const showError = (code) => {
+            const known = ['stream_active', 'package_missing'].includes(code);
+            this.xgpadError = this.$t(`troubleshooting.xgpad_error_${known ? code : 'script_failed'}`);
+          };
+
+          apiFetch("/api/virtual-input/xgpad", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ action }),
+          })
+            .then((r) => r.json())
+            .then((r) => {
+              if (r.status) {
+                this.xgpadRestartNeeded = true;
+              } else {
+                showError(r.error);
+              }
+            })
+            .catch((err) => {
+              console.error("Failed to change the xgpad driver:", err);
+              showError();
+            })
+            .finally(() => {
+              this.xgpadBusy = false;
+              this.refreshVirtualInputStatus();
             });
         },
         /**

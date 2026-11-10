@@ -9,6 +9,8 @@
 // standard includes
 #include <chrono>
 #include <cstdint>
+#include <format>
+#include <string>
 #include <string_view>
 
 // local includes
@@ -304,6 +306,16 @@ namespace platf::xgpad {
       return attach_state_e::attached;
     }
     return since_created >= driver_attach_timeout ? attach_state_e::missing : attach_state_e::pending;
+  }
+
+  /**
+   * @brief Format a packed driver version (SP_DRVINFO_DATA::DriverVersion).
+   *
+   * @param version Four 16-bit parts, most significant first.
+   * @return Dotted version text.
+   */
+  inline std::string driver_version_text(const std::uint64_t version) {
+    return std::format("{}.{}.{}.{}", (version >> 48) & 0xFFFF, (version >> 32) & 0xFFFF, (version >> 16) & 0xFFFF, version & 0xFFFF);
   }
 
 }  // namespace platf::xgpad
