@@ -2139,6 +2139,20 @@ TEST(PluginsBundledTest, NyrnaManifestIsValid) {
   EXPECT_TRUE(manifest->client_commands[0].top_level);
   EXPECT_TRUE(manifest->client_commands[0].elevated);
 }
+
+TEST(PluginsBundledTest, LatencyTestManifestIsValid) {
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "latency-test";
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->id, "latency-test");
+  ASSERT_EQ(manifest->actions.size(), 1);
+  EXPECT_EQ(manifest->actions[0].script, "launch.ps1");
+  ASSERT_EQ(manifest->client_commands.size(), 2);
+  EXPECT_EQ(manifest->client_commands[0].script, "start.ps1");
+  EXPECT_TRUE(manifest->client_commands[0].programs.empty());
+  EXPECT_EQ(manifest->client_commands[1].programs, (std::vector<std::string> {"latency-test"}));
+}
 #endif
 
 TEST_F(PluginsTest, TheClientsOfferShowsTopLevelCommandsWithTheMenusOwn) {

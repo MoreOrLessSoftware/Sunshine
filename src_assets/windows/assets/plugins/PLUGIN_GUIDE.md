@@ -82,7 +82,7 @@ plugin cannot reuse the ID of a bundled plugin.
 | `description` | No       | Shown in the web UI.                                                                                                |
 | `author`      | No       | Shown in the web UI.                                                                                                |
 | `homepage`    | No       | Linked from the web UI.                                                                                             |
-| `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50, 100, 200, 300.                  |
+| `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50 to 500.                          |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. Defaults to `false`. |
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect` and `apply`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply`. |
