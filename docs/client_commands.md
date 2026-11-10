@@ -15,7 +15,7 @@ Open the **Client Commands** page in the web UI.
   the menu shows a button named after it, which opens a page of its commands. Applications without commands are
   picked from the list underneath to add some.
 * Each group under **Programs** has a name, an icon and the file names of one or more programs, such as
-  `photoshop.exe`. While one of those programs is in the foreground on this host when the client opens its menu, the
+  `photoshop.exe` (the `.exe` is optional). While one of those programs is in the foreground on this host when the client opens its menu, the
   menu shows a button with the group's name, which opens a page of its commands. This works on Windows only for now.
 * **Plugins** lists the commands that come with [plugins](plugins.md#client-commands), such as Nyrna's *Suspend*. What
   they do comes with the plugin, but the pencil button lets you give one your own label, icon and programs. While a plugin is

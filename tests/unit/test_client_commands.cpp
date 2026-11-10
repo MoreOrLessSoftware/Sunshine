@@ -679,6 +679,16 @@ TEST(ClientCommandsPrograms, ThePlatformCanBeAsked) {
 }
 
 
+TEST(ClientCommandsPrograms, TheExeCanBeLeftOut) {
+  const std::vector<std::string> programs {"Notepad", "C:\\Apps\\Tool", "game.exe"};
+  EXPECT_TRUE(client_commands::matches(programs, "notepad.exe"));
+  EXPECT_TRUE(client_commands::matches(programs, "tool.exe"));
+  EXPECT_TRUE(client_commands::matches(programs, "GAME.EXE"));
+  EXPECT_FALSE(client_commands::matches(programs, "notepad2.exe"));
+  EXPECT_FALSE(client_commands::matches(programs, "game.exe.exe"));
+  EXPECT_FALSE(client_commands::matches(programs, ""));
+}
+
 TEST(ClientCommandsPluginOverrides, ParsesAndRoundTrips) {
   auto overrides = client_commands::parse_plugin_overrides(json::parse(R"({
     "nyrna/toggle": {"label": "Pause Game", "icon": "material:pause"},

@@ -167,6 +167,14 @@ namespace confighttp {
   void uninstallPlugin(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Return the guide to writing plugins, as Markdown.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPluginGuide(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Return the output of the last install or uninstall of a plugin.
    *
    * @param response HTTP response object to populate.

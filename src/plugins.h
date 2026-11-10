@@ -340,6 +340,13 @@ namespace plugins {
   paths_t current_paths();
 
   /**
+   * @brief Return the file of the guide to writing plugins, which ships with the bundled plugins.
+   *
+   * @return `PLUGIN_GUIDE.md` in the directory of bundled plugins. It may not exist.
+   */
+  std::filesystem::path guide_file();
+
+  /**
    * @brief Rescan the plugin directories, keeping the current state.
    */
   void rescan();

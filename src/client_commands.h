@@ -178,7 +178,7 @@ namespace client_commands {
   /**
    * @brief Check whether a list of programs includes a program.
    *
-   * @param programs File names of the programs. A path matches by its file name.
+   * @param programs File names of the programs, with or without `.exe`. A path matches by its file name.
    * @param program File name of the program, such as `notepad.exe`.
    * @return `true` when one of the programs has the same file name, ignoring case.
    */

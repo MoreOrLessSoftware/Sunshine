@@ -573,9 +573,9 @@ namespace client_commands {
       return false;
     }
     return std::ranges::any_of(programs, [program](const std::string &name) {
-      // A path matches by its file name
+      // A path matches by its file name, and the .exe can be left out
       auto file_name = std::filesystem::path {name}.filename().string();
-      return boost::iequals(file_name, program);
+      return boost::iequals(file_name, program) || (!boost::iends_with(file_name, ".exe") && boost::iequals(file_name + ".exe", program));
     });
   }
 

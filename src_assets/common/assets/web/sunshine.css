@@ -2325,6 +2325,29 @@ p {
     color: var(--color-text-base);
 }
 
+.plugin-guide-code {
+    position: relative;
+}
+
+.plugin-guide-code pre {
+    padding: 0.75rem 5rem 0.75rem 0.75rem;
+    border-radius: 0.375rem;
+    background-color: var(--bs-tertiary-bg);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.plugin-guide-copy {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+}
+
+.plugin-guide .markdown-body table {
+    display: block;
+    overflow-x: auto;
+}
+
 .markdown-body.release-notes {
     width: 100%;
     max-width: 100%;

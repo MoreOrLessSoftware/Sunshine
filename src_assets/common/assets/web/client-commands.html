@@ -174,33 +174,35 @@
           <!-- A program group's own settings -->
           <div v-if="currentGroup" class="card mb-3">
             <div class="card-body">
-              <div class="mb-3">
-                <label class="form-label" for="group-label">{{ $t('client_commands.group_label') }}</label>
-                <input type="text" class="form-control" id="group-label" v-model="currentGroup.label" maxlength="64">
+              <div class="row g-3 mb-3">
+                <div class="col-12 col-sm">
+                  <label class="form-label" for="group-label">{{ $t('client_commands.group_label') }}</label>
+                  <input type="text" class="form-control" id="group-label" v-model="currentGroup.label" maxlength="64">
+                </div>
+                <div class="col-12 col-sm-auto">
+                  <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="command-icon" :title="currentGroup.icon ? currentGroup.icon.substring('material:'.length) : $t('client_commands.default_icon')">
+                      <span class="material-icon" v-if="glyph(currentGroup.icon)">{{ glyph(currentGroup.icon) }}</span>
+                    </span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" @click="toggleIconPicker(currentGroup)">
+                      <search :size="16" class="icon"></search>
+                      {{ $t('client_commands.choose_icon') }}
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="currentGroup.icon" @click="currentGroup.icon = ''">
+                      {{ $t('client_commands.default_icon') }}
+                    </button>
+                  </div>
+                </div>
+                <div class="col-12" v-if="iconPicker.target === currentGroup">
+                  <icon-chooser :names="iconNames" :codepoints="codepoints" :selected="currentGroup.icon" @pick="pickIcon"></icon-chooser>
+                </div>
               </div>
               <div class="mb-3">
                 <label class="form-label" for="group-programs">{{ $t('client_commands.group_programs') }}</label>
                 <input type="text" class="form-control font-monospace" id="group-programs" :value="currentGroup.programs.join(', ')"
                        placeholder="photoshop.exe" @change="setPrograms(currentGroup, $event.target.value)">
                 <div class="form-text">{{ $t('client_commands.group_programs_desc') }}</div>
-              </div>
-              <div class="mb-3">
-                <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
-                <div class="d-flex align-items-center gap-2">
-                  <span class="command-icon">
-                    <span class="material-icon" v-if="glyph(currentGroup.icon)">{{ glyph(currentGroup.icon) }}</span>
-                  </span>
-                  <span class="text-muted small">{{ currentGroup.icon ? currentGroup.icon.substring('material:'.length) : $t('client_commands.default_icon') }}</span>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="toggleIconPicker(currentGroup)">
-                    <search :size="16" class="icon"></search>
-                    {{ $t('client_commands.choose_icon') }}
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" v-if="currentGroup.icon" @click="currentGroup.icon = ''">
-                    {{ $t('client_commands.default_icon') }}
-                  </button>
-                </div>
-                <icon-chooser v-if="iconPicker.target === currentGroup" :names="iconNames" :codepoints="codepoints"
-                              :selected="currentGroup.icon" @pick="pickIcon"></icon-chooser>
               </div>
               <button type="button" class="btn btn-outline-danger btn-sm" @click="removeProgramGroup(currentGroup)">
                 <trash-2 :size="16" class="icon"></trash-2>
@@ -236,6 +238,9 @@
                       {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}
                     </div>
                   </div>
+                  <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="isPluginCommandCustomized(command)" @click="resetPluginCommand(command)">
+                    {{ $t('client_commands.reset_plugin_command') }}
+                  </button>
                   <button type="button" class="btn btn-outline-primary btn-sm" @click="editPluginCommand(command)"
                           :title="$t('client_commands.customize')" :aria-label="$t('client_commands.customize')">
                     <pencil :size="16"></pencil>
@@ -243,29 +248,29 @@
                 </div>
 
                 <div v-if="pluginEditKey === pluginKey(command)" class="border-top mt-3 pt-3">
-                  <div class="mb-3">
-                    <label class="form-label" :for="'plugin-label-' + command.id">{{ $t('client_commands.label') }}</label>
-                    <input type="text" class="form-control" :id="'plugin-label-' + command.id" maxlength="64"
-                           v-model="pluginOverrides[pluginKey(command)].label" :placeholder="command.label">
-                  </div>
-                  <div class="mb-2">
-                    <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
-                    <div class="d-flex align-items-center gap-2">
-                      <span class="command-icon">
-                        <span class="material-icon" v-if="glyph(pluginIcon(command))">{{ glyph(pluginIcon(command)) }}</span>
-                      </span>
-                      <span class="text-muted small">{{ pluginOverrides[pluginKey(command)].icon ? pluginOverrides[pluginKey(command)].icon.substring('material:'.length) : $t('client_commands.default_icon') }}</span>
-                      <button type="button" class="btn btn-outline-secondary btn-sm" @click="toggleIconPicker(pluginOverrides[pluginKey(command)])">
-                        <search :size="16" class="icon"></search>
-                        {{ $t('client_commands.choose_icon') }}
-                      </button>
-                      <a href="#" class="small" role="button" v-if="isPluginCommandCustomized(command)" @click.prevent="resetPluginCommand(command)">
-                        {{ $t('client_commands.reset_plugin_command') }}
-                      </a>
+                  <div class="row g-3">
+                    <div class="col-12 col-sm">
+                      <label class="form-label" :for="'plugin-label-' + command.id">{{ $t('client_commands.label') }}</label>
+                      <input type="text" class="form-control" :id="'plugin-label-' + command.id" maxlength="64"
+                             v-model="pluginOverrides[pluginKey(command)].label" :placeholder="command.label">
                     </div>
-                    <icon-chooser v-if="iconPicker.target === pluginOverrides[pluginKey(command)]" :names="iconNames" :codepoints="codepoints"
-                                  :selected="pluginOverrides[pluginKey(command)].icon" @pick="pickIcon"></icon-chooser>
+                    <div class="col-12 col-sm-auto">
+                      <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                      <div class="d-flex align-items-center gap-2">
+                        <span class="command-icon" :title="pluginIcon(command) ? pluginIcon(command).substring('material:'.length) : $t('client_commands.default_icon')">
+                          <span class="material-icon" v-if="glyph(pluginIcon(command))">{{ glyph(pluginIcon(command)) }}</span>
+                        </span>
+                        <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" @click="toggleIconPicker(pluginOverrides[pluginKey(command)])">
+                          <search :size="16" class="icon"></search>
+                          {{ $t('client_commands.choose_icon') }}
+                        </button>
+                      </div>
+                    </div>
+                    <div class="col-12" v-if="iconPicker.target === pluginOverrides[pluginKey(command)]">
+                      <icon-chooser :names="iconNames" :codepoints="codepoints" :selected="pluginOverrides[pluginKey(command)].icon" @pick="pickIcon"></icon-chooser>
+                    </div>
                   </div>
+                  <div class="form-text mt-2" v-if="command.status_file">{{ $t('client_commands.plugin_status_hint') }}</div>
                   <div class="mt-3 mb-2">
                     <label class="form-label" :for="'plugin-programs-' + command.id">{{ $t('client_commands.plugin_programs') }}</label>
                     <select class="form-select" :id="'plugin-programs-' + command.id" v-model="pluginOverrides[pluginKey(command)].programsMode">
@@ -276,9 +281,8 @@
                     <input type="text" class="form-control font-monospace mt-2" v-if="pluginOverrides[pluginKey(command)].programsMode === 'only'"
                            :aria-label="$t('client_commands.group_programs')" :value="pluginOverrides[pluginKey(command)].programs.join(', ')"
                            placeholder="photoshop.exe" @change="setPrograms(pluginOverrides[pluginKey(command)], $event.target.value)">
-                    <div class="form-text">{{ $t('client_commands.plugin_programs_desc') }}</div>
+                    <div class="form-text" v-if="pluginOverrides[pluginKey(command)].programsMode === 'only'">{{ $t('client_commands.plugin_programs_desc') }}</div>
                   </div>
-                  <div class="form-text" v-if="command.status_file">{{ $t('client_commands.plugin_status_hint') }}</div>
                 </div>
               </li>
             </ul>
@@ -336,28 +340,29 @@
             <div class="card-body">
               <h3 class="h5 card-title">{{ editor.index < 0 ? $t('client_commands.add') : $t('client_commands.edit') }}</h3>
 
-              <div class="mb-3">
-                <label class="form-label" for="command-label">{{ $t('client_commands.label') }}</label>
-                <input type="text" class="form-control" id="command-label" v-model="editor.draft.label" maxlength="64">
-              </div>
-
-              <div class="mb-3">
-                <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
-                <div class="d-flex align-items-center gap-2">
-                  <span class="command-icon">
-                    <span class="material-icon" v-if="glyph(editor.draft.icon)">{{ glyph(editor.draft.icon) }}</span>
-                  </span>
-                  <span class="text-muted small">{{ editor.draft.icon ? editor.draft.icon.substring('material:'.length) : $t('client_commands.no_icon') }}</span>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" @click="toggleIconPicker(editor.draft)">
-                    <search :size="16" class="icon"></search>
-                    {{ $t('client_commands.choose_icon') }}
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" v-if="editor.draft.icon" @click="editor.draft.icon = ''">
-                    {{ $t('client_commands.no_icon') }}
-                  </button>
+              <div class="row g-3 mb-3">
+                <div class="col-12 col-sm">
+                  <label class="form-label" for="command-label">{{ $t('client_commands.label') }}</label>
+                  <input type="text" class="form-control" id="command-label" v-model="editor.draft.label" maxlength="64">
                 </div>
-                <icon-chooser v-if="iconPicker.target === editor.draft" :names="iconNames" :codepoints="codepoints"
-                              :selected="editor.draft.icon" @pick="pickIcon"></icon-chooser>
+                <div class="col-12 col-sm-auto">
+                  <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="command-icon" :title="editor.draft.icon ? editor.draft.icon.substring('material:'.length) : $t('client_commands.no_icon')">
+                      <span class="material-icon" v-if="glyph(editor.draft.icon)">{{ glyph(editor.draft.icon) }}</span>
+                    </span>
+                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" @click="toggleIconPicker(editor.draft)">
+                      <search :size="16" class="icon"></search>
+                      {{ $t('client_commands.choose_icon') }}
+                    </button>
+                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="editor.draft.icon" @click="editor.draft.icon = ''">
+                      {{ $t('client_commands.no_icon') }}
+                    </button>
+                  </div>
+                </div>
+                <div class="col-12" v-if="iconPicker.target === editor.draft">
+                  <icon-chooser :names="iconNames" :codepoints="codepoints" :selected="editor.draft.icon" @pick="pickIcon"></icon-chooser>
+                </div>
               </div>
 
               <div class="mb-3">
@@ -465,7 +470,6 @@
             <button type="button" class="btn btn-outline-secondary" v-if="dirty" :disabled="saving || !!editor" @click="revert">
               {{ $t('client_commands.revert') }}
             </button>
-            <span class="small text-muted" v-if="dirty">{{ $t('client_commands.unsaved') }}</span>
           </div>
           <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
         </div>

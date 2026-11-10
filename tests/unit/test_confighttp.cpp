@@ -341,6 +341,7 @@ protected:
     server->resource["^/plugins-install-test$"]["POST"] = confighttp::installPlugin;
     server->resource["^/plugins-uninstall-test$"]["POST"] = confighttp::uninstallPlugin;
     server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
+    server->resource["^/plugins-guide-test$"]["GET"] = confighttp::getPluginGuide;
     server->resource["^/plugins-rescan-test$"]["POST"] = confighttp::rescanPlugins;
     server->resource["^/plugins-action-test$"]["POST"] = confighttp::runPluginAction;
     server->resource["^/plugins-panel-test$"]["GET"] = confighttp::getPluginPanel;
@@ -519,6 +520,7 @@ INSTANTIATE_TEST_SUITE_P(
     endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
     endpoint_request_t {"Plugins", "GET", "/plugins-test", ""},
     endpoint_request_t {"PluginLog", "GET", "/plugins-log-test?id=p", ""},
+    endpoint_request_t {"PluginGuide", "GET", "/plugins-guide-test", ""},
     endpoint_request_t {"PluginPanel", "GET", "/plugins-panel-test?id=p", ""},
     endpoint_request_t {"PluginProxy", "GET", "/plugins-proxy-test?id=p&path=/_input", ""},
     endpoint_request_t {"PluginRescan", "POST", "/plugins-rescan-test", ""}
@@ -2172,6 +2174,21 @@ TEST_F(PluginsConfigHttpTest, InstallCanActivatePlugin) {
   const auto plugin = get_plugin();
   EXPECT_EQ(plugin["installed"], true);
   EXPECT_EQ(plugin["active"], true);
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginsSaysWhereTheGuideIs) {
+  const auto body = nlohmann::json::parse(send("GET", "/plugins-test")->content.string());
+  EXPECT_EQ(std::filesystem::path(body.at("guide_path").get<std::string>()), std::filesystem::path(plugins_root / "builtin" / "PLUGIN_GUIDE.md").make_preferred());
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginGuideReturnsMarkdown) {
+  EXPECT_EQ(send("GET", "/plugins-guide-test")->status_code, "404 Not Found");
+
+  std::ofstream(plugins_root / "builtin" / "PLUGIN_GUIDE.md", std::ios::binary) << "# Guide\n";
+  const auto response = send("GET", "/plugins-guide-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(response->content.string(), "# Guide\n");
+  EXPECT_EQ(response->header.find("Content-Type")->second, "text/markdown; charset=utf-8");
 }
 
 TEST_F(PluginsConfigHttpTest, GetPluginLogReturnsText) {

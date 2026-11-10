@@ -2670,7 +2670,8 @@ namespace confighttp {
     nlohmann::json output_tree;
     output_tree["status"] = true;
     output_tree["plugins"] = plugins::list();
-    output_tree["custom_dir"] = fs::path(plugins::current_paths().custom_dir).make_preferred().string();
+    output_tree["custom_dir"] = fs::absolute(plugins::current_paths().custom_dir).make_preferred().string();
+    output_tree["guide_path"] = fs::absolute(plugins::guide_file()).make_preferred().string();
     send_response(response, output_tree);
   }
 
@@ -2824,6 +2825,33 @@ namespace confighttp {
    */
   void uninstallPlugin(const resp_https_t &response, const req_https_t &request) {
     startPluginTask(response, request, plugins::action_e::uninstall);
+  }
+
+  /**
+   * @brief Get the guide to writing plugins, as Markdown.
+   *
+   * @api_examples{/api/plugins/guide| GET| null}
+   */
+  void getPluginGuide(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::ifstream in {plugins::guide_file(), std::ios::binary};
+    if (!in.is_open()) {
+      not_found(response, request, "The plugin guide is not available");
+      return;
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/markdown; charset=utf-8");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(SimpleWeb::StatusCode::success_ok, ss.str(), headers);
   }
 
   /**
@@ -3196,6 +3224,7 @@ namespace confighttp {
     server.resource["^/api/plugins/config$"]["POST"] = savePluginConfig;
     server.resource["^/api/plugins/install$"]["POST"] = installPlugin;
     server.resource["^/api/plugins/action$"]["POST"] = runPluginAction;
+    server.resource["^/api/plugins/guide$"]["GET"] = getPluginGuide;
     server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
     server.resource["^/api/plugins/panel$"]["GET"] = getPluginPanel;
     server.resource["^/api/plugins/proxy$"]["GET"] = proxyPluginRequest;

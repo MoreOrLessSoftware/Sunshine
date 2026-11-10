@@ -45,6 +45,11 @@ namespace plugins {
     constexpr auto MANIFEST_FILE = "plugin.json";
 
     /**
+     * @brief Name of the guide to writing plugins in the directory of bundled plugins.
+     */
+    constexpr auto GUIDE_FILE = "PLUGIN_GUIDE.md";
+
+    /**
      * @brief Order given to plugins whose manifest does not set one.
      */
     constexpr int DEFAULT_ORDER = 1000;
@@ -1280,6 +1285,10 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     reg.paths = paths;
+    // So there's somewhere to put custom plugins; it inherits the config directory's permissions
+    if (std::error_code ec; !paths.custom_dir.empty() && !fs::create_directories(paths.custom_dir, ec) && ec) {
+      BOOST_LOG(warning) << "Couldn't create the custom plugins directory: "sv << ec.message();
+    }
     reg.manifests = discover(paths.builtin_dir, paths.custom_dir);
     reg.state = load_state(paths.state_file);
     reg.tasks.clear();
@@ -1311,6 +1320,10 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     return reg.paths;
+  }
+
+  std::filesystem::path guide_file() {
+    return current_paths().builtin_dir / GUIDE_FILE;
   }
 
   void rescan() {

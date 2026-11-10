@@ -30,6 +30,12 @@
               {{ $t('plugins.matrix_button') }}
             </a>
           </li>
+          <li class="nav-item">
+            <a class="nav-link" :class="{'active': showingGuide}" href="#guide" :aria-current="showingGuide ? 'page' : null">
+              <book-open :size="18" class="icon"></book-open>
+              {{ $t('plugins.guide_nav') }}
+            </a>
+          </li>
         </ul>
         <div class="config-nav-heading">{{ $t('plugins.title') }}</div>
         <div v-if="loading && plugins.length === 0" class="px-3 py-1">
@@ -124,6 +130,44 @@
             </div>
           </template>
           <div v-if="matrix.error" class="alert alert-danger py-2 mt-3 mb-0">{{ matrix.error }}</div>
+        </div>
+
+        <!-- How to build a plugin -->
+        <div v-else-if="showingGuide" class="config-page plugin-guide">
+          <h2 class="h4">{{ $t('plugins.guide_title') }}</h2>
+          <p>{{ $t('plugins.guide_intro') }}</p>
+
+          <h3 class="h5 mt-4">{{ $t('plugins.guide_steps_title') }}</h3>
+          <ol>
+            <li class="mb-3">{{ $t('plugins.guide_step_folder') }}</li>
+            <li class="mb-3">
+              {{ $t('plugins.guide_step_manifest') }}
+              <copy-block class="mt-2" :code="exampleManifest"></copy-block>
+            </li>
+            <li class="mb-3">
+              {{ $t('plugins.guide_step_script') }}
+              <copy-block class="mt-2" :code="exampleScript"></copy-block>
+            </li>
+            <li class="mb-3">
+              {{ $t('plugins.guide_step_copy') }}
+              <copy-block class="mt-2" :code="exampleCopyCommand"></copy-block>
+            </li>
+            <li class="mb-3">{{ $t('plugins.guide_step_finish') }}</li>
+            <li>{{ $t('plugins.guide_step_try') }}</li>
+          </ol>
+
+          <h3 class="h5 mt-4">{{ $t('plugins.guide_agent_title') }}</h3>
+          <p>{{ $t('plugins.guide_agent_intro') }}</p>
+          <copy-block :code="agentPrompt"></copy-block>
+
+          <h3 class="h5 mt-4">{{ $t('plugins.guide_reference_title') }}</h3>
+          <div v-if="guide.loading" class="text-center py-3">
+            <div class="spinner-border" role="status">
+              <span class="visually-hidden">{{ $t('_common.loading') }}</span>
+            </div>
+          </div>
+          <div v-else-if="guide.error" class="alert alert-danger mb-0" role="alert">{{ $t('plugins.guide_load_failure') }}</div>
+          <div v-else class="markdown-body" v-html="guide.html" @click="onGuideClick"></div>
         </div>
 
         <!-- The selected plugin -->
@@ -273,11 +317,85 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
+  import { BookOpen, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
+  import { Marked } from 'marked'
+
+  // The view showing the guide. Plugin IDs can't contain a colon, so it can't be mistaken for a plugin.
+  const GUIDE_VIEW = ':guide';
+
+  const EXAMPLE_MANIFEST = `{
+  "id": "my-first-plugin",
+  "name": "My First Plugin",
+  "version": "1.0.0",
+  "description": "Notes the time each stream starts.",
+  "scripts": {
+    "do": "do.ps1"
+  }
+}`;
+
+  const EXAMPLE_SCRIPT = `$file = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'my-first-plugin.txt'
+Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at $(Get-Date)"`;
+
+  /**
+   * The ID of the heading a link in the guide points at. The URL's hash picks the page's view, so links in the guide
+   * scroll to these instead of changing it.
+   */
+  function guideAnchor(text) {
+    return 'guide-' + text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  }
+
+  const guideMarked = new Marked({
+    renderer: {
+      heading({tokens, depth, text}) {
+        // The page's own headings come first
+        const level = Math.min(depth + 2, 6);
+        return `<h${level} id="${guideAnchor(text)}">${this.parser.parseInline(tokens)}</h${level}>\n`;
+      },
+    },
+  });
+
+  /**
+   * A block of text to paste somewhere else, with a button to copy it.
+   */
+  const CopyBlock = {
+    props: {
+      code: {type: String, required: true},
+    },
+    data() {
+      return {copied: false, timer: null};
+    },
+    beforeUnmount() {
+      window.clearTimeout(this.timer);
+    },
+    methods: {
+      async copy() {
+        try {
+          await navigator.clipboard.writeText(this.code);
+          this.copied = true;
+          window.clearTimeout(this.timer);
+          this.timer = window.setTimeout(() => {
+            this.copied = false;
+          }, 2000);
+        } catch (error) {
+          console.error('Failed to copy', error);
+        }
+      },
+    },
+    template: `
+      <div class="plugin-guide-code">
+        <pre class="mb-0"><code>{{ code }}</code></pre>
+        <button type="button" class="btn btn-outline-secondary btn-sm plugin-guide-copy" @click="copy">
+          {{ copied ? $t('plugins.guide_copied') : $t('plugins.guide_copy') }}
+        </button>
+      </div>
+    `,
+  };
 
   const app = createApp({
     components: {
       Navbar,
+      BookOpen,
+      CopyBlock,
       Download,
       FileText,
       LayoutGrid,
@@ -298,8 +416,14 @@
         errors: {},
         saving: {},
         pollTimer: null,
-        // 'apps' for the application grid, otherwise the ID of the selected plugin
+        // 'apps' for the application grid, GUIDE_VIEW for the guide, otherwise the ID of the selected plugin
         currentView: 'apps',
+        // Where custom plugins go and where the guide is on this host, from the server
+        customDir: '',
+        guidePath: '',
+        guide: {loading: false, error: false, html: ''},
+        exampleManifest: EXAMPLE_MANIFEST,
+        exampleScript: EXAMPLE_SCRIPT,
         matrix: {
           loading: false,
           loadError: null,
@@ -324,6 +448,22 @@
       selectedPlugin() {
         return this.plugins.find((plugin) => plugin.id === this.currentView) || null;
       },
+      showingGuide() {
+        return this.currentView === GUIDE_VIEW;
+      },
+      exampleCopyCommand() {
+        return `Copy-Item -Recurse -Force (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'SunshinePlugins\\my-first-plugin') '${this.customDir}'`;
+      },
+      agentPrompt() {
+        return this.i18n.t('plugins.guide_agent_prompt', {guide: this.guidePath, plugins: this.customDir});
+      },
+    },
+    watch: {
+      currentView(view) {
+        if (view === GUIDE_VIEW) {
+          this.loadGuide();
+        }
+      },
     },
     mounted() {
       this.currentView = this.viewFromHash();
@@ -347,6 +487,8 @@
             throw new Error(`HTTP ${response.status}`);
           }
           const body = await response.json();
+          this.customDir = body.custom_dir || '';
+          this.guidePath = body.guide_path || '';
           this.applyPlugins(body.plugins || []);
           this.loadError = null;
         } catch (error) {
@@ -369,7 +511,7 @@
         const previous = Object.fromEntries(this.plugins.map((plugin) => [plugin.id, plugin]));
         this.plugins = plugins;
         // The selected plugin is gone (rescan, or a bad link): fall back to the application grid.
-        if (this.currentView !== 'apps' && !this.selectedPlugin) {
+        if (this.currentView !== 'apps' && !this.showingGuide && !this.selectedPlugin) {
           this.showView('apps', true);
         }
         for (const plugin of plugins) {
@@ -552,10 +694,13 @@
       },
 
       /**
-       * Read the view from the URL: #apps or #plugin-<id>. Anything else shows the application grid.
+       * Read the view from the URL: #apps, #guide or #plugin-<id>. Anything else shows the application grid.
        */
       viewFromHash() {
         const hash = window.location.hash.substring(1);
+        if (hash === 'guide') {
+          return GUIDE_VIEW;
+        }
         if (hash.startsWith('plugin-')) {
           try {
             return decodeURIComponent(hash.substring('plugin-'.length)) || 'apps';
@@ -567,7 +712,48 @@
       },
 
       hashFor(view) {
+        if (view === GUIDE_VIEW) {
+          return '#guide';
+        }
         return view === 'apps' ? '#apps' : '#plugin-' + encodeURIComponent(view);
+      },
+
+      /**
+       * Fetch and render the reference part of the guide, the first time it's shown.
+       */
+      async loadGuide() {
+        if (this.guide.html || this.guide.loading) {
+          return;
+        }
+        this.guide.loading = true;
+        this.guide.error = false;
+        try {
+          const response = await apiFetch('./api/plugins/guide', {method: 'GET'});
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          // The file's title repeats the heading the page already shows
+          this.guide.html = guideMarked.parse((await response.text()).replace(/^# .*\r?\n/, ''));
+        } catch (error) {
+          console.error('Failed to load the plugin guide', error);
+          this.guide.error = true;
+        } finally {
+          this.guide.loading = false;
+        }
+      },
+
+      /**
+       * Keep links in the guide from changing the page's view: scroll to sections, and open other sites in a new tab.
+       */
+      onGuideClick(event) {
+        const href = event.target.closest('a')?.getAttribute('href') || '';
+        if (href.startsWith('#')) {
+          event.preventDefault();
+          document.getElementById(guideAnchor(href.substring(1)))?.scrollIntoView({behavior: 'smooth'});
+        } else if (/^https?:/.test(href)) {
+          event.preventDefault();
+          window.open(href, '_blank', 'noopener');
+        }
       },
 
       /**

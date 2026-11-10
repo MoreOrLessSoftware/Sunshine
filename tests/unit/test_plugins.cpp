@@ -12,6 +12,7 @@
 #include <fstream>
 #include <future>
 #include <mutex>
+#include <regex>
 #include <sstream>
 #include <thread>
 
@@ -1932,6 +1933,30 @@ TEST_F(PluginsTest, ActivePluginsOfferTheirClientCommands) {
 }
 
 #ifdef _WIN32
+TEST_F(PluginsTest, LoadingCreatesTheCustomFolder) {
+  fs::remove_all(custom_dir);
+  plugins::load(paths());
+  EXPECT_TRUE(fs::is_directory(custom_dir));
+}
+
+TEST_F(PluginsTest, TheGuideIsNextToTheBundledPluginsAndIsNotAPlugin) {
+  write_plugin(builtin_dir, "p", {{"id", "p"}});
+  write_text(builtin_dir / "PLUGIN_GUIDE.md", "# Guide\n");
+  plugins::load(paths());
+  EXPECT_EQ(plugins::guide_file(), builtin_dir / "PLUGIN_GUIDE.md");
+  EXPECT_EQ(plugins::list().size(), 1);
+}
+
+TEST(PluginsBundledTest, TheGuideStandsOnItsOwn) {
+  // It's read in the web UI, where links to the other documentation pages would lead nowhere
+  const auto guide = read_text(fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "PLUGIN_GUIDE.md");
+  ASSERT_FALSE(guide.empty());
+  EXPECT_TRUE(guide.starts_with("# "));
+  EXPECT_TRUE(guide.contains("## Notes for coding agents"));
+  EXPECT_FALSE(std::regex_search(guide, std::regex(R"(\]\([^)]*\.md)"))) << "links to another documentation page";
+  EXPECT_FALSE(guide.contains("[!")) << "uses an alert the web UI doesn't render";
+}
+
 TEST(PluginsBundledTest, NyrnaManifestIsValid) {
   // The bundled plugins sit next to the shaders in the source tree
   const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "nyrna";
