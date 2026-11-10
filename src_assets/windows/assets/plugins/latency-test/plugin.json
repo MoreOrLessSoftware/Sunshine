@@ -1,7 +1,7 @@
 {
   "id": "latency-test",
   "name": "Latency Test",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Adds a Latency Test command to Moonlight's in-stream menu, which runs a test pattern that the Latency Cam phone app films to measure the stream's latency and pacing. Scan the QR code it shows with the phone. Results are saved in Documents\\Latency Cam. Adds a firewall rule for port 48100 so a phone on the same network can reach it.",
   "author": "MoreOrLessSoftware",
   "homepage": "https://github.com/MoreOrLessSoftware/latency-analyzer",

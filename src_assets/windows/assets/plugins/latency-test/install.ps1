@@ -6,9 +6,9 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-$version = '0.1'
+$version = '0.2'
 $zipName = "LatencyAnalyzer-$version-windows.zip"
-$zipSha256 = 'B2DBC65B73950AAC530F14AA3A8902F1E26CAC088AEAD86BCDBE1E2E4462E247'
+$zipSha256 = '881493E7A67115C14160F3EC9ECCFDA1C42EED83F7AF22A5CDB89F1A52A612C2'
 $exes = @('latency-test.exe', 'latency-analyzer.exe')
 $port = 48100
 
