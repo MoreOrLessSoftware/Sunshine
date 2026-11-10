@@ -1332,6 +1332,171 @@ namespace plugins {
     reg.manifests = discover(reg.paths.builtin_dir, reg.paths.custom_dir);
   }
 
+  namespace {
+    /**
+     * @brief Largest total size of the files a plugin import copies.
+     */
+    constexpr std::uintmax_t MAX_IMPORT_BYTES = 256 * 1024 * 1024;
+
+    /**
+     * @brief Most files a plugin import copies.
+     */
+    constexpr std::size_t MAX_IMPORT_FILES = 10000;
+
+    /**
+     * @brief Copy a plugin's folder, leaving out entries whose names start with a dot.
+     *
+     * @param source Folder to copy.
+     * @param dest Folder to create.
+     * @param error Receives the reason when the copy fails.
+     * @return `false` when the copy failed or the folder can't be imported.
+     */
+    bool copy_plugin_folder(const fs::path &source, const fs::path &dest, std::string &error) {
+      std::error_code ec;
+      fs::create_directories(dest, ec);
+      if (ec) {
+        error = std::format("couldn't prepare the import: {}", ec.message());
+        return false;
+      }
+
+      std::uintmax_t bytes = 0;
+      std::size_t files = 0;
+      fs::recursive_directory_iterator it {source, ec};
+      for (const fs::recursive_directory_iterator end; !ec && it != end; it.increment(ec)) {
+        const auto &entry = *it;
+        const auto relative = entry.path().lexically_relative(source);
+        if (path_to_utf8(entry.path().filename()).starts_with('.')) {
+          it.disable_recursion_pending();
+          continue;
+        }
+        if (entry.is_symlink(ec)) {
+          error = std::format("'{}' is a link, which can't be imported", path_to_utf8(relative));
+          return false;
+        }
+        if (entry.is_directory(ec)) {
+          fs::create_directories(dest / relative, ec);
+        } else if (entry.is_regular_file(ec)) {
+          bytes += entry.file_size(ec);
+          if (++files > MAX_IMPORT_FILES || bytes > MAX_IMPORT_BYTES) {
+            error = std::format("the folder is too large to import: the limit is {} files and {} MB", MAX_IMPORT_FILES, MAX_IMPORT_BYTES / (1024 * 1024));
+            return false;
+          }
+          fs::copy_file(entry.path(), dest / relative, fs::copy_options::overwrite_existing, ec);
+        }
+        if (ec) {
+          error = std::format("couldn't copy '{}': {}", path_to_utf8(relative), ec.message());
+          return false;
+        }
+      }
+      if (ec) {
+        error = std::format("couldn't read the folder: {}", ec.message());
+        return false;
+      }
+      return true;
+    }
+
+    /**
+     * @brief Put a fully copied plugin folder in place, restoring the previous one if that fails.
+     *
+     * @param staged Folder holding the new copy.
+     * @param target Where the plugin belongs.
+     * @param backup Unused path to keep the previous copy at while swapping.
+     * @param error Receives the reason when the swap fails.
+     * @return `false` when the previous copy, if any, is still in place.
+     */
+    bool swap_plugin_folder(const fs::path &staged, const fs::path &target, const fs::path &backup, std::string &error) {
+      std::error_code ec;
+      const bool replacing = fs::exists(target, ec);
+      fs::create_directories(target.parent_path(), ec);
+      if (replacing) {
+        fs::rename(target, backup, ec);
+        if (ec) {
+          error = std::format("the plugin's current folder is in use: {}", ec.message());
+          return false;
+        }
+      }
+
+      fs::rename(staged, target, ec);
+      if (ec) {
+        error = std::format("couldn't put the plugin in place: {}", ec.message());
+        if (replacing) {
+          std::error_code restore;
+          fs::rename(backup, target, restore);
+        }
+        return false;
+      }
+      fs::remove_all(backup, ec);
+      return true;
+    }
+  }  // namespace
+
+  result_e import_folder(const std::filesystem::path &source, std::string &id, bool &updated, std::string &error) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    std::error_code ec;
+    if (!source.is_absolute() || !fs::is_directory(source, ec)) {
+      error = std::format("the folder '{}' was not found; enter its full path", path_to_utf8(source));
+      return result_e::invalid;
+    }
+
+    json node;
+    try {
+      std::ifstream in {source / MANIFEST_FILE};
+      if (!in.is_open()) {
+        error = std::format("the folder has no {}", MANIFEST_FILE);
+        return result_e::invalid;
+      }
+      node = json::parse(in);
+    } catch (const std::exception &e) {
+      error = std::format("couldn't read {}: {}", MANIFEST_FILE, e.what());
+      return result_e::invalid;
+    }
+
+    auto manifest = parse_manifest(node, source, false, error);
+    if (!manifest) {
+      return result_e::invalid;
+    }
+
+    const auto *existing = find_manifest(reg, manifest->id);
+    if (existing && existing->builtin) {
+      error = std::format("a bundled plugin already uses the ID '{}'", manifest->id);
+      return result_e::invalid;
+    }
+    if (reg.task_running) {
+      error = "another plugin operation is still running";
+      return result_e::busy;
+    }
+
+    const auto target = existing ? existing->dir : reg.paths.custom_dir / manifest->id;
+    if (fs::equivalent(source, target, ec)) {
+      error = "that folder is already where Sunshine loads the plugin from";
+      return result_e::invalid;
+    }
+    if (!existing && std::ranges::any_of(reg.manifests, [&target](const manifest_t &other) {
+          std::error_code same;
+          return fs::equivalent(other.dir, target, same);
+        })) {
+      error = std::format("another plugin is in the folder '{}'", manifest->id);
+      return result_e::invalid;
+    }
+
+    const auto staged = reg.paths.data_dir / (".import-" + manifest->id);
+    const auto backup = reg.paths.data_dir / (".replaced-" + manifest->id);
+    fs::remove_all(staged, ec);
+    fs::remove_all(backup, ec);
+    if (!copy_plugin_folder(source, staged, error) || !swap_plugin_folder(staged, target, backup, error)) {
+      fs::remove_all(staged, ec);
+      return result_e::invalid;
+    }
+
+    id = manifest->id;
+    updated = existing != nullptr;
+    reg.manifests = discover(reg.paths.builtin_dir, reg.paths.custom_dir);
+    BOOST_LOG(info) << "Plugin ["sv << id << "] imported from ["sv << path_to_utf8(source) << ']';
+    return result_e::ok;
+  }
+
   nlohmann::json list() {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};

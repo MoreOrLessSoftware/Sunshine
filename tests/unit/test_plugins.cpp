@@ -1933,6 +1933,177 @@ TEST_F(PluginsTest, ActivePluginsOfferTheirClientCommands) {
 }
 
 #ifdef _WIN32
+/**
+ * @brief Fixture with a folder holding a plugin under development.
+ */
+class PluginsImportTest: public PluginsTest {
+protected:
+  void SetUp() override {
+    PluginsTest::SetUp();
+    source = root / "dev" / "my-plugin";
+    write_text(source / "plugin.json", R"({"id": "my-plugin", "name": "Mine", "scripts": {"install": "install.ps1"}, "options": [{"id": "level", "type": "number", "default": 1}]})");
+    write_text(source / "install.ps1", "exit 0\n");
+    write_text(source / "lib" / "helper.txt", "help\n");
+    write_text(source / ".git" / "config", "secret\n");
+    write_text(source / ".env", "secret\n");
+    plugins::load(paths());
+  }
+
+  /**
+   * @brief Import the fixture's folder or another one.
+   *
+   * @param from Folder to import.
+   * @return Outcome of the import.
+   */
+  plugins::result_e import(const fs::path &from) {
+    return plugins::import_folder(from, id, updated, error);
+  }
+
+  fs::path source;  ///< Folder holding the plugin under development.
+  std::string id;  ///< Imported plugin's ID.
+  bool updated = false;  ///< Whether the import replaced a plugin.
+  std::string error;  ///< Why the import was rejected.
+};
+
+TEST_F(PluginsImportTest, ANewPluginIsCopiedInAndNotInstalled) {
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  EXPECT_EQ(id, "my-plugin");
+  EXPECT_FALSE(updated);
+
+  const auto target = custom_dir / "my-plugin";
+  EXPECT_EQ(read_text(target / "install.ps1"), "exit 0\n");
+  EXPECT_EQ(read_text(target / "lib" / "helper.txt"), "help\n");
+  EXPECT_FALSE(fs::exists(target / ".git"));
+  EXPECT_FALSE(fs::exists(target / ".env"));
+
+  const auto plugin = find_plugin(plugins::list(), "my-plugin");
+  EXPECT_EQ(plugin["name"], "Mine");
+  EXPECT_EQ(plugin["builtin"], false);
+  EXPECT_EQ(plugin["installed"], false);
+
+  // Nothing is left behind where the copy was prepared
+  for (const auto &entry : fs::directory_iterator(data_dir)) {
+    EXPECT_FALSE(entry.path().filename().string().starts_with('.')) << entry.path();
+  }
+}
+
+TEST_F(PluginsImportTest, ImportingAgainReplacesTheFilesAndKeepsTheState) {
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  ASSERT_EQ(plugins::start_task("my-plugin", plugins::action_e::install, error, true), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  ASSERT_EQ(plugins::configure("my-plugin", std::nullopt, json {{"level", 7}}, error), plugins::result_e::ok) << error;
+
+  write_text(source / "plugin.json", R"({"id": "my-plugin", "name": "Mine 2", "scripts": {"install": "install.ps1"}, "options": [{"id": "level", "type": "number", "default": 1}]})");
+  fs::remove_all(source / "lib");
+  write_text(source / "new.txt", "new\n");
+
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  EXPECT_TRUE(updated);
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin" / "lib"));
+  EXPECT_TRUE(fs::exists(custom_dir / "my-plugin" / "new.txt"));
+
+  const auto plugin = find_plugin(plugins::list(), "my-plugin");
+  EXPECT_EQ(plugin["name"], "Mine 2");
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_EQ(plugin["active"], true);
+  EXPECT_EQ(plugin["config"]["level"], 7);
+}
+
+TEST_F(PluginsImportTest, UpdatesAPluginCopiedInByHandWhereItIs) {
+  write_plugin(custom_dir, "by-hand", {{"id", "my-plugin"}});
+  plugins::rescan();
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  EXPECT_TRUE(updated);
+  EXPECT_TRUE(fs::exists(custom_dir / "by-hand" / "install.ps1"));
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin"));
+}
+
+TEST_F(PluginsImportTest, ABadFolderChangesNothing) {
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  const auto installed = read_text(custom_dir / "my-plugin" / "plugin.json");
+
+  EXPECT_EQ(import("relative/folder"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("enter its full path")) << error;
+  EXPECT_EQ(import(root / "nowhere"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("was not found")) << error;
+
+  fs::create_directories(root / "empty");
+  EXPECT_EQ(import(root / "empty"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no plugin.json")) << error;
+
+  write_text(root / "broken" / "plugin.json", "{ broken");
+  EXPECT_EQ(import(root / "broken"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("couldn't read plugin.json")) << error;
+
+  // The manifest names a script that the folder doesn't have
+  write_text(source / "plugin.json", R"({"id": "my-plugin", "scripts": {"do": "missing.ps1"}})");
+  EXPECT_EQ(import(source), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("does not exist")) << error;
+
+  EXPECT_EQ(read_text(custom_dir / "my-plugin" / "plugin.json"), installed);
+}
+
+TEST_F(PluginsImportTest, CannotReplaceABundledPluginOrAnotherPluginsFolder) {
+  write_plugin(builtin_dir, "bundled", {{"id", "bundled"}});
+  write_plugin(custom_dir, "taken", {{"id", "someone-else"}});
+  plugins::rescan();
+
+  write_text(root / "dev" / "b" / "plugin.json", R"({"id": "bundled"})");
+  EXPECT_EQ(import(root / "dev" / "b"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("a bundled plugin already uses")) << error;
+
+  write_text(root / "dev" / "t" / "plugin.json", R"({"id": "taken"})");
+  EXPECT_EQ(import(root / "dev" / "t"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("another plugin is in the folder")) << error;
+  EXPECT_EQ(find_plugin(plugins::list(), "someone-else")["id"], "someone-else");
+}
+
+TEST_F(PluginsImportTest, CannotImportThePluginsOwnFolder) {
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  EXPECT_EQ(import(custom_dir / "my-plugin"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("already where Sunshine loads")) << error;
+  EXPECT_TRUE(fs::exists(custom_dir / "my-plugin" / "plugin.json"));
+}
+
+TEST_F(PluginsImportTest, ReplacesALeftoverFolderNoPluginOwns) {
+  write_text(custom_dir / "my-plugin" / "plugin.json", "{ broken");
+  plugins::rescan();
+  ASSERT_EQ(import(source), plugins::result_e::ok) << error;
+  EXPECT_FALSE(updated);
+  EXPECT_EQ(read_text(custom_dir / "my-plugin" / "install.ps1"), "exit 0\n");
+}
+
+TEST_F(PluginsImportTest, RefusesLinksInsideTheFolder) {
+  std::error_code ec;
+  fs::create_symlink(source / "install.ps1", source / "link.ps1", ec);
+  if (ec) {
+    GTEST_SKIP() << "creating links needs more rights: " << ec.message();
+  }
+  EXPECT_EQ(import(source), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("is a link")) << error;
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin"));
+}
+
+TEST_F(PluginsImportTest, WaitsForARunningOperation) {
+  write_plugin(builtin_dir, "other", full_manifest("other"));
+  plugins::rescan();
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  plugins::set_script_runner_for_testing([released](const std::string &, bool, const std::map<std::string, std::string> &, const fs::path &, const fs::path &, std::stop_token) {
+    released.wait();
+    return 0;
+  });
+  ASSERT_EQ(plugins::start_task("other", plugins::action_e::install, error), plugins::result_e::ok) << error;
+
+  EXPECT_EQ(import(source), plugins::result_e::busy);
+  EXPECT_EQ(error, "another plugin operation is still running");
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin"));
+
+  release.set_value();
+  plugins::wait_for_task();
+  EXPECT_EQ(import(source), plugins::result_e::ok) << error;
+}
+
 TEST_F(PluginsTest, LoadingCreatesTheCustomFolder) {
   fs::remove_all(custom_dir);
   plugins::load(paths());

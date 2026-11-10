@@ -167,6 +167,14 @@ namespace confighttp {
   void uninstallPlugin(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Copy a plugin's folder on this host into the custom plugins directory.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void importPlugin(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Return the guide to writing plugins, as Markdown.
    *
    * @param response HTTP response object to populate.

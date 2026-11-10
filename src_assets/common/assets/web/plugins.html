@@ -13,11 +13,30 @@
         <h1>{{ $t('plugins.title') }}</h1>
         <p class="mb-0">{{ $t('plugins.description') }}</p>
       </div>
-      <button type="button" class="btn btn-outline-secondary" @click="rescan" :disabled="loading">
-        <refresh-cw :size="18" class="icon"></refresh-cw>
-        {{ $t('plugins.rescan') }}
-      </button>
+      <div class="d-flex flex-wrap gap-2">
+        <button type="button" class="btn btn-outline-primary" @click="toggleImport" :aria-expanded="importForm.open">
+          <upload :size="18" class="icon"></upload>
+          {{ $t('plugins.import') }}
+        </button>
+        <button type="button" class="btn btn-outline-secondary" @click="rescan" :disabled="loading">
+          <refresh-cw :size="18" class="icon"></refresh-cw>
+          {{ $t('plugins.rescan') }}
+        </button>
+      </div>
     </div>
+
+    <form v-if="importForm.open" class="card card-body mb-4" @submit.prevent="importPlugin">
+      <label class="form-label" for="plugin-import-path">{{ $t('plugins.import_path') }}</label>
+      <div class="input-group">
+        <input type="text" class="form-control font-monospace" id="plugin-import-path" v-model="importForm.path"
+               placeholder="C:\Users\you\Documents\SunshinePlugins\my-plugin" spellcheck="false">
+        <button type="submit" class="btn btn-primary" :disabled="!importForm.path.trim() || importForm.busy || anyRunning">
+          {{ $t('plugins.import_submit') }}
+        </button>
+      </div>
+      <div class="form-text">{{ $t('plugins.import_desc') }}</div>
+      <div v-if="importForm.error" class="alert alert-danger py-2 mt-2 mb-0" role="alert">{{ importForm.error }}</div>
+    </form>
 
     <div class="config-layout">
       <!-- Sidebar navigation, laid out like the Configuration page -->
@@ -148,10 +167,7 @@
               {{ $t('plugins.guide_step_script') }}
               <copy-block class="mt-2" :code="exampleScript"></copy-block>
             </li>
-            <li class="mb-3">
-              {{ $t('plugins.guide_step_copy') }}
-              <copy-block class="mt-2" :code="exampleCopyCommand"></copy-block>
-            </li>
+            <li class="mb-3">{{ $t('plugins.guide_step_import') }}</li>
             <li class="mb-3">{{ $t('plugins.guide_step_finish') }}</li>
             <li>{{ $t('plugins.guide_step_try') }}</li>
           </ol>
@@ -317,11 +333,14 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { BookOpen, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2 } from '@lucide/vue'
+  import { BookOpen, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
   import { Marked } from 'marked'
 
   // The view showing the guide. Plugin IDs can't contain a colon, so it can't be mistaken for a plugin.
   const GUIDE_VIEW = ':guide';
+
+  // Where the folder imported last is remembered, in this browser
+  const IMPORT_PATH_KEY = 'sunshine.plugins.importPath';
 
   const EXAMPLE_MANIFEST = `{
   "id": "my-first-plugin",
@@ -404,6 +423,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       Save,
       Shield,
       Trash2,
+      Upload,
     },
     inject: ['i18n'],
     data() {
@@ -418,8 +438,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         pollTimer: null,
         // 'apps' for the application grid, GUIDE_VIEW for the guide, otherwise the ID of the selected plugin
         currentView: 'apps',
-        // Where custom plugins go and where the guide is on this host, from the server
-        customDir: '',
+        importForm: {open: false, path: '', busy: false, error: null},
+        // Where the guide is on this host, from the server
         guidePath: '',
         guide: {loading: false, error: false, html: ''},
         exampleManifest: EXAMPLE_MANIFEST,
@@ -451,11 +471,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       showingGuide() {
         return this.currentView === GUIDE_VIEW;
       },
-      exampleCopyCommand() {
-        return `Copy-Item -Recurse -Force (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'SunshinePlugins\\my-first-plugin') '${this.customDir}'`;
-      },
       agentPrompt() {
-        return this.i18n.t('plugins.guide_agent_prompt', {guide: this.guidePath, plugins: this.customDir});
+        return this.i18n.t('plugins.guide_agent_prompt', {guide: this.guidePath});
       },
     },
     watch: {
@@ -487,7 +504,6 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
             throw new Error(`HTTP ${response.status}`);
           }
           const body = await response.json();
-          this.customDir = body.custom_dir || '';
           this.guidePath = body.guide_path || '';
           this.applyPlugins(body.plugins || []);
           this.loadError = null;
@@ -716,6 +732,58 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
           return '#guide';
         }
         return view === 'apps' ? '#apps' : '#plugin-' + encodeURIComponent(view);
+      },
+
+      /**
+       * Show or hide the import form, starting from the folder imported last so updating a plugin is one click.
+       */
+      toggleImport() {
+        this.importForm.open = !this.importForm.open;
+        this.importForm.error = null;
+        if (this.importForm.open && !this.importForm.path) {
+          try {
+            this.importForm.path = window.localStorage.getItem(IMPORT_PATH_KEY) || '';
+          } catch {
+            // The form just starts empty without storage
+          }
+        }
+      },
+
+      /**
+       * Import the plugin in the entered folder, then show it.
+       */
+      async importPlugin() {
+        // Windows' "Copy as path" puts quotes around the path
+        const path = this.importForm.path.trim().replace(/^"(.*)"$/, '$1');
+        this.importForm.busy = true;
+        this.importForm.error = null;
+        try {
+          const response = await apiFetch('./api/plugins/import', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path}),
+          });
+          const result = await response.json();
+          if (!response.ok || result.status !== true) {
+            this.importForm.error = result.error || this.i18n.t('plugins.import_failure');
+            return;
+          }
+          try {
+            window.localStorage.setItem(IMPORT_PATH_KEY, path);
+          } catch {
+            // Only a convenience for the next import
+          }
+          this.importForm.path = path;
+          this.importForm.open = false;
+          notifyKey.success(result.updated ? 'plugins.import_updated' : 'plugins.imported');
+          await this.loadPlugins();
+          window.location.hash = this.hashFor(result.id);
+        } catch (error) {
+          console.error('Failed to import the plugin', error);
+          this.importForm.error = this.i18n.t('plugins.import_failure');
+        } finally {
+          this.importForm.busy = false;
+        }
       },
 
       /**

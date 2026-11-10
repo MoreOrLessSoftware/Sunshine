@@ -3150,6 +3150,64 @@ namespace confighttp {
   }
 
   /**
+   * @brief Copy a plugin's folder on this host into the custom plugins directory, adding or replacing the plugin.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "path": "C:\\Users\\me\\Documents\\SunshinePlugins\\my-plugin"
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/import| POST| {"path":"C:\\Users\\me\\Documents\\SunshinePlugins\\my-plugin"}}
+   */
+  void importPlugin(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json body;
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    try {
+      body = nlohmann::json::parse(ss);
+    } catch (const nlohmann::json::exception &) {
+      bad_request(response, request, "Invalid plugin request");
+      return;
+    }
+    if (!body.is_object() || !body.contains("path") || !body["path"].is_string() || body["path"].get<std::string>().empty()) {
+      bad_request(response, request, "Plugin folder is required");
+      return;
+    }
+
+    const auto path = body["path"].get<std::string>();
+    std::string id;
+    bool updated = false;
+    std::string error;
+    if (const auto result = plugins::import_folder(fs::path {std::u8string {path.begin(), path.end()}}, id, updated, error); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    proc::refresh(config::stream.file_apps);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["id"] = id;
+    output_tree["updated"] = updated;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Start the HTTPS configuration server.
    */
   void start() {
@@ -3224,6 +3282,7 @@ namespace confighttp {
     server.resource["^/api/plugins/config$"]["POST"] = savePluginConfig;
     server.resource["^/api/plugins/install$"]["POST"] = installPlugin;
     server.resource["^/api/plugins/action$"]["POST"] = runPluginAction;
+    server.resource["^/api/plugins/import$"]["POST"] = importPlugin;
     server.resource["^/api/plugins/guide$"]["GET"] = getPluginGuide;
     server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
     server.resource["^/api/plugins/panel$"]["GET"] = getPluginPanel;

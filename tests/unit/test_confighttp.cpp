@@ -342,6 +342,7 @@ protected:
     server->resource["^/plugins-uninstall-test$"]["POST"] = confighttp::uninstallPlugin;
     server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
     server->resource["^/plugins-guide-test$"]["GET"] = confighttp::getPluginGuide;
+    server->resource["^/plugins-import-test$"]["POST"] = confighttp::importPlugin;
     server->resource["^/plugins-rescan-test$"]["POST"] = confighttp::rescanPlugins;
     server->resource["^/plugins-action-test$"]["POST"] = confighttp::runPluginAction;
     server->resource["^/plugins-panel-test$"]["GET"] = confighttp::getPluginPanel;
@@ -2069,7 +2070,7 @@ TEST_F(PluginsConfigHttpTest, GetPluginsListsPlugins) {
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");
     const auto response = client->request("POST", path, R"({"id":"p"})", headers);
@@ -2078,7 +2079,7 @@ TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsrfToken) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
     headers.emplace("Origin", "https://example.invalid");
@@ -2090,7 +2091,7 @@ TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsr
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRequireJsonContentType) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
     const auto response = client->request("POST", path, R"({"id":"p"})", headers);
@@ -2174,6 +2175,37 @@ TEST_F(PluginsConfigHttpTest, InstallCanActivatePlugin) {
   const auto plugin = get_plugin();
   EXPECT_EQ(plugin["installed"], true);
   EXPECT_EQ(plugin["active"], true);
+}
+
+TEST_F(PluginsConfigHttpTest, ImportsAPluginFromAFolder) {
+  const auto source = plugins_root / "dev" / "imported";
+  std::filesystem::create_directories(source);
+  std::ofstream(source / "plugin.json") << R"({"id": "imported", "name": "Imported"})";
+  const auto request = nlohmann::json {{"path", source.string()}}.dump();
+
+  auto response = send("POST", "/plugins-import-test", request);
+  ASSERT_EQ(response->status_code, "200 OK") << response->content.string();
+  auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_EQ(body.at("id"), "imported");
+  EXPECT_EQ(body.at("updated"), false);
+  EXPECT_TRUE(std::filesystem::exists(plugins_root / "custom" / "imported" / "plugin.json"));
+
+  response = send("POST", "/plugins-import-test", request);
+  ASSERT_EQ(response->status_code, "200 OK") << response->content.string();
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("updated"), true);
+}
+
+TEST_F(PluginsConfigHttpTest, ImportRejectsBadRequests) {
+  const auto expect_rejected = [this](const std::string &request, const std::string &message) {
+    const auto response = send("POST", "/plugins-import-test", request);
+    EXPECT_EQ(response->status_code, "400 Bad Request") << request;
+    EXPECT_TRUE(response->content.string().contains(message)) << response->content.string();
+  };
+  expect_rejected("not-json", "Invalid plugin request");
+  expect_rejected(R"([])", "Plugin folder is required");
+  expect_rejected(R"({"path": 1})", "Plugin folder is required");
+  expect_rejected(R"({"path": ""})", "Plugin folder is required");
+  expect_rejected(R"({"path": "relative\\folder"})", "enter its full path");
 }
 
 TEST_F(PluginsConfigHttpTest, GetPluginsSaysWhereTheGuideIs) {

@@ -352,6 +352,21 @@ namespace plugins {
   void rescan();
 
   /**
+   * @brief Copy a plugin's folder into the custom plugins directory, adding the plugin or replacing it.
+   *
+   * The folder's manifest and scripts are checked first, and an existing copy is only replaced once the new one has
+   * been copied in full. Entries whose names start with a dot, such as `.git`, are left out. The plugin keeps its
+   * installed state and options when it's replaced.
+   *
+   * @param source Absolute path of the folder holding the plugin's `plugin.json`.
+   * @param id Receives the plugin's ID.
+   * @param updated Receives whether a plugin with that ID was replaced.
+   * @param error Receives the reason when the import is rejected.
+   * @return Outcome of the request.
+   */
+  result_e import_folder(const std::filesystem::path &source, std::string &id, bool &updated, std::string &error);
+
+  /**
    * @brief Describe every plugin for the web UI.
    *
    * @return Array of plugin objects with manifest fields, state and the last task.

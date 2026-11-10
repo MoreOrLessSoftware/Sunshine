@@ -9,12 +9,13 @@ can change that folder. Keep it that way, and develop a plugin somewhere else:
 
 1. Create a folder for the plugin that you can write to, such as `Documents\SunshinePlugins\my-plugin`.
 2. Add a `plugin.json` and its scripts.
-3. From PowerShell running as administrator, copy the folder into the `plugins` folder.
-4. On the **Plugins** page, select *Rescan*, then *Install & Activate* on the plugin.
+3. On the **Plugins** page, select *Import plugin* and enter the folder's full path. Sunshine checks the plugin and
+   copies it into the `plugins` folder, leaving out anything whose name starts with a dot, such as `.git`.
+4. Select the plugin in the sidebar, then *Install & Activate*.
 
-After changing a plugin, copy it again. Script changes apply the next time a script runs. Changes to `plugin.json`
-need *Rescan*, and changes to what the install script sets up need the plugin to be uninstalled and installed again.
-A custom plugin cannot reuse the ID of a bundled plugin.
+After changing a plugin, import it again. It replaces the previous copy and keeps the plugin's installed state and
+options. Changes to what the install script sets up need the plugin to be uninstalled and installed again. A custom
+plugin cannot reuse the ID of a bundled plugin.
 
 ## Manifest
 
@@ -203,8 +204,8 @@ If you are an AI coding agent writing a plugin, follow these as well as the refe
 * Work in a folder the user can write to, such as one under their Documents folder. Don't write to the Sunshine
   install folder, and don't change its permissions: that would let any account on the computer run code as
   administrator.
-* You can't finish the install yourself. Tell the user the steps you can't do: copying the plugin folder into the
-  `plugins` folder from an administrator PowerShell, then selecting *Rescan* and *Install & Activate*.
+* You can't finish the install yourself. Tell the user the folder you built the plugin in, and that they need to
+  select *Import plugin* on the **Plugins** page, enter that folder, and then select *Install & Activate*.
 * Scripts run under Windows PowerShell 5.1, not PowerShell 7. Avoid syntax it doesn't have, such as `&&`, `||`, `?:`
   and `??`. Keep scripts to ASCII, or save them as UTF-8 with a BOM, because 5.1 misreads UTF-8 without one.
 * Every script must be a `.ps1` file directly inside the plugin folder, including ones you dot-source for shared code.

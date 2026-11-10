@@ -100,6 +100,9 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## POST /api/plugins/config
 @copydoc confighttp::savePluginConfig()
 
+## POST /api/plugins/import
+@copydoc confighttp::importPlugin()
+
 ## POST /api/plugins/install
 @copydoc confighttp::installPlugin()
 
