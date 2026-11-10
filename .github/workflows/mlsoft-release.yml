@@ -1,5 +1,5 @@
 ---
-# Builds the Windows MSI for a vX.X.X tag and attaches it to a draft release. This is
+# Builds the Windows MSI and portable zip for a vX.X.X tag and attaches them to a draft release. This is
 # separate from the upstream workflows, so they can stay disabled and unchanged. The
 # build steps follow ci-windows.yml.
 name: mlsoft Release
@@ -109,28 +109,34 @@ jobs:
             -DSUNSHINE_BUILD_XGPAD_DRIVER=ON
           cmake --build build
 
-      - name: Package MSI
+      - name: Package MSI and Portable Zip
         working-directory: build
-        run: cpack -G WIX --config ./CPackConfig.cmake
+        run: |
+          set -e
+          cpack -G WIX --config ./CPackConfig.cmake
+          cpack -G ZIP --config ./CPackConfig.cmake
 
       - name: Show WiX log
         if: always()
         run: cat ./build/cpack_artifacts/_CPack_Packages/win64/WIX/wix.log || true
 
-      # A missing PyroWave library would still give a working MSI, without the codec
-      - name: Verify and Name Package
+      # A missing PyroWave library would still give a working package, without the codec
+      - name: Verify and Name Packages
         run: |
           set -euo pipefail
           grep -q '^SUNSHINE_DISABLE_UPDATE_CHECK:BOOL=ON' build/CMakeCache.txt
-          staged=build/cpack_artifacts/_CPack_Packages/win64/WIX
-          for file in libpyrowave-shared-1.dll xgpad.inf xgpad.dll xgpad.cat xgpad.cer; do
-            if [ -z "$(find "$staged" -name "$file" -print -quit)" ]; then
-              echo "$file is missing from the package" 1>&2
-              exit 1
-            fi
+          for generator in WIX ZIP; do
+            staged="build/cpack_artifacts/_CPack_Packages/win64/$generator"
+            for file in libpyrowave-shared-1.dll xgpad.inf xgpad.dll xgpad.cat xgpad.cer; do
+              if [ -z "$(find "$staged" -name "$file" -print -quit)" ]; then
+                echo "$file is missing from the $generator package" 1>&2
+                exit 1
+              fi
+            done
           done
           mkdir -p release
           mv build/cpack_artifacts/Sunshine.msi "release/Sunshine-x64-${ASSET_VERSION}.msi"
+          mv build/cpack_artifacts/Sunshine.zip "release/Sunshine-x64-${ASSET_VERSION}-portable.zip"
 
       - name: Upload Package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
