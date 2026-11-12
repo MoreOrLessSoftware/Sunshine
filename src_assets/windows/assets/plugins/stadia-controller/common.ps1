@@ -47,6 +47,48 @@ function Get-ReceiverProcess {
     return $null
 }
 
+function Find-Ffmpeg {
+    <#
+    The ffmpeg.exe headset audio can use, or $null. Scripts start with Sunshine's environment, which can miss where
+    the user installed ffmpeg, so the machine and user PATH and winget's links folder are searched as well. Only a
+    build with the libopus encoder will do.
+    #>
+    $folders = @($env:Path -split ';')
+    $folders += [Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';'
+    $folders += [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
+    $folders += Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Microsoft\WinGet\Links'
+    foreach ($folder in $folders) {
+        if (-not $folder) {
+            continue
+        }
+        $candidate = Join-Path ([Environment]::ExpandEnvironmentVariables($folder.Trim('"'))) 'ffmpeg.exe'
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            continue
+        }
+        $encoders = & $candidate -hide_banner -encoders 2>$null
+        if ($encoders -match 'libopus') {
+            return $candidate
+        }
+        Write-Warning "$candidate can't encode Opus (it has no libopus), so it's skipped"
+    }
+    return $null
+}
+
+function Get-AudioArguments {
+    <# The receiver arguments for the headset audio option, after putting ffmpeg on PATH for it. #>
+    $source = "$env:SUNSHINE_PLUGIN_OPT_AUDIO"
+    if (-not $source -or $source -eq 'off') {
+        return @()
+    }
+    $ffmpeg = Find-Ffmpeg
+    if (-not $ffmpeg) {
+        Write-Warning 'Headset audio needs ffmpeg with libopus, which was not found, so the receiver starts without it. Install it with "winget install Gyan.FFmpeg", then start the receiver again.'
+        return @()
+    }
+    $env:Path = (Split-Path $ffmpeg) + ';' + $env:Path  # the receiver inherits it
+    return @('--audio-source', $source)
+}
+
 function Get-DnsUpstream {
     <# The DNS option, or the first DNS server of the interface that holds this PC's default route. #>
     $configured = "$env:SUNSHINE_PLUGIN_OPT_DNS_UPSTREAM".Trim()
@@ -135,9 +177,12 @@ function Start-Receiver {
         '--gamepad-deadzone', $deadzone,
         '--log-dir', "`"$runDir`""
     )
+    $audio = @(Get-AudioArguments)
+    $arguments += $audio
+    $audioText = if ($audio.Count) { "headset audio $($audio[1])" } else { 'no headset audio' }
 
     Suspend-WindowsTime
-    Write-Output "Starting the receiver: virtual controller $gamepad, DNS upstream $upstream, logs in $runDir"
+    Write-Output "Starting the receiver: virtual controller $gamepad, DNS upstream $upstream, $audioText, logs in $runDir"
     $out = Join-Path $runDir 'console.out'
     $err = Join-Path $runDir 'console.err'
     $process = Start-Process -FilePath $StadiacastExe -ArgumentList $arguments -WorkingDirectory $runDir `

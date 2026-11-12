@@ -48,6 +48,17 @@
       ]
     },
     {
+      "id": "audio",
+      "type": "choice",
+      "label": "Headset audio",
+      "description": "Play this PC's sound on a headset plugged into the controller, following the PC's volume. Needs ffmpeg with libopus, for example from \"winget install Gyan.FFmpeg\"; without it the receiver starts without audio, and Start test shows why. Applies the next time the receiver starts.",
+      "default": "off",
+      "choices": [
+        {"value": "off", "label": "Off"},
+        {"value": "system", "label": "This PC's sound"}
+      ]
+    },
+    {
       "id": "dns_upstream",
       "type": "string",
       "label": "DNS upstream",
