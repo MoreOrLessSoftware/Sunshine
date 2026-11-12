@@ -9,6 +9,7 @@
 
 // test includes
 #include "../tests_common.h"
+#include "../zip_test_utils.h"
 
 // standard includes
 #include <array>
@@ -344,6 +345,8 @@ protected:
     server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
     server->resource["^/plugins-guide-test$"]["GET"] = confighttp::getPluginGuide;
     server->resource["^/plugins-import-test$"]["POST"] = confighttp::importPlugin;
+    server->resource["^/plugins-check-updates-test$"]["POST"] = confighttp::checkPluginUpdates;
+    server->resource["^/plugins-update-test$"]["POST"] = confighttp::updatePlugin;
     server->resource["^/plugins-rescan-test$"]["POST"] = confighttp::rescanPlugins;
     server->resource["^/plugins-action-test$"]["POST"] = confighttp::runPluginAction;
     server->resource["^/plugins-panel-test$"]["GET"] = confighttp::getPluginPanel;
@@ -2189,7 +2192,7 @@ TEST_F(PluginsConfigHttpTest, GetPluginsListsPlugins) {
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test", "/plugins-update-test", "/plugins-check-updates-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "application/json");
     const auto response = client->request("POST", path, R"({"id":"p"})", headers);
@@ -2198,7 +2201,7 @@ TEST_F(PluginsConfigHttpTest, PluginMutationsRejectUnauthenticatedRequests) {
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsrfToken) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test", "/plugins-update-test", "/plugins-check-updates-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
     headers.emplace("Origin", "https://example.invalid");
@@ -2210,7 +2213,7 @@ TEST_F(PluginsConfigHttpTest, PluginMutationsRejectCrossOriginRequestsWithoutCsr
 }
 
 TEST_F(PluginsConfigHttpTest, PluginMutationsRequireJsonContentType) {
-  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test"}) {
+  for (const auto *path : {"/plugins-config-test", "/plugins-install-test", "/plugins-uninstall-test", "/plugins-action-test", "/plugins-import-test", "/plugins-update-test"}) {
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
     const auto response = client->request("POST", path, R"({"id":"p"})", headers);
@@ -2328,6 +2331,73 @@ TEST_F(PluginsConfigHttpTest, ImportRejectsBadRequests) {
   expect_rejected(R"({"url": 1, "path": ""})", "Plugin folder or URL is required");
   expect_rejected(R"({"path": "relative\\folder"})", "enter its full path");
   expect_rejected(R"({"url": "http://example.com/latest.json"})", "isn't an https:// address");
+}
+
+TEST_F(PluginsConfigHttpTest, ChecksForUpdatesAndReturnsThePlugins) {
+  const auto response = send("POST", "/plugins-check-updates-test", "");
+  ASSERT_EQ(response->status_code, "200 OK") << response->content.string();
+  const auto body = nlohmann::json::parse(response->content.string());
+  // Only the bundled test plugin, which isn't checked
+  EXPECT_EQ(body.at("checked"), 0);
+  EXPECT_EQ(body.at("available"), 0);
+  EXPECT_EQ(body.at("failed"), 0);
+  ASSERT_EQ(body.at("plugins").size(), 1);
+  EXPECT_EQ(body.at("plugins")[0].at("update_available"), false);
+}
+
+TEST_F(PluginsConfigHttpTest, UpdateRejectsBadRequests) {
+  auto response = send("POST", "/plugins-update-test", R"({})");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("Plugin id is required")) << response->content.string();
+
+  response = send("POST", "/plugins-update-test", R"({"id": "missing"})");
+  EXPECT_EQ(response->status_code, "404 Not Found");
+
+  response = send("POST", "/plugins-update-test", R"({"id": "p"})");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("is bundled with Sunshine")) << response->content.string();
+}
+
+TEST_F(PluginsConfigHttpTest, UpdatesAPluginFromItsFeed) {
+  // Imported from a URL once, by hand: the folder and the recorded origin
+  std::filesystem::create_directories(plugins_root / "custom" / "mine");
+  std::ofstream(plugins_root / "custom" / "mine" / "plugin.json") << R"({"id": "mine", "version": "1.0.0"})";
+  std::ofstream(plugins_root / "plugins.json") << R"({"plugins": {"mine": {"origin": "https://example.com/latest.json"}}})";
+  plugins::load({plugins_root / "builtin", plugins_root / "custom", plugins_root / "data", plugins_root / "plugins.json"});
+
+  const auto zip = test_utils::zip::make_zip({{"plugin.json", R"({"id": "mine", "version": "2.0.0"})"}});
+  const auto feed = nlohmann::json {{"version", "2.0.0"}, {"url", "mine.zip"}, {"sha256", test_utils::zip::sha256_of(zip)}}.dump();
+  std::vector<std::string> fetched;
+  bool down = true;
+  plugins::set_fetcher_for_testing([&](const std::string &url, std::size_t, std::chrono::seconds, std::string &body, std::string &final_url, std::string &error) {
+    fetched.push_back(url);
+    if (down) {
+      error = "the test server is down";
+      return false;
+    }
+    body = url.ends_with(".zip") ? zip : feed;
+    final_url = url;
+    return true;
+  });
+  auto response = send("POST", "/plugins-update-test", R"({"id": "mine"})");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("the test server is down")) << response->content.string();
+  EXPECT_EQ(fetched, (std::vector<std::string> {"https://example.com/latest.json"}));
+
+  down = false;
+  response = send("POST", "/plugins-check-updates-test", "");
+  ASSERT_EQ(response->status_code, "200 OK") << response->content.string();
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("available"), 1);
+
+  response = send("POST", "/plugins-update-test", R"({"id": "mine"})");
+  ASSERT_EQ(response->status_code, "200 OK") << response->content.string();
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("id"), "mine");
+  EXPECT_EQ(fetched.back(), "https://example.com/mine.zip");
+  for (const auto &plugin : plugins::list()) {
+    if (plugin.at("id") == "mine") {
+      EXPECT_EQ(plugin.at("version"), "2.0.0");
+    }
+  }
 }
 
 TEST_F(PluginsConfigHttpTest, ImportsFromAUrlBeforeAFolder) {

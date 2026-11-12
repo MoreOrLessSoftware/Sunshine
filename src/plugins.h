@@ -433,6 +433,37 @@ namespace plugins {
   result_e import_url(const std::string &url, std::string &id, bool &updated, std::string &error);
 
   /**
+   * @brief How a check for updates went.
+   */
+  struct update_summary_t {
+    int checked = 0;  ///< Custom plugins whose update feed was read, or tried.
+    int available = 0;  ///< Plugins whose feed has a different version than the one imported.
+    int failed = 0;  ///< Plugins whose feed couldn't be read.
+  };
+
+  /**
+   * @brief Read the update feed of every custom plugin imported from a URL.
+   *
+   * The results show in `list()` until Sunshine restarts or the plugin is imported again. A plugin has an update when
+   * its feed's version differs from its own. Bundled plugins update with Sunshine and aren't checked.
+   *
+   * @return Counts of plugins checked, with updates and that couldn't be checked.
+   */
+  update_summary_t check_for_updates();
+
+  /**
+   * @brief Import a custom plugin again from the update feed it was imported from, like `import_url()`.
+   *
+   * Like any import with a new version, an installed plugin then needs a reinstall.
+   *
+   * @param id Plugin ID.
+   * @param error Receives the reason when the update fails.
+   * @return Outcome of the request: `result_e::invalid` for a bundled plugin, one imported from a folder, or a feed
+   * that now holds another plugin.
+   */
+  result_e update(const std::string &id, std::string &error);
+
+  /**
    * @brief Describe every plugin for the web UI.
    *
    * @return Array of plugin objects with manifest fields, state and the last task.
@@ -633,7 +664,7 @@ namespace plugins {
   /**
    * @brief Replace the function `import_url()` downloads with.
    *
-   * @param fetcher Replacement fetcher.
+   * @param fetcher Replacement fetcher, which `check_for_updates()` uses too.
    */
   void set_fetcher_for_testing(fetcher_t fetcher);
 

@@ -52,8 +52,10 @@ $sha256 = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 @{version = $version; url = $zip; sha256 = $sha256} | ConvertTo-Json | Set-Content latest.json
 ```
 
-Sunshine remembers the address a plugin was imported from, and shows it on the plugin's page. Importing the same
-address again updates the plugin to its latest release.
+Sunshine remembers the address a plugin was imported from, and shows it on the plugin's page. *Check for updates* on
+the **Plugins** page reads the feed of every plugin imported from a URL, and a plugin whose feed has a different
+`version` offers *Update to* that version, which downloads it like an import. So publish a new release, with a new
+`version`, whenever you change the plugin. An installed plugin then needs *Reinstall*, as with any new version.
 
 ## Manifest
 

@@ -97,6 +97,9 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## POST /api/plugins/action
 @copydoc confighttp::runPluginAction()
 
+## POST /api/plugins/check-updates
+@copydoc confighttp::checkPluginUpdates()
+
 ## POST /api/plugins/config
 @copydoc confighttp::savePluginConfig()
 
@@ -123,6 +126,9 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 
 ## POST /api/plugins/uninstall
 @copydoc confighttp::uninstallPlugin()
+
+## POST /api/plugins/update
+@copydoc confighttp::updatePlugin()
 
 ## POST /api/reset-display-device-persistence
 @copydoc confighttp::resetDisplayDevicePersistence()

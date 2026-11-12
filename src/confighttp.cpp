@@ -3319,6 +3319,85 @@ namespace confighttp {
   }
 
   /**
+   * @brief Read the update feed of every custom plugin imported from a URL, and return the plugins.
+   *
+   * Each plugin that was checked has `update`, with the feed's `version` or the `error` that stopped it being read,
+   * and `update_available`, which is `true` when that version differs from the plugin's. The response also has
+   * `checked`, `available` and `failed` counts.
+   *
+   * @api_examples{/api/plugins/check-updates| POST| null}
+   */
+  void checkPluginUpdates(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto summary = plugins::check_for_updates();
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["checked"] = summary.checked;
+    output_tree["available"] = summary.available;
+    output_tree["failed"] = summary.failed;
+    output_tree["plugins"] = plugins::list();
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Import a custom plugin again from the update feed it was imported from.
+   * The body for the post request should be JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "id": "my-plugin"
+   * }
+   * @endcode
+   * An installed plugin whose version changed then needs a reinstall with `/api/plugins/install`.
+   *
+   * @api_examples{/api/plugins/update| POST| {"id":"my-plugin"}}
+   */
+  void updatePlugin(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json body;
+    const auto id = read_plugin_request(response, request, body);
+    if (!id) {
+      return;
+    }
+
+    std::string error;
+    if (const auto result = plugins::update(*id, error); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    proc::refresh(config::stream.file_apps);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["id"] = *id;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Start the HTTPS configuration server.
    */
   void start() {
@@ -3394,6 +3473,8 @@ namespace confighttp {
     server.resource["^/api/plugins/install$"]["POST"] = installPlugin;
     server.resource["^/api/plugins/action$"]["POST"] = runPluginAction;
     server.resource["^/api/plugins/import$"]["POST"] = importPlugin;
+    server.resource["^/api/plugins/check-updates$"]["POST"] = checkPluginUpdates;
+    server.resource["^/api/plugins/update$"]["POST"] = updatePlugin;
     server.resource["^/api/plugins/guide$"]["GET"] = getPluginGuide;
     server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
     server.resource["^/api/plugins/panel$"]["GET"] = getPluginPanel;

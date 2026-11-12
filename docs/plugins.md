@@ -60,7 +60,12 @@ as usual.
 *Import plugin* on the **Plugins** page adds a plugin that doesn't come with Sunshine. Enter the full path of a folder
 on this PC that holds the plugin's `plugin.json`, or the `https://` address of the plugin's GitHub repository or update
 feed. Sunshine downloads the plugin's latest release, checks it against the checksum in the feed, and copies it into
-its plugins folder. The plugin's page shows where it was imported from; import it from there again to update it.
+its plugins folder. The plugin's page shows where it was imported from.
+
+To update plugins imported from a URL, select *Check for updates* on the **Plugins** page. A plugin with a newer
+release shows *Update available* and a blue dot in the sidebar; select *Update to* on its page to download it. If the
+plugin is installed, select *Reinstall* afterwards to run its new install script. A plugin imported from a folder is
+updated by importing the folder again. Bundled plugins update with Sunshine.
 
 ## Writing a plugin
 The [plugin guide](../src_assets/windows/assets/plugins/PLUGIN_GUIDE.md) explains how to build your own, step by step and for coding agents, and describes everything a plugin can do. Sunshine ships with it, under *Plugin guide* on the **Plugins** page.

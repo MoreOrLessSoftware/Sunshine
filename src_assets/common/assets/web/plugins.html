@@ -18,6 +18,12 @@
           <upload :size="18" class="icon"></upload>
           {{ $t('plugins.import') }}
         </button>
+        <button type="button" class="btn btn-outline-primary" v-if="hasUrlOrigins" @click="checkForUpdates"
+                :disabled="checkingUpdates" :title="$t('plugins.check_updates_title')">
+          <span v-if="checkingUpdates" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+          <cloud-download v-else :size="18" class="icon"></cloud-download>
+          {{ checkingUpdates ? $t('plugins.checking_updates') : $t('plugins.check_updates') }}
+        </button>
         <button type="button" class="btn btn-outline-secondary" @click="rescan" :disabled="loading">
           <refresh-cw :size="18" class="icon"></refresh-cw>
           {{ $t('plugins.rescan') }}
@@ -203,6 +209,7 @@
                   {{ plugin.installed ? $t('plugins.installed') : $t('plugins.not_installed') }}
                 </span>
                 <span class="badge bg-warning text-dark me-1" v-if="plugin.needs_reinstall">{{ $t('plugins.reinstall_needed') }}</span>
+                <span class="badge bg-info text-dark me-1" v-if="plugin.update_available">{{ $t('plugins.update_available') }}</span>
                 <span class="badge bg-primary me-1" v-if="plugin.active">{{ $t('plugins.active') }}</span>
                 <span class="badge bg-warning text-dark me-1" v-if="plugin.elevated">
                   <shield class="badge-icon"></shield>
@@ -240,6 +247,18 @@
 
             <div v-if="plugin.needs_reinstall && !isBusy(plugin)" class="alert alert-warning py-2 mb-2" role="status">
               {{ $t('plugins.reinstall_needed_desc', {installed: plugin.installed_version, version: plugin.version}) }}
+            </div>
+
+            <div v-if="plugin.update_available" class="alert alert-info py-2 mb-2 d-flex flex-wrap align-items-center justify-content-between gap-2" role="status">
+              <span>{{ $t('plugins.update_available_desc', {version: plugin.update.version, current: plugin.version}) }}</span>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="anyRunning || !!updating[plugin.id]" @click="updatePlugin(plugin)">
+                <span v-if="updating[plugin.id]" class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span>
+                <cloud-download v-else :size="16" class="icon"></cloud-download>
+                {{ updating[plugin.id] ? $t('plugins.updating') : $t('plugins.update_to', {version: plugin.update.version}) }}
+              </button>
+            </div>
+            <div v-else-if="plugin.update && plugin.update.error" class="alert alert-warning py-2 mb-2 text-break" role="status">
+              {{ $t('plugins.update_check_failed', {error: plugin.update.error}) }}
             </div>
 
             <p class="mb-1">{{ plugin.description }}</p>
@@ -348,7 +367,7 @@
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { BookOpen, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
+  import { BookOpen, CloudDownload, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
   import { Marked } from 'marked'
 
   // The view showing the guide. Plugin IDs can't contain a colon, so it can't be mistaken for a plugin.
@@ -429,6 +448,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
     components: {
       Navbar,
       BookOpen,
+      CloudDownload,
       CopyBlock,
       Download,
       FileText,
@@ -454,6 +474,9 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         // 'apps' for the application grid, GUIDE_VIEW for the guide, otherwise the ID of the selected plugin
         currentView: 'apps',
         importForm: {open: false, path: '', busy: false, error: null},
+        checkingUpdates: false,
+        // Plugin IDs being updated from their feed
+        updating: {},
         // Where the guide is on this host, from the server
         guidePath: '',
         guide: {loading: false, error: false, html: ''},
@@ -473,6 +496,12 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
     computed: {
       anyRunning() {
         return this.plugins.some((plugin) => this.isBusy(plugin));
+      },
+      /**
+       * Whether any custom plugin was imported from a URL, so it can be checked for updates.
+       */
+      hasUrlOrigins() {
+        return this.plugins.some((plugin) => !plugin.builtin && (plugin.origin || '').startsWith('https://'));
       },
       activePlugins() {
         return this.plugins.filter((plugin) => plugin.active);
@@ -715,6 +744,48 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         await this.loadPlugins();
       },
 
+      /**
+       * Read the update feed of every plugin imported from a URL.
+       */
+      async checkForUpdates() {
+        this.checkingUpdates = true;
+        try {
+          const response = await apiFetch('./api/plugins/check-updates', {method: 'POST'});
+          const result = await response.json();
+          if (!response.ok || result.status !== true) {
+            throw new Error(result.error || `HTTP ${response.status}`);
+          }
+          this.plugins = result.plugins;
+          if (result.available > 0) {
+            notifyKey.info('plugins.updates_found');
+          } else if (result.failed > 0) {
+            notifyKey.warning('plugins.updates_check_failed');
+          } else {
+            notifyKey.success('plugins.updates_none');
+          }
+        } catch (error) {
+          console.error('Failed to check plugins for updates', error);
+          notifyKey.error('plugins.updates_check_failed');
+        } finally {
+          this.checkingUpdates = false;
+        }
+      },
+
+      /**
+       * Download a plugin's latest version from its feed. An installed plugin then needs a reinstall.
+       */
+      async updatePlugin(plugin) {
+        this.updating[plugin.id] = true;
+        try {
+          if (await this.post(plugin, './api/plugins/update', {})) {
+            notifyKey.success('plugins.updated');
+          }
+          await this.loadPlugins();
+        } finally {
+          delete this.updating[plugin.id];
+        }
+      },
+
       async loadLog(plugin) {
         try {
           const response = await apiFetch(`./api/plugins/log?id=${encodeURIComponent(plugin.id)}`, {method: 'GET'});
@@ -883,7 +954,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
 
       /**
-       * Summarize a plugin for its sidebar indicator: busy, failed, reinstall, active, inactive or not_installed.
+       * Summarize a plugin for its sidebar indicator: busy, failed, reinstall, update, active, inactive or
+       * not_installed.
        */
       pluginStatus(plugin) {
         if (this.isBusy(plugin)) {
@@ -894,6 +966,9 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         }
         if (plugin.needs_reinstall) {
           return 'reinstall';
+        }
+        if (plugin.update_available) {
+          return 'update';
         }
         if (!plugin.installed) {
           return 'not_installed';
@@ -909,6 +984,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
             return this.taskFailedText(plugin);
           case 'reinstall':
             return this.i18n.t('plugins.reinstall_needed');
+          case 'update':
+            return this.i18n.t('plugins.update_available');
           case 'active':
             return this.i18n.t('plugins.active');
           case 'inactive':

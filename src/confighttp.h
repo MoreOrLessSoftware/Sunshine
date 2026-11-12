@@ -175,6 +175,22 @@ namespace confighttp {
   void importPlugin(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Read the update feed of every custom plugin imported from a URL.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void checkPluginUpdates(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Import a custom plugin again from the URL it was imported from.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void updatePlugin(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Return the guide to writing plugins, as Markdown.
    *
    * @param response HTTP response object to populate.

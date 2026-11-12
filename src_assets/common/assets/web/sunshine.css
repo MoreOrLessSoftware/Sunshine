@@ -1505,6 +1505,11 @@ p {
     border-color: var(--color-warning);
 }
 
+.plugin-status-update {
+    background-color: var(--color-info);
+    border-color: var(--color-info);
+}
+
 /* On the highlighted row, outline the dot so it stays visible against the primary background. */
 .config-nav-list .nav-link.active .plugin-status {
     box-shadow: 0 0 0 2px var(--color-on-primary);

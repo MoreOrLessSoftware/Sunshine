@@ -70,6 +70,14 @@ namespace plugins {
       std::string action_id;  ///< Action that ran when `action` is `action_e::run`.
     };
 
+    /**
+     * @brief What a check for updates found for one plugin.
+     */
+    struct update_check_t {
+      std::string version;  ///< Version in the plugin's update feed, or empty when it couldn't be read.
+      std::string error;  ///< Why the feed couldn't be read.
+    };
+
     int run_script(const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const fs::path &working_dir, const fs::path &log_file, std::stop_token stop);
     bool fetch_https(const std::string &url, std::size_t max_bytes, std::chrono::seconds timeout, std::string &body, std::string &final_url, std::string &error);
 
@@ -108,6 +116,7 @@ namespace plugins {
       std::chrono::milliseconds session_poll = DEFAULT_SESSION_POLL;  ///< Time between checks of `session_ready`.
       std::jthread reinstaller;  ///< Thread started by `reinstall_updated_builtins()`.
       fetcher_t fetcher = fetch_https;  ///< Downloads plugins imported from a URL.
+      std::unordered_map<std::string, update_check_t> updates;  ///< Last check for updates keyed by plugin ID.
     };
 
     /**
@@ -1465,6 +1474,7 @@ namespace plugins {
     reg.manifests = discover(paths.builtin_dir, paths.custom_dir);
     reg.state = load_state(paths.state_file);
     reg.tasks.clear();
+    reg.updates.clear();
 
     // State written before installed versions were recorded: take the current version to be the installed one,
     // rather than run every install script again after an update.
@@ -1623,12 +1633,13 @@ namespace plugins {
      * @param source Absolute path of the folder holding the plugin's `plugin.json`.
      * @param origin Folder or feed to record as the plugin's origin.
      * @param expected_version Version the manifest must have, or empty to accept any.
+     * @param expected_id ID the manifest must have, or empty to accept any.
      * @param id Receives the plugin's ID.
      * @param updated Receives whether a plugin with that ID was replaced.
      * @param error Receives the reason when the import is rejected.
      * @return Outcome of the request.
      */
-    result_e import_from(const fs::path &source, const std::string &origin, const std::string &expected_version, std::string &id, bool &updated, std::string &error) {
+    result_e import_from(const fs::path &source, const std::string &origin, const std::string &expected_version, const std::string &expected_id, std::string &id, bool &updated, std::string &error) {
       auto &reg = registry();
       std::scoped_lock lock {reg.mutex};
 
@@ -1652,6 +1663,10 @@ namespace plugins {
       }
       if (!expected_version.empty() && manifest->version != expected_version) {
         error = std::format("the feed says version {}, but the plugin's {} says version {}", expected_version, MANIFEST_FILE, manifest->version.empty() ? "nothing"s : manifest->version);
+        return result_e::invalid;
+      }
+      if (!expected_id.empty() && manifest->id != expected_id) {
+        error = std::format("the feed now holds the plugin '{}' rather than '{}'", manifest->id, expected_id);
         return result_e::invalid;
       }
 
@@ -1690,6 +1705,7 @@ namespace plugins {
       id = manifest->id;
       updated = existing != nullptr;
       reg.manifests = discover(reg.paths.builtin_dir, reg.paths.custom_dir);
+      reg.updates.erase(id);  // what a check found no longer applies
       if (auto &state = reg.state[id]; state.origin != origin) {
         state.origin = origin;
         save_state(reg.paths.state_file, reg.state);
@@ -2094,6 +2110,113 @@ namespace plugins {
       }
       return hex;
     }
+
+    /**
+     * @brief Longest a check for updates waits for each feed.
+     */
+    constexpr std::chrono::seconds CHECK_TIMEOUT = 20s;
+
+    /**
+     * @brief What a plugin's update feed says.
+     */
+    struct feed_t {
+      std::string version;  ///< Latest version of the plugin.
+      std::string package_url;  ///< Absolute address of its zip file.
+      std::string sha256;  ///< SHA-256 of the zip file, as lowercase hex.
+    };
+
+    /**
+     * @brief Download and check an update feed.
+     *
+     * @param fetch Function to download with.
+     * @param feed Address of the feed.
+     * @param timeout Longest the download may take.
+     * @param out Receives what the feed says.
+     * @param error Receives the reason when the feed can't be used.
+     * @return `result_e::unavailable` when the download failed, or `result_e::invalid` when the feed is wrong.
+     */
+    result_e read_feed(const fetcher_t &fetch, const std::string &feed, std::chrono::seconds timeout, feed_t &out, std::string &error) {
+      std::string body;
+      std::string final_url;
+      if (!fetch(feed, MAX_FEED_BYTES, timeout, body, final_url, error)) {
+        return result_e::unavailable;
+      }
+
+      std::string package_url;
+      try {
+        const auto node = json::parse(body);
+        out.version = node.at("version").get<std::string>();
+        package_url = node.at("url").get<std::string>();
+        out.sha256 = boost::to_lower_copy(node.at("sha256").get<std::string>());
+      } catch (const std::exception &) {
+        error = std::format("{} isn't a plugin update feed: it needs \"version\", \"url\" and \"sha256\"", feed);
+        return result_e::invalid;
+      }
+      if (out.version.empty() || out.sha256.size() != 64 || !std::ranges::all_of(out.sha256, [](const char c) {
+            return std::isxdigit(static_cast<unsigned char>(c));
+          })) {
+        error = std::format("{} needs a \"version\" and the zip file's SHA-256 as 64 hex digits in \"sha256\"", feed);
+        return result_e::invalid;
+      }
+      const auto package = parse_url(package_url, final_url);
+      if (!package || !is_https(package.get())) {
+        error = std::format("the feed's \"url\" '{}' isn't an https:// address", package_url);
+        return result_e::invalid;
+      }
+      out.package_url = url_part(package.get(), CURLUPART_URL);
+      return result_e::ok;
+    }
+
+    /**
+     * @brief Download a plugin from its update feed and import it.
+     *
+     * @param feed Address of the feed, as `feed_url()` returns it.
+     * @param expected_id ID the plugin must have, or empty to accept any.
+     * @param id Receives the plugin's ID.
+     * @param updated Receives whether a plugin with that ID was replaced.
+     * @param error Receives the reason when the import is rejected.
+     * @return Outcome of the request: `result_e::unavailable` when a download failed.
+     */
+    result_e import_feed(const std::string &feed, const std::string &expected_id, std::string &id, bool &updated, std::string &error) {
+      fetcher_t fetch;
+      fs::path data_dir;
+      {
+        auto &reg = registry();
+        std::scoped_lock lock {reg.mutex};
+        fetch = reg.fetcher;
+        data_dir = reg.paths.data_dir;
+      }
+
+      feed_t latest;
+      if (const auto result = read_feed(fetch, feed, DOWNLOAD_TIMEOUT, latest, error); result != result_e::ok) {
+        return result;
+      }
+
+      std::string zip;
+      std::string final_url;
+      if (!fetch(latest.package_url, MAX_PACKAGE_BYTES, DOWNLOAD_TIMEOUT, zip, final_url, error)) {
+        return result_e::unavailable;
+      }
+      if (sha256_hex(zip) != latest.sha256) {
+        error = std::format("{} doesn't match the SHA-256 in the feed", latest.package_url);
+        return result_e::invalid;
+      }
+
+      static std::atomic<unsigned> downloads {0};
+      const auto staged = data_dir / std::format(".download-{}", ++downloads);
+      std::error_code ec;
+      fs::remove_all(staged, ec);
+      auto result = result_e::invalid;
+      if (!extract_zip(zip, staged, error)) {
+        error = std::format("{}: {}", latest.package_url, error);
+      } else if (const auto root = find_plugin_root(staged); !root) {
+        error = std::format("{} has no {} at its top level or in a single top-level folder", latest.package_url, MANIFEST_FILE);
+      } else {
+        result = import_from(*root, feed, latest.version, expected_id, id, updated, error);
+      }
+      fs::remove_all(staged, ec);
+      return result;
+    }
   }  // namespace
 
   std::optional<std::string> feed_url(const std::string &url, std::string &error) {
@@ -2125,70 +2248,81 @@ namespace plugins {
     if (!feed) {
       return result_e::invalid;
     }
+    return import_feed(*feed, {}, id, updated, error);
+  }
 
+  update_summary_t check_for_updates() {
     fetcher_t fetch;
-    fs::path data_dir;
+    std::vector<std::pair<std::string, std::string>> feeds;  // plugin ID and feed
     {
       auto &reg = registry();
       std::scoped_lock lock {reg.mutex};
       fetch = reg.fetcher;
-      data_dir = reg.paths.data_dir;
+      for (const auto &manifest : reg.manifests) {
+        if (const auto *state = find_state(reg, manifest.id); !manifest.builtin && state && state->origin.starts_with("https://")) {
+          feeds.emplace_back(manifest.id, state->origin);
+        }
+      }
     }
 
-    std::string body;
-    std::string final_url;
-    if (!fetch(*feed, MAX_FEED_BYTES, DOWNLOAD_TIMEOUT, body, final_url, error)) {
-      return result_e::unavailable;
+    // Read every feed before taking the lock again, so streams don't wait on the network
+    std::vector<std::pair<std::string, update_check_t>> results;
+    for (const auto &[id, feed] : feeds) {
+      feed_t latest;
+      update_check_t check;
+      if (read_feed(fetch, feed, CHECK_TIMEOUT, latest, check.error) == result_e::ok) {
+        check.version = latest.version;
+      } else {
+        BOOST_LOG(warning) << "Couldn't check plugin ["sv << id << "] for updates: "sv << check.error;
+      }
+      results.emplace_back(id, std::move(check));
     }
 
-    std::string version;
-    std::string package_url;
-    std::string sha256;
-    try {
-      const auto node = json::parse(body);
-      version = node.at("version").get<std::string>();
-      package_url = node.at("url").get<std::string>();
-      sha256 = boost::to_lower_copy(node.at("sha256").get<std::string>());
-    } catch (const std::exception &) {
-      error = std::format("{} isn't a plugin update feed: it needs \"version\", \"url\" and \"sha256\"", *feed);
-      return result_e::invalid;
+    update_summary_t summary;
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    for (auto &[id, check] : results) {
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        continue;  // removed while the feeds were read
+      }
+      ++summary.checked;
+      if (check.version.empty()) {
+        ++summary.failed;
+      } else if (check.version != manifest->version) {
+        ++summary.available;
+        BOOST_LOG(info) << "Plugin ["sv << id << "] has an update from version ["sv << manifest->version << "] to ["sv << check.version << ']';
+      }
+      reg.updates[id] = std::move(check);
     }
-    if (version.empty() || sha256.size() != 64 || !std::ranges::all_of(sha256, [](const char c) {
-          return std::isxdigit(static_cast<unsigned char>(c));
-        })) {
-      error = std::format("{} needs a \"version\" and the zip file's SHA-256 as 64 hex digits in \"sha256\"", *feed);
-      return result_e::invalid;
-    }
-    const auto package = parse_url(package_url, final_url);
-    if (!package || !is_https(package.get())) {
-      error = std::format("the feed's \"url\" '{}' isn't an https:// address", package_url);
-      return result_e::invalid;
-    }
-    const auto resolved = url_part(package.get(), CURLUPART_URL);
+    return summary;
+  }
 
-    std::string zip;
-    if (!fetch(resolved, MAX_PACKAGE_BYTES, DOWNLOAD_TIMEOUT, zip, final_url, error)) {
-      return result_e::unavailable;
-    }
-    if (sha256_hex(zip) != sha256) {
-      error = std::format("{} doesn't match the SHA-256 in the feed", resolved);
-      return result_e::invalid;
+  result_e update(const std::string &id, std::string &error) {
+    std::string feed;
+    {
+      auto &reg = registry();
+      std::scoped_lock lock {reg.mutex};
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        error = std::format("plugin '{}' not found", id);
+        return result_e::not_found;
+      }
+      if (manifest->builtin) {
+        error = std::format("'{}' is bundled with Sunshine, and updates with it", manifest->name);
+        return result_e::invalid;
+      }
+      const auto *state = find_state(reg, id);
+      if (!state || !state->origin.starts_with("https://")) {
+        error = std::format("'{}' wasn't imported from a URL; import it again from its folder to update it", manifest->name);
+        return result_e::invalid;
+      }
+      feed = state->origin;
     }
 
-    static std::atomic<unsigned> downloads {0};
-    const auto staged = data_dir / std::format(".download-{}", ++downloads);
-    std::error_code ec;
-    fs::remove_all(staged, ec);
-    auto result = result_e::invalid;
-    if (!extract_zip(zip, staged, error)) {
-      error = std::format("{}: {}", resolved, error);
-    } else if (const auto root = find_plugin_root(staged); !root) {
-      error = std::format("{} has no {} at its top level or in a single top-level folder", resolved, MANIFEST_FILE);
-    } else {
-      result = import_from(*root, *feed, version, id, updated, error);
-    }
-    fs::remove_all(staged, ec);
-    return result;
+    std::string imported;
+    bool updated = false;
+    return import_feed(feed, id, imported, updated, error);
   }
 
   result_e import_folder(const std::filesystem::path &source, std::string &id, bool &updated, std::string &error) {
@@ -2197,7 +2331,7 @@ namespace plugins {
       error = std::format("the folder '{}' was not found; enter its full path", path_to_utf8(source));
       return result_e::invalid;
     }
-    return import_from(source, path_to_utf8(source), {}, id, updated, error);
+    return import_from(source, path_to_utf8(source), {}, {}, id, updated, error);
   }
 
   nlohmann::json list() {
@@ -2269,6 +2403,12 @@ namespace plugins {
           {"programs", command.programs},
         });
       }
+      json update = nullptr;
+      bool update_available = false;
+      if (const auto update_it = reg.updates.find(manifest.id); update_it != reg.updates.end()) {
+        update = {{"version", update_it->second.version}, {"error", update_it->second.error}};
+        update_available = !update_it->second.version.empty() && update_it->second.version != manifest.version;
+      }
       json panel = nullptr;
       if (manifest.panel) {
         panel = {{"height", manifest.panel->height}, {"proxy", manifest.panel->port != 0}};
@@ -2294,6 +2434,8 @@ namespace plugins {
         {"installed_version", state.installed_version},
         {"needs_reinstall", needs_reinstall(manifest, state)},
         {"origin", state.origin},
+        {"update", std::move(update)},
+        {"update_available", update_available},
         {"active", state.active},
         {"config", effective_options(reg, manifest)},
         {"task", std::move(task)}
