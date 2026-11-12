@@ -2488,7 +2488,7 @@ namespace plugins {
     std::scoped_lock lock {reg.mutex};
 
     std::vector<offered_commands_t> offered;
-    std::optional<std::string> foreground;  // Only looked up when a command is limited to programs
+    const client_commands::host_programs_t host;  // looked up only when a command is limited to programs
     for (const auto &manifest : reg.manifests) {
       if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end() || !runs_for_streams(reg, manifest)) {
         continue;
@@ -2501,13 +2501,8 @@ namespace plugins {
         const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id));
         const bool has_override = entry != overrides.end();
         const auto &programs = has_override && entry->second.programs ? *entry->second.programs : source.programs;
-        if (!programs.empty()) {
-          if (!foreground) {
-            foreground = client_commands::foreground_program();
-          }
-          if (!client_commands::matches(programs, *foreground)) {
-            continue;
-          }
+        if (!programs.empty() && !client_commands::matches(programs, host)) {
+          continue;
         }
 
         client_commands::command_t command;

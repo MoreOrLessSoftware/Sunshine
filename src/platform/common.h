@@ -980,6 +980,13 @@ namespace platf {
   std::string foreground_program();
 
   /**
+   * @brief Return the file names of the programs running on the host, such as `notepad.exe`.
+   *
+   * @return One entry per process, so a program can appear more than once; empty on platforms without support.
+   */
+  std::vector<std::string> running_programs();
+
+  /**
    * @brief Return the hardware MAC address associated with a network address.
    *
    * @param address Network address being parsed or filtered.

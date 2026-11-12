@@ -32,6 +32,7 @@
 #include <WS2tcpip.h>
 #include <WtsApi32.h>
 #include <sddl.h>
+#include <TlHelp32.h>
 // clang-format on
 
 // Boost overrides NTDDI_VERSION, so we re-override it here
@@ -214,6 +215,22 @@ namespace platf {
     }}.join();
 
     return name;
+  }
+
+  std::vector<std::string> running_programs() {
+    std::vector<std::string> programs;
+    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snapshot == INVALID_HANDLE_VALUE) {
+      return programs;
+    }
+    PROCESSENTRY32W entry {};
+    entry.dwSize = sizeof(entry);
+    for (BOOL more = Process32FirstW(snapshot, &entry); more; more = Process32NextW(snapshot, &entry)) {
+      // The file name of every process in every session, which needs no access to the process itself
+      programs.push_back(utf_utils::to_utf8(std::wstring {entry.szExeFile}));
+    }
+    CloseHandle(snapshot);
+    return programs;
   }
 
   std::filesystem::path appdata() {

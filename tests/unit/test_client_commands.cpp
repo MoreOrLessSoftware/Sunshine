@@ -6,6 +6,7 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
@@ -13,6 +14,7 @@
 #include <thread>
 
 // lib includes
+#include <boost/algorithm/string.hpp>
 #include <nlohmann/json.hpp>
 
 // local includes
@@ -671,6 +673,26 @@ TEST_F(ClientCommandsTest, TheCurrentOfferIncludesTheForegroundProgramsGroup) {
   client_commands::set_file_for_testing({});
 }
 
+TEST_F(ClientCommandsTest, TheCurrentOfferIncludesTheGroupOfARunningProgram) {
+  auto file = dir_ / "client_commands.json";
+  write_file(file, R"({"program-groups": [{"id": "o", "label": "OBS", "programs": ["~obs64.exe"],
+                                           "commands": [{"id": "rec", "label": "Record", "type": "keys", "steps": [[27]]}]}]})");
+  client_commands::set_file_for_testing(file);
+  client_commands::set_foreground_program_for_testing("game.exe");
+
+  client_commands::set_running_programs_for_testing(std::vector<std::string> {"game.exe", "obs64.exe"});
+  auto offer = client_commands::current_offer();
+  ASSERT_EQ(offer.groups.size(), 1);
+  EXPECT_EQ(offer.groups[0].label, "OBS");
+
+  client_commands::set_running_programs_for_testing(std::vector<std::string> {"game.exe"});
+  EXPECT_TRUE(client_commands::current_offer().groups.empty());
+
+  client_commands::set_running_programs_for_testing(std::nullopt);
+  client_commands::set_foreground_program_for_testing(std::nullopt);
+  client_commands::set_file_for_testing({});
+}
+
 TEST(ClientCommandsPrograms, ThePlatformCanBeAsked) {
   client_commands::set_foreground_program_for_testing(std::nullopt);
   // Whatever is in front of the test (possibly nothing), it's a file name rather than a path
@@ -687,6 +709,55 @@ TEST(ClientCommandsPrograms, TheExeCanBeLeftOut) {
   EXPECT_FALSE(client_commands::matches(programs, "notepad2.exe"));
   EXPECT_FALSE(client_commands::matches(programs, "game.exe.exe"));
   EXPECT_FALSE(client_commands::matches(programs, ""));
+}
+
+TEST(ClientCommandsPrograms, ATildeMatchesAProgramThatIsRunning) {
+  const client_commands::host_programs_t host {"explorer.exe", {"svchost.exe", "OBS64.exe"}};
+  EXPECT_EQ(host.foreground(), "explorer.exe");
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"~obs64"}, host));
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"~C:\\Apps\\obs64.exe"}, host));
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"~explorer.exe"}, host));  // the foreground one runs too
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"notepad.exe", "~obs64.exe"}, host));
+  EXPECT_FALSE(client_commands::matches(std::vector<std::string> {"obs64.exe"}, host));  // not in the foreground
+  EXPECT_FALSE(client_commands::matches(std::vector<std::string> {"~notepad.exe"}, host));
+  EXPECT_FALSE(client_commands::matches(std::vector<std::string> {"~"}, host));
+  EXPECT_FALSE(client_commands::matches(std::vector<std::string> {}, host));
+
+  // Given only the program in the foreground, that's the only one running
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"~notepad"}, "notepad.exe"));
+  EXPECT_FALSE(client_commands::matches(std::vector<std::string> {"~notepad"}, ""));
+}
+
+TEST(ClientCommandsPrograms, TheHostsProgramsAreLookedUpOnceWhenNeeded) {
+  client_commands::set_foreground_program_for_testing("game.exe");
+  client_commands::set_running_programs_for_testing(std::vector<std::string> {"obs64.exe"});
+  const client_commands::host_programs_t host;
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"~obs64"}, host));
+
+  // What was looked up is kept for the rest of the offer
+  client_commands::set_foreground_program_for_testing("other.exe");
+  client_commands::set_running_programs_for_testing(std::vector<std::string> {});
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"~obs64"}, host));
+  EXPECT_TRUE(client_commands::matches(std::vector<std::string> {"game"}, host));
+
+  client_commands::set_foreground_program_for_testing(std::nullopt);
+  client_commands::set_running_programs_for_testing(std::nullopt);
+}
+
+TEST(ClientCommandsPrograms, ThePlatformListsTheRunningPrograms) {
+  client_commands::set_running_programs_for_testing(std::nullopt);
+  const auto programs = client_commands::running_programs();
+#ifdef _WIN32
+  // This test is one of them
+  EXPECT_TRUE(std::ranges::any_of(programs, [](const std::string &program) {
+    return boost::iequals(program, "test_sunshine.exe");
+  })) << programs.size();
+  EXPECT_TRUE(std::ranges::none_of(programs, [](const std::string &program) {
+    return program.find_first_of("\\/") != std::string::npos;
+  }));
+#else
+  EXPECT_TRUE(programs.empty());
+#endif
 }
 
 TEST(ClientCommandsPluginOverrides, ParsesAndRoundTrips) {

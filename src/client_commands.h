@@ -176,13 +176,63 @@ namespace client_commands {
   std::vector<program_group_t> load_program_groups(const std::filesystem::path &file);
 
   /**
+   * @brief The programs on the host that a list of programs is matched against, looked up the first time they're
+   * needed.
+   */
+  class host_programs_t {
+  public:
+    /**
+     * @brief Look up the programs on the host when they're first needed.
+     */
+    host_programs_t() = default;
+
+    /**
+     * @brief Use the given programs instead of looking them up.
+     *
+     * @param foreground File name of the program in the foreground, or empty for none.
+     * @param running File names of the programs running besides it.
+     */
+    host_programs_t(std::string foreground, std::vector<std::string> running);
+
+    /**
+     * @brief Return the program in the foreground.
+     *
+     * @return Its file name, or an empty string when there is none or it can't be told.
+     */
+    const std::string &foreground() const;
+
+    /**
+     * @brief Check whether a program is running, in the foreground or not.
+     *
+     * @param name File name, or a path that matches by its file name; the `.exe` can be left out.
+     * @return `true` when a running program has that file name, ignoring case.
+     */
+    bool running(std::string_view name) const;
+
+  private:
+    mutable std::optional<std::string> foreground_;  ///< The program in the foreground, once looked up.
+    mutable std::optional<std::vector<std::string>> running_;  ///< The programs running, once looked up.
+  };
+
+  /**
    * @brief Check whether a list of programs includes a program.
    *
-   * @param programs File names of the programs, with or without `.exe`. A path matches by its file name.
-   * @param program File name of the program, such as `notepad.exe`.
+   * @param programs File names of the programs, with or without `.exe`. A path matches by its file name, and a name
+   * starting with `~` matches that program whether or not it is in the foreground.
+   * @param program File name of the program, such as `notepad.exe`, taken to be the only one running.
    * @return `true` when one of the programs has the same file name, ignoring case.
    */
   bool matches(const std::vector<std::string> &programs, std::string_view program);
+
+  /**
+   * @brief Check whether a list of programs includes one on the host.
+   *
+   * @param programs File names of the programs, with or without `.exe`. A path matches by its file name. A name
+   * matches the program in the foreground, or any running program when it starts with `~`.
+   * @param host The programs on the host.
+   * @return `true` when one of the programs matches.
+   */
+  bool matches(const std::vector<std::string> &programs, const host_programs_t &host);
 
   /**
    * @brief Check whether a program group is for a program.
@@ -203,6 +253,15 @@ namespace client_commands {
   std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, std::string_view program);
 
   /**
+   * @brief Build the groups offered for the programs on the host.
+   *
+   * @param groups Every program group.
+   * @param host The programs on the host.
+   * @return A `program` group for each matching group that has commands.
+   */
+  std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, const host_programs_t &host);
+
+  /**
    * @brief Return the program in the foreground on the host.
    *
    * @return The program set by `set_foreground_program_for_testing()`, otherwise `platf::foreground_program()`.
@@ -215,6 +274,20 @@ namespace client_commands {
    * @param program File name of the program, or `std::nullopt` to ask the platform again.
    */
   void set_foreground_program_for_testing(std::optional<std::string> program);
+
+  /**
+   * @brief Return the programs running on the host.
+   *
+   * @return The programs set by `set_running_programs_for_testing()`, otherwise `platf::running_programs()`.
+   */
+  std::vector<std::string> running_programs();
+
+  /**
+   * @brief Pretend these programs are running.
+   *
+   * @param programs File names of the programs, or `std::nullopt` to ask the platform again.
+   */
+  void set_running_programs_for_testing(std::optional<std::vector<std::string>> programs);
 
   /**
    * @brief Parse the overrides of plugin commands, skipping and logging invalid ones.

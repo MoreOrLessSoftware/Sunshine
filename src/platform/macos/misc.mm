@@ -107,6 +107,11 @@ namespace platf {
     return {};
   }
 
+  std::vector<std::string> running_programs() {
+    // Not supported yet
+    return {};
+  }
+
   fs::path appdata() {
     const char *homedir;
     if ((homedir = getenv("HOME")) == nullptr) {

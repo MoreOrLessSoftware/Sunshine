@@ -568,29 +568,77 @@ namespace client_commands {
     }
   }
 
-  bool matches(const std::vector<std::string> &programs, std::string_view program) {
-    if (program.empty()) {
-      return false;
-    }
-    return std::ranges::any_of(programs, [program](const std::string &name) {
+  namespace {
+    /**
+     * @brief Check whether a name from a list of programs is a program's file name.
+     *
+     * @param name File name or path from the list, without a leading `~`; the `.exe` can be left out.
+     * @param program File name of a program, such as `notepad.exe`.
+     * @return `true` when they match, ignoring case.
+     */
+    bool same_program(std::string_view name, std::string_view program) {
+      if (program.empty()) {
+        return false;
+      }
       // A path matches by its file name, and the .exe can be left out
-      auto file_name = std::filesystem::path {name}.filename().string();
-      return boost::iequals(file_name, program) || (!boost::iends_with(file_name, ".exe") && boost::iequals(file_name + ".exe", program));
+      auto file_name = std::filesystem::path {std::string {name}}.filename().string();
+      return !file_name.empty() && (boost::iequals(file_name, program) || (!boost::iends_with(file_name, ".exe") && boost::iequals(file_name + ".exe", program)));
+    }
+  }  // namespace
+
+  host_programs_t::host_programs_t(std::string foreground, std::vector<std::string> running):
+      foreground_ {std::move(foreground)},
+      running_ {std::move(running)} {
+  }
+
+  const std::string &host_programs_t::foreground() const {
+    if (!foreground_) {
+      foreground_ = foreground_program();
+    }
+    return *foreground_;
+  }
+
+  bool host_programs_t::running(std::string_view name) const {
+    if (same_program(name, foreground())) {
+      return true;
+    }
+    if (!running_) {
+      running_ = running_programs();
+    }
+    return std::ranges::any_of(*running_, [name](const std::string &program) {
+      return same_program(name, program);
     });
+  }
+
+  bool matches(const std::vector<std::string> &programs, const host_programs_t &host) {
+    return std::ranges::any_of(programs, [&host](const std::string &name) {
+      if (name.starts_with('~')) {
+        return host.running(std::string_view {name}.substr(1));
+      }
+      return same_program(name, host.foreground());
+    });
+  }
+
+  bool matches(const std::vector<std::string> &programs, std::string_view program) {
+    return matches(programs, host_programs_t {std::string {program}, {}});
   }
 
   bool matches(const program_group_t &group, std::string_view program) {
     return matches(group.programs, program);
   }
 
-  std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, std::string_view program) {
+  std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, const host_programs_t &host) {
     std::vector<group_t> offered;
     for (const auto &group : groups) {
-      if (!group.commands.empty() && matches(group, program)) {
+      if (!group.commands.empty() && matches(group.programs, host)) {
         offered.push_back(group_t {"program", group.label, group.icon, group.commands});
       }
     }
     return offered;
+  }
+
+  std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, std::string_view program) {
+    return program_offer(groups, host_programs_t {std::string {program}, {}});
   }
 
   namespace {
@@ -603,6 +651,16 @@ namespace client_commands {
       static std::optional<std::string> program;
       return program;
     }
+
+    /**
+     * @brief Return the running programs set for tests.
+     *
+     * @return The programs, or `std::nullopt` to ask the platform.
+     */
+    std::optional<std::vector<std::string>> &running_override() {
+      static std::optional<std::vector<std::string>> programs;
+      return programs;
+    }
   }  // namespace
 
   std::string foreground_program() {
@@ -614,6 +672,17 @@ namespace client_commands {
 
   void set_foreground_program_for_testing(std::optional<std::string> program) {
     foreground_override() = std::move(program);
+  }
+
+  std::vector<std::string> running_programs() {
+    if (running_override()) {
+      return *running_override();
+    }
+    return platf::running_programs();
+  }
+
+  void set_running_programs_for_testing(std::optional<std::vector<std::string>> programs) {
+    running_override() = std::move(programs);
   }
 
   std::filesystem::path default_file() {
@@ -797,10 +866,9 @@ namespace client_commands {
 
     auto offer = make_offer(load_global(file()), app_name, std::move(app_commands));
 
-    // The program in the foreground is only looked up when there are groups to match it
+    // The programs on the host are only looked up when there are groups to match them
     if (auto groups = load_program_groups(file()); !groups.empty()) {
-      auto program = foreground_program();
-      for (auto &group : program_offer(groups, program)) {
+      for (auto &group : program_offer(groups, host_programs_t {})) {
         offer.groups.push_back(std::move(group));
       }
     }

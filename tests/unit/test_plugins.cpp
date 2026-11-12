@@ -167,6 +167,7 @@ protected:
     plugins::set_change_callback({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
+    client_commands::set_running_programs_for_testing(std::nullopt);
     client_commands::set_file_for_testing({});
     fs::remove_all(root);
     BaseTest::TearDown();
@@ -1861,6 +1862,23 @@ TEST_F(PluginsTest, CommandsLimitedToProgramsFollowTheForegroundProgram) {
   const auto listed = find_plugin(plugins::list(), "p")["client_commands"];
   EXPECT_EQ(listed[0]["programs"], json::array());
   EXPECT_EQ(listed[2]["programs"], json::array({"gimp.exe"}));
+}
+
+TEST_F(PluginsTest, APluginCommandCanNeedAProgramToBeRunningRatherThanInFront) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"client_commands", json::parse(R"([{"id": "record", "steps": [[27]], "programs": ["~obs64.exe"]}])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+  client_commands::set_foreground_program_for_testing("game.exe");
+
+  client_commands::set_running_programs_for_testing(std::vector<std::string> {"game.exe", "OBS64.EXE"});
+  ASSERT_EQ(plugins::offered_client_commands({}).size(), 1);
+  EXPECT_EQ(plugins::offered_client_commands({}).at(0).grouped.at(0).id, "plugin:p/record");
+
+  client_commands::set_running_programs_for_testing(std::vector<std::string> {"game.exe"});
+  EXPECT_TRUE(plugins::offered_client_commands({}).empty() || plugins::offered_client_commands({}).at(0).grouped.empty());
 }
 
 TEST_F(PluginsTest, OverridesReplaceTheProgramsACommandIsLimitedTo) {

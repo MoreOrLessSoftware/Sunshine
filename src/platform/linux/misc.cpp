@@ -281,6 +281,11 @@ namespace platf {
     return {};
   }
 
+  std::vector<std::string> running_programs() {
+    // Not supported yet
+    return {};
+  }
+
   fs::path appdata() {
     static std::once_flag migration_flag;
     static fs::path config_path;
