@@ -2606,6 +2606,45 @@ p {
 }
 
 /* ==========================================================================
+   App List
+   ========================================================================== */
+
+.app-list .min-w-0 {
+    min-width: 0;  /* lets long commands truncate instead of widening the row */
+}
+
+.app-list-thumb {
+    position: relative;
+    width: 3rem;
+    height: 4rem;
+    border-radius: var(--bs-border-radius-sm);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, var(--color-primary-light), var(--color-accent-light));
+}
+
+[data-bs-theme="dark"] .app-list-thumb {
+    background: linear-gradient(135deg, rgba(79, 70, 229, 0.2), rgba(245, 158, 11, 0.2));
+}
+
+.app-list-thumb img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.app-list-initial {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--color-primary);
+    opacity: 0.5;
+}
+
+/* ==========================================================================
    App Cards
    ========================================================================== */
 

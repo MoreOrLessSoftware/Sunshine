@@ -25,6 +25,19 @@
       </div>
       <!-- Right side actions -->
       <div class="d-flex align-items-center gap-2" v-if="apps && apps.length > 0">
+        <!-- Card or list view -->
+        <div class="btn-group" role="group" :aria-label="$t('apps.view')">
+          <button class="btn btn-outline-secondary" type="button" @click="setView('cards')"
+                  :class="{ active: view === 'cards' }" :aria-pressed="view === 'cards'" :title="$t('apps.view_cards')">
+            <layout-grid :size="16" class="icon"></layout-grid>
+            <span class="visually-hidden">{{ $t('apps.view_cards') }}</span>
+          </button>
+          <button class="btn btn-outline-secondary" type="button" @click="setView('list')"
+                  :class="{ active: view === 'list' }" :aria-pressed="view === 'list'" :title="$t('apps.view_list')">
+            <list :size="16" class="icon"></list>
+            <span class="visually-hidden">{{ $t('apps.view_list') }}</span>
+          </button>
+        </div>
         <!-- Sort by name toggle -->
         <button class="btn btn-outline-secondary text-nowrap" type="button" @click="toggleSort"
                 :class="{ active: sortMode !== 'default' }"
@@ -48,8 +61,39 @@
       </div>
     </div>
 
+    <!-- Apps List -->
+    <div class="list-group app-list" v-if="displayedApps.length > 0 && view === 'list'">
+      <div class="list-group-item d-flex align-items-center gap-3" v-for="{ app, index } in displayedApps" :key="index">
+        <div class="app-list-thumb flex-shrink-0" aria-hidden="true">
+          <span class="app-list-initial">{{ app.name.charAt(0).toUpperCase() }}</span>
+          <img v-if="app['image-path']" :src="'/api/covers/' + index" alt="" loading="lazy" @error="handleImageError" />
+        </div>
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold text-truncate">{{ app.name }}</div>
+          <div v-if="app.cmd" class="small text-muted font-monospace text-truncate" :title="app.cmd">
+            <terminal :size="12" class="icon me-1"></terminal>{{ app.cmd }}
+          </div>
+          <div v-if="app['working-dir']" class="small text-muted font-monospace text-truncate" :title="app['working-dir']">
+            <folder :size="12" class="icon me-1"></folder>{{ app['working-dir'] }}
+          </div>
+          <div class="d-flex flex-wrap gap-1 mt-1" v-if="appBadges(app).length">
+            <span v-for="badge in appBadges(app)" :key="badge" class="badge text-bg-secondary fw-normal">{{ badge }}</span>
+          </div>
+        </div>
+        <div class="d-flex gap-2 flex-shrink-0">
+          <button class="btn btn-sm btn-primary" @click="editApp(index)">
+            <edit :size="16" class="icon"></edit>
+            <span class="d-none d-sm-inline">{{ $t('apps.edit') }}</span>
+          </button>
+          <button class="btn btn-sm btn-danger" @click="showDeleteModal(index)" :aria-label="$t('apps.delete')">
+            <trash-2 :size="16" class="icon"></trash-2>
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Apps Grid -->
-    <div class="row g-3" v-if="displayedApps.length > 0">
+    <div class="row g-3" v-else-if="displayedApps.length > 0">
       <div class="col-12 col-sm-6 col-md-4 col-lg-3" v-for="{ app, index } in displayedApps" :key="index">
         <div class="card app-card h-100">
           <div class="app-poster-container">
@@ -617,6 +661,8 @@
     FolderUp,
     HardDrive,
     LayersPlus,
+    LayoutGrid,
+    List,
     Play,
     Plus,
     RotateCcw,
@@ -627,6 +673,9 @@
     Trash2,
     X,
   } from '@lucide/vue'
+
+  // Where the card or list view is remembered, in this browser
+  const VIEW_KEY = "sunshine.apps.view";
 
   const app = createApp({
     components: {
@@ -644,6 +693,8 @@
       FolderUp,
       HardDrive,
       LayersPlus,
+      LayoutGrid,
+      List,
       Play,
       Plus,
       RotateCcw,
@@ -677,6 +728,8 @@
         fileBrowserTypedPath: "",
         searchQuery: "",
         sortMode: "default",
+        // "cards" or "list", remembered in this browser
+        view: "cards",
         deleteTarget: null,
         version: null,
         githubVersion: null,
@@ -749,6 +802,13 @@
       },
     },
     created() {
+      try {
+        if (window.localStorage.getItem(VIEW_KEY) === "list") {
+          this.view = "list";
+        }
+      } catch {
+        // Cards without storage
+      }
       this.loadApps();
 
       fetch("./api/plugins")
@@ -1055,6 +1115,30 @@
         }).then((r) => {
           if (r.status === 200) document.location.reload();
         });
+      },
+      /**
+       * Show the applications as cards or as a list, and remember the choice in this browser.
+       */
+      setView(view) {
+        this.view = view;
+        try {
+          window.localStorage.setItem(VIEW_KEY, view);
+        } catch {
+          // Only a convenience
+        }
+      },
+      /**
+       * The labels of the badges the cards show on an application's cover.
+       */
+      appBadges(app) {
+        const badges = [];
+        if (app.elevated) badges.push(this.$t('apps.badge_admin'));
+        if (app.detached && app.detached.length) badges.push(this.$t('apps.badge_detached'));
+        if (app['prep-cmd'] && app['prep-cmd'].length) badges.push(this.$t('apps.badge_app_prep'));
+        if (app['exclude-global-prep-cmd']) badges.push(this.$t('apps.badge_no_global_prep'));
+        if (app['exclude-plugins'] && app['exclude-plugins'].length) badges.push(this.$t('apps.badge_plugins_excluded'));
+        if (app['auto-detach']) badges.push(this.$t('apps.badge_auto_detach'));
+        return badges;
       },
       handleImageError(event) {
         // Hide the broken image and show placeholder instead
