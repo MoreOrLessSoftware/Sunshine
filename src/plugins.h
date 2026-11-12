@@ -151,6 +151,7 @@ namespace plugins {
     bool active = false;  ///< Whether the do and undo scripts run for applications.
     nlohmann::json options = nlohmann::json::object();  ///< Option values set by the user.
     std::string installed_version;  ///< Manifest version whose install script last succeeded, or empty when not installed.
+    std::string origin;  ///< Folder or update feed URL a custom plugin was last imported from, or empty.
   };
 
   /**
@@ -215,6 +216,19 @@ namespace plugins {
    * @return Exit code of the script, or -1 when it could not run.
    */
   using script_runner_t = std::function<int(const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const std::filesystem::path &working_dir, const std::filesystem::path &log_file, std::stop_token stop)>;
+
+  /**
+   * @brief Function that downloads a file over HTTPS.
+   *
+   * @param url Address to download.
+   * @param max_bytes Largest response accepted.
+   * @param timeout Longest the whole download may take.
+   * @param body Receives the response.
+   * @param final_url Receives the address the response came from once redirects were followed.
+   * @param error Receives the reason when the download fails.
+   * @return `true` when the server answered 200 OK with no more than `max_bytes`.
+   */
+  using fetcher_t = std::function<bool(const std::string &url, std::size_t max_bytes, std::chrono::seconds timeout, std::string &body, std::string &final_url, std::string &error)>;
 
   /**
    * @brief Check whether a string can be used as a plugin ID.
@@ -383,7 +397,7 @@ namespace plugins {
    *
    * The folder's manifest and scripts are checked first, and an existing copy is only replaced once the new one has
    * been copied in full. Entries whose names start with a dot, such as `.git`, are left out. The plugin keeps its
-   * installed state and options when it's replaced.
+   * installed state and options when it's replaced, and the folder is recorded as its origin.
    *
    * @param source Absolute path of the folder holding the plugin's `plugin.json`.
    * @param id Receives the plugin's ID.
@@ -392,6 +406,31 @@ namespace plugins {
    * @return Outcome of the request.
    */
   result_e import_folder(const std::filesystem::path &source, std::string &id, bool &updated, std::string &error);
+
+  /**
+   * @brief Return the update feed for a plugin's address.
+   *
+   * @param url An HTTPS address of a feed, or of a GitHub repository, whose latest release's `latest.json` asset is
+   * then the feed.
+   * @param error Receives the reason when the address can't be used.
+   * @return Address of the feed, or `std::nullopt` when `url` isn't a valid HTTPS address.
+   */
+  std::optional<std::string> feed_url(const std::string &url, std::string &error);
+
+  /**
+   * @brief Download a plugin from its update feed and import it like `import_folder()`.
+   *
+   * The feed is a JSON object with the plugin's `version`, the `url` of a zip file holding it (absolute, or relative
+   * to the feed), and that file's `sha256`. The zip holds `plugin.json` at its top level or in a single top-level
+   * folder, and its version must match the feed. The feed is recorded as the plugin's origin.
+   *
+   * @param url Address given to `feed_url()`.
+   * @param id Receives the plugin's ID.
+   * @param updated Receives whether a plugin with that ID was replaced.
+   * @param error Receives the reason when the import is rejected.
+   * @return Outcome of the request: `result_e::unavailable` when a download failed.
+   */
+  result_e import_url(const std::string &url, std::string &id, bool &updated, std::string &error);
 
   /**
    * @brief Describe every plugin for the web UI.
@@ -590,4 +629,16 @@ namespace plugins {
    * @brief Restore the default check for a signed-in user.
    */
   void reset_session_check_for_testing();
+
+  /**
+   * @brief Replace the function `import_url()` downloads with.
+   *
+   * @param fetcher Replacement fetcher.
+   */
+  void set_fetcher_for_testing(fetcher_t fetcher);
+
+  /**
+   * @brief Restore the default HTTPS fetcher.
+   */
+  void reset_fetcher_for_testing();
 }  // namespace plugins

@@ -13,17 +13,22 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <thread>
 
 // lib includes
+#include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
 #include <nlohmann/json.hpp>
+#include <zlib.h>
 
 // local includes
 #include <src/config.h>
+#include <src/crypto.h>
 #include <src/plugins.h>
 #include <src/process.h>
 
@@ -153,6 +158,7 @@ protected:
     plugins::cancel_task();
     plugins::reset_script_runner_for_testing();
     plugins::reset_session_check_for_testing();
+    plugins::reset_fetcher_for_testing();
     plugins::set_change_callback({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
@@ -474,8 +480,8 @@ TEST_F(PluginsTest, ScriptCommandRunsPowerShellFile) {
 
 TEST_F(PluginsTest, StateRoundTrips) {
   std::unordered_map<std::string, plugins::plugin_state_t> state;
-  state["a"] = {true, true, {{"x", 1}}, "1.2.0"};
-  state["b"] = {false, false, json::object()};
+  state["a"] = {true, true, {{"x", 1}}, "1.2.0", "C:/dev/a"};
+  state["b"] = {false, false, json::object(), "", "https://example.com/latest.json"};
   ASSERT_TRUE(plugins::save_state(state_file, state));
   EXPECT_FALSE(fs::exists(state_file.string() + ".tmp"));
 
@@ -487,6 +493,8 @@ TEST_F(PluginsTest, StateRoundTrips) {
   EXPECT_EQ(loaded.at("a").installed_version, "1.2.0");
   EXPECT_FALSE(loaded.at("b").installed);
   EXPECT_EQ(loaded.at("b").installed_version, "");
+  EXPECT_EQ(loaded.at("a").origin, "C:/dev/a");
+  EXPECT_EQ(loaded.at("b").origin, "https://example.com/latest.json");
 }
 
 TEST_F(PluginsTest, LoadStateKeepsOnlyTheInstalledVersionOfInstalledPlugins) {
@@ -2012,6 +2020,8 @@ TEST_F(PluginsImportTest, ANewPluginIsCopiedInAndNotInstalled) {
   EXPECT_EQ(plugin["name"], "Mine");
   EXPECT_EQ(plugin["builtin"], false);
   EXPECT_EQ(plugin["installed"], false);
+  EXPECT_EQ(plugin["origin"], source.string());
+  EXPECT_EQ(plugins::load_state(state_file).at("my-plugin").origin, source.string());
 
   // Nothing is left behind where the copy was prepared
   for (const auto &entry : fs::directory_iterator(data_dir)) {
@@ -2186,6 +2196,520 @@ TEST(PluginsBundledTest, LatencyTestManifestIsValid) {
   EXPECT_EQ(manifest->client_commands[1].programs, (std::vector<std::string> {"latency-test"}));
 }
 #endif
+
+/**
+ * @brief An entry of a zip file built by `make_zip()`.
+ */
+struct zip_entry_t {
+  std::string name;  ///< Name stored in the zip.
+  std::string data;  ///< Contents.
+  bool deflate = true;  ///< Whether to compress it rather than store it.
+  std::uint16_t made_by = 20;  ///< "Version made by", whose high byte is the host system.
+  std::uint32_t attributes = 0;  ///< External attributes.
+  std::uint16_t flags = 0;  ///< General purpose flags.
+  std::optional<std::uint16_t> method;  ///< Compression method to record instead of the real one.
+  std::optional<std::uint32_t> size;  ///< Uncompressed size to record instead of the real one.
+  std::optional<std::uint32_t> crc;  ///< CRC to record instead of the real one.
+};
+
+/**
+ * @brief Build a zip file.
+ *
+ * @param entries Entries to put in it.
+ * @param count Number of entries to record instead of the real one.
+ * @return Contents of the zip file.
+ */
+std::string make_zip(const std::vector<zip_entry_t> &entries, std::optional<std::uint16_t> count = std::nullopt) {
+  const auto le16 = [](std::string &out, std::uint32_t value) {
+    out += static_cast<char>(value & 0xFF);
+    out += static_cast<char>((value >> 8) & 0xFF);
+  };
+  const auto le32 = [&le16](std::string &out, std::uint32_t value) {
+    le16(out, value & 0xFFFF);
+    le16(out, value >> 16);
+  };
+
+  std::string zip;
+  std::string directory;
+  for (const auto &entry : entries) {
+    std::string stored = entry.data;
+    if (entry.deflate) {
+      z_stream stream {};
+      deflateInit2(&stream, Z_BEST_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8, Z_DEFAULT_STRATEGY);
+      stored.assign(deflateBound(&stream, static_cast<uLong>(entry.data.size())), '\0');
+      stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(entry.data.data()));
+      stream.avail_in = static_cast<uInt>(entry.data.size());
+      stream.next_out = reinterpret_cast<Bytef *>(stored.data());
+      stream.avail_out = static_cast<uInt>(stored.size());
+      deflate(&stream, Z_FINISH);
+      stored.resize(stream.total_out);
+      deflateEnd(&stream);
+    }
+    const auto method = entry.method.value_or(entry.deflate ? Z_DEFLATED : 0);
+    const auto crc = entry.crc.value_or(static_cast<std::uint32_t>(crc32(0, reinterpret_cast<const Bytef *>(entry.data.data()), static_cast<uInt>(entry.data.size()))));
+    const auto size = entry.size.value_or(static_cast<std::uint32_t>(entry.data.size()));
+    const auto offset = static_cast<std::uint32_t>(zip.size());
+
+    le32(zip, 0x04034b50);
+    le16(zip, 20);
+    le16(zip, entry.flags);
+    le16(zip, method);
+    le32(zip, 0);  // time and date
+    le32(zip, crc);
+    le32(zip, static_cast<std::uint32_t>(stored.size()));
+    le32(zip, size);
+    le16(zip, static_cast<std::uint32_t>(entry.name.size()));
+    le16(zip, 0);
+    zip += entry.name;
+    zip += stored;
+
+    le32(directory, 0x02014b50);
+    le16(directory, entry.made_by);
+    le16(directory, 20);
+    le16(directory, entry.flags);
+    le16(directory, method);
+    le32(directory, 0);
+    le32(directory, crc);
+    le32(directory, static_cast<std::uint32_t>(stored.size()));
+    le32(directory, size);
+    le16(directory, static_cast<std::uint32_t>(entry.name.size()));
+    le16(directory, 0);  // extra field
+    le16(directory, 0);  // comment
+    le16(directory, 0);  // disk
+    le16(directory, 0);  // internal attributes
+    le32(directory, entry.attributes);
+    le32(directory, offset);
+    directory += entry.name;
+  }
+
+  const auto directory_offset = static_cast<std::uint32_t>(zip.size());
+  zip += directory;
+  le32(zip, 0x06054b50);
+  le16(zip, 0);
+  le16(zip, 0);
+  le16(zip, count.value_or(static_cast<std::uint16_t>(entries.size())));
+  le16(zip, count.value_or(static_cast<std::uint16_t>(entries.size())));
+  le32(zip, static_cast<std::uint32_t>(directory.size()));
+  le32(zip, directory_offset);
+  le16(zip, 7);  // comment length
+  zip += "comment";
+  return zip;
+}
+
+/**
+ * @brief Format the SHA-256 of some data as hex.
+ *
+ * @param data Data to hash.
+ * @return 64 lowercase hex digits.
+ */
+std::string sha256_of(const std::string &data) {
+  std::string hex;
+  for (const auto byte : crypto::hash(data)) {
+    hex += std::format("{:02x}", byte);
+  }
+  return hex;
+}
+
+/**
+ * @brief Fixture that imports plugins from URLs served by a fake fetcher.
+ */
+class PluginsUrlImportTest: public PluginsTest {
+protected:
+  void SetUp() override {
+    PluginsTest::SetUp();
+    plugins::load(paths());
+    fs::create_directories(data_dir);  // so tests can check nothing is left in it
+    plugins::set_fetcher_for_testing([this](const std::string &url, std::size_t max_bytes, std::chrono::seconds timeout, std::string &body, std::string &final_url, std::string &fetch_error) {
+      fetched.push_back(url);
+      limits.push_back(max_bytes);
+      EXPECT_EQ(timeout, 60s);
+      const auto it = served.find(url);
+      if (it == served.end()) {
+        fetch_error = std::format("couldn't download {}: the server answered 404", url);
+        return false;
+      }
+      body = it->second.first;
+      final_url = it->second.second.empty() ? url : it->second.second;
+      return true;
+    });
+  }
+
+  /**
+   * @brief Serve a response.
+   *
+   * @param url Address requested.
+   * @param body Response.
+   * @param redirected_to Address the response comes from after redirects, or empty for `url`.
+   */
+  void serve(const std::string &url, const std::string &body, const std::string &redirected_to = {}) {
+    served[url] = {body, redirected_to};
+  }
+
+  /**
+   * @brief Build a zip of a plugin in a top-level folder.
+   *
+   * @param version Version in its manifest.
+   * @return Contents of the zip file.
+   */
+  static std::string plugin_zip(const std::string &version) {
+    const json manifest = {{"id", "my-plugin"}, {"name", "Mine"}, {"version", version}, {"scripts", {{"install", "install.ps1"}}}};
+    return make_zip({
+      {"my-plugin/", ""},
+      {"my-plugin/plugin.json", manifest.dump()},
+      {"my-plugin/install.ps1", "exit 0\n", false},
+      {"my-plugin/lib/helper.txt", std::string(5000, 'h')},
+      {"my-plugin/empty.txt", ""},
+    });
+  }
+
+  /**
+   * @brief Serve a feed and its zip file.
+   *
+   * @param feed Address of the feed.
+   * @param zip Contents of the zip file, served at `https://example.com/my-plugin.zip`.
+   * @param version Version in the feed.
+   */
+  void serve_feed(const std::string &feed, const std::string &zip, const std::string &version = "1.0.0") {
+    serve(feed, json {{"version", version}, {"url", "https://example.com/my-plugin.zip"}, {"sha256", sha256_of(zip)}}.dump());
+    serve("https://example.com/my-plugin.zip", zip);
+  }
+
+  /**
+   * @brief Import from a URL.
+   *
+   * @param url Address to import.
+   * @return Outcome of the import.
+   */
+  plugins::result_e import(const std::string &url) {
+    error.clear();
+    return plugins::import_url(url, id, updated, error);
+  }
+
+  std::map<std::string, std::pair<std::string, std::string>> served;  ///< Responses and where they come from, by URL.
+  std::vector<std::string> fetched;  ///< URLs requested.
+  std::vector<std::size_t> limits;  ///< Size limit of each request.
+  std::string id;  ///< Imported plugin's ID.
+  bool updated = false;  ///< Whether the import replaced a plugin.
+  std::string error;  ///< Why the import was rejected.
+};
+
+TEST_F(PluginsUrlImportTest, FeedUrls) {
+  EXPECT_EQ(plugins::feed_url("https://github.com/me/my-plugin", error), "https://github.com/me/my-plugin/releases/latest/download/latest.json");
+  EXPECT_EQ(plugins::feed_url("https://GitHub.com/me/my-plugin.git/", error), "https://github.com/me/my-plugin/releases/latest/download/latest.json");
+  EXPECT_EQ(plugins::feed_url("https://github.com/me/my-plugin/raw/main/latest.json", error), "https://github.com/me/my-plugin/raw/main/latest.json");
+  EXPECT_EQ(plugins::feed_url("https://github.com/me/my-plugin?tab=readme", error), "https://github.com/me/my-plugin?tab=readme");
+  EXPECT_EQ(plugins::feed_url("https://example.com/plugins/latest.json", error), "https://example.com/plugins/latest.json");
+
+  for (const auto *url : {"http://example.com/latest.json", "ftp://example.com/latest.json", "example.com/latest.json", "not a url", ""}) {
+    error.clear();
+    EXPECT_EQ(plugins::feed_url(url, error), std::nullopt) << url;
+    EXPECT_TRUE(error.contains("isn't an https:// address")) << error;
+  }
+}
+
+TEST_F(PluginsUrlImportTest, ImportsTheLatestReleaseOfAGitHubRepository) {
+  const auto zip = plugin_zip("1.0.0");
+  // GitHub redirects the latest release to the tagged one, which the zip's relative address is resolved against
+  serve("https://github.com/me/my-plugin/releases/latest/download/latest.json", json {{"version", "1.0.0"}, {"url", "my-plugin.zip"}, {"sha256", boost::to_upper_copy(sha256_of(zip))}}.dump(), "https://github.com/me/my-plugin/releases/download/v1.0.0/latest.json");
+  serve("https://github.com/me/my-plugin/releases/download/v1.0.0/my-plugin.zip", zip);
+
+  ASSERT_EQ(import("https://github.com/me/my-plugin"), plugins::result_e::ok) << error;
+  EXPECT_EQ(id, "my-plugin");
+  EXPECT_FALSE(updated);
+  EXPECT_EQ(limits, (std::vector<std::size_t> {64 * 1024, 20 * 1024 * 1024}));
+
+  const auto target = custom_dir / "my-plugin";
+  EXPECT_EQ(read_text(target / "install.ps1"), "exit 0\n");
+  EXPECT_EQ(read_text(target / "lib" / "helper.txt"), std::string(5000, 'h'));
+  EXPECT_EQ(read_text(target / "empty.txt"), "");
+
+  const auto feed = "https://github.com/me/my-plugin/releases/latest/download/latest.json"s;
+  const auto plugin = find_plugin(plugins::list(), "my-plugin");
+  EXPECT_EQ(plugin["version"], "1.0.0");
+  EXPECT_EQ(plugin["installed"], false);
+  EXPECT_EQ(plugin["origin"], feed);
+  EXPECT_EQ(plugins::load_state(state_file).at("my-plugin").origin, feed);
+
+  // Nothing is left behind where the download was extracted
+  for (const auto &entry : fs::directory_iterator(data_dir)) {
+    EXPECT_FALSE(entry.path().filename().string().starts_with('.')) << entry.path();
+  }
+}
+
+TEST_F(PluginsUrlImportTest, ImportingAgainUpdatesThePluginAndKeepsItsState) {
+  const auto feed = "https://example.com/latest.json"s;
+  serve_feed(feed, plugin_zip("1.0.0"));
+  ASSERT_EQ(import(feed), plugins::result_e::ok) << error;
+  ASSERT_EQ(plugins::start_task("my-plugin", plugins::action_e::install, error, true), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  // A zip with plugin.json at its top level
+  const json manifest = {{"id", "my-plugin"}, {"name", "Mine 2"}, {"version", "2.0.0"}, {"scripts", {{"install", "install.ps1"}}}};
+  serve_feed(feed, make_zip({{"plugin.json", manifest.dump()}, {"install.ps1", "exit 0\n"}}), "2.0.0");
+  ASSERT_EQ(import(feed), plugins::result_e::ok) << error;
+  EXPECT_TRUE(updated);
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin" / "lib"));
+
+  const auto plugin = find_plugin(plugins::list(), "my-plugin");
+  EXPECT_EQ(plugin["name"], "Mine 2");
+  EXPECT_EQ(plugin["active"], true);
+  EXPECT_EQ(plugin["needs_reinstall"], true);
+  EXPECT_EQ(plugin["origin"], feed);
+}
+
+TEST_F(PluginsUrlImportTest, AFailedDownloadChangesNothing) {
+  EXPECT_EQ(import("https://example.com/latest.json"), plugins::result_e::unavailable);
+  EXPECT_TRUE(error.contains("the server answered 404")) << error;
+
+  serve("https://example.com/latest.json", json {{"version", "1.0.0"}, {"url", "my-plugin.zip"}, {"sha256", std::string(64, 'a')}}.dump());
+  EXPECT_EQ(import("https://example.com/latest.json"), plugins::result_e::unavailable);
+  EXPECT_EQ(fetched.back(), "https://example.com/my-plugin.zip");
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin"));
+
+  EXPECT_EQ(import("http://example.com/latest.json"), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("isn't an https:// address")) << error;
+}
+
+TEST_F(PluginsUrlImportTest, RejectsFeedsWithoutAVersionZipAndChecksum) {
+  const auto feed = "https://example.com/latest.json"s;
+  const auto sha = std::string(64, 'a');
+  const auto expect_rejected = [&](const std::string &body, const std::string &message) {
+    serve(feed, body);
+    EXPECT_EQ(import(feed), plugins::result_e::invalid) << body;
+    EXPECT_TRUE(error.contains(message)) << body << ": " << error;
+  };
+  expect_rejected("not json", "isn't a plugin update feed");
+  expect_rejected(json {{"version", "1.0.0"}, {"url", "a.zip"}}.dump(), "isn't a plugin update feed");
+  expect_rejected(json {{"version", 1}, {"url", "a.zip"}, {"sha256", sha}}.dump(), "isn't a plugin update feed");
+  expect_rejected(json {{"version", ""}, {"url", "a.zip"}, {"sha256", sha}}.dump(), "needs a \"version\"");
+  expect_rejected(json {{"version", "1.0.0"}, {"url", "a.zip"}, {"sha256", "abc"}}.dump(), "64 hex digits");
+  expect_rejected(json {{"version", "1.0.0"}, {"url", "a.zip"}, {"sha256", std::string(64, 'g')}}.dump(), "64 hex digits");
+  expect_rejected(json {{"version", "1.0.0"}, {"url", "http://example.com/a.zip"}, {"sha256", sha}}.dump(), "isn't an https:// address");
+  EXPECT_EQ(fetched.size(), 7);  // never the zip
+}
+
+TEST_F(PluginsUrlImportTest, RejectsAZipThatDoesntMatchItsFeed) {
+  const auto feed = "https://example.com/latest.json"s;
+  const auto zip = plugin_zip("1.0.0");
+  serve(feed, json {{"version", "1.0.0"}, {"url", "https://example.com/my-plugin.zip"}, {"sha256", sha256_of(zip + "x")}}.dump());
+  serve("https://example.com/my-plugin.zip", zip);
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("doesn't match the SHA-256")) << error;
+
+  serve_feed(feed, zip, "1.1.0");
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("the feed says version 1.1.0, but the plugin's plugin.json says version 1.0.0")) << error;
+
+  serve_feed(feed, make_zip({{"plugin.json", R"({"id": "my-plugin"})"}}), "1.1.0");
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("says version nothing")) << error;
+
+  serve_feed(feed, make_zip({{"readme.txt", "hi"}}));
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no plugin.json at its top level")) << error;
+
+  serve_feed(feed, make_zip({{"a/plugin.json", "{}"}, {"b/plugin.json", "{}"}}));
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no plugin.json at its top level")) << error;
+
+  serve_feed(feed, make_zip({{"a/readme.txt", "hi"}}));
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no plugin.json at its top level")) << error;
+
+  serve_feed(feed, make_zip({}));
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no plugin.json at its top level")) << error;
+
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin"));
+  for (const auto &entry : fs::directory_iterator(data_dir)) {
+    EXPECT_FALSE(entry.path().filename().string().starts_with('.')) << entry.path();
+  }
+}
+
+/**
+ * @brief A zip file `import_url()` must refuse, and why.
+ */
+struct bad_zip_t {
+  const char *name;  ///< Stable parameter name.
+  std::function<std::string()> zip;  ///< Builds the zip file.
+  const char *expected_error;  ///< Text expected in the error.
+};
+
+/**
+ * @brief Parameterized fixture for zip files that can't be imported.
+ */
+class PluginsBadZipTest: public PluginsUrlImportTest, public testing::WithParamInterface<bad_zip_t> {};
+
+TEST_P(PluginsBadZipTest, IsRefused) {
+  const auto feed = "https://example.com/latest.json"s;
+  serve_feed(feed, GetParam().zip());
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains(GetParam().expected_error)) << error;
+  EXPECT_TRUE(error.starts_with("https://example.com/my-plugin.zip: ")) << error;
+  EXPECT_FALSE(fs::exists(custom_dir / "my-plugin"));
+  EXPECT_FALSE(fs::exists(root / "evil.txt"));
+  for (const auto &entry : fs::directory_iterator(data_dir)) {
+    EXPECT_FALSE(entry.path().filename().string().starts_with('.')) << entry.path();
+  }
+}
+
+/**
+ * @brief Build a zip whose entries are valid apart from one, which follows a plugin.json.
+ *
+ * @param entry The entry.
+ * @return Contents of the zip file.
+ */
+std::string zip_with(const zip_entry_t &entry) {
+  return make_zip({{"plugin.json", R"({"id": "my-plugin", "version": "1.0.0"})"}, entry});
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  BadZips,
+  PluginsBadZipTest,
+  testing::Values(
+    bad_zip_t {"NotAZip", [] {
+                 return std::string("this is not a zip file at all, just some text");
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"TooShort", [] {
+                 return std::string("PK");
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"Truncated", [] {
+                 const auto zip = zip_with({"a.txt", "aaaa"});
+                 return zip.substr(0, 40) + zip.substr(zip.size() - 29);
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"MoreEntriesThanItHolds", [] {
+                 return make_zip({{"plugin.json", "{}"}}, 2);
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"Zip64", [] {
+                 return make_zip({{"plugin.json", "{}"}}, 0xFFFF);
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"TooManyFiles", [] {
+                 return make_zip({{"plugin.json", "{}"}}, 10001);
+               },
+               "the limit is 10000 files"},
+    bad_zip_t {"TooManyBytes", [] {
+                 return make_zip({{"plugin.json", "{}"}, {"big.bin", "x", false, 20, 0, 0, std::nullopt, 300u * 1024 * 1024}});
+               },
+               "the limit is 256 MB"},
+    bad_zip_t {"ParentFolder", [] {
+                 return zip_with({"../evil.txt", "evil"});
+               },
+               "would be extracted outside the plugin's folder"},
+    bad_zip_t {"ParentFolderWithBackslashes", [] {
+                 return zip_with({"lib\\..\\..\\evil.txt", "evil"});
+               },
+               "would be extracted outside the plugin's folder"},
+    bad_zip_t {"AbsolutePath", [] {
+                 return zip_with({"/evil.txt", "evil"});
+               },
+               "would be extracted outside the plugin's folder"},
+    bad_zip_t {"Drive", [] {
+                 return zip_with({"C:/evil.txt", "evil"});
+               },
+               "would be extracted outside the plugin's folder"},
+    bad_zip_t {"Stream", [] {
+                 return zip_with({"plugin.json:evil", "evil"});
+               },
+               "would be extracted outside the plugin's folder"},
+    bad_zip_t {"Link", [] {
+                 return zip_with({"link", "/etc/passwd", false, 3 << 8, 0120777u << 16});
+               },
+               "is a link, which can't be imported"},
+    bad_zip_t {"Encrypted", [] {
+                 return zip_with({"secret.txt", "secret", true, 20, 0, 1});
+               },
+               "is encrypted"},
+    bad_zip_t {"OtherCompression", [] {
+                 return zip_with({"a.txt", "aaaa", false, 20, 0, 0, std::uint16_t {12}});
+               },
+               "uses a compression method other than deflate"},
+    bad_zip_t {"BadCrc", [] {
+                 return zip_with({"a.txt", "aaaa", true, 20, 0, 0, std::nullopt, std::nullopt, 1234u});
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"StoredSizeMismatch", [] {
+                 return zip_with({"a.txt", "aaaa", false, 20, 0, 0, std::nullopt, 3u});
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"LargerThanItSays", [] {
+                 return zip_with({"a.txt", std::string(1000, 'a'), true, 20, 0, 0, std::nullopt, 10u});
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"NotDeflated", [] {
+                 return zip_with({"a.txt", "aaaa", false, 20, 0, 0, std::uint16_t {Z_DEFLATED}});
+               },
+               "isn't a zip file, or it's damaged"},
+    bad_zip_t {"FileWhereAFolderIs", [] {
+                 return make_zip({{"plugin.json", R"({"id": "my-plugin", "version": "1.0.0"})"}, {"lib", "file"}, {"lib/a.txt", "a"}});
+               },
+               "couldn't extract 'lib/a.txt'"},
+    bad_zip_t {"FolderWhereAFileIs", [] {
+                 return make_zip({{"plugin.json", R"({"id": "my-plugin", "version": "1.0.0"})"}, {"lib", "file"}, {"lib/", ""}});
+               },
+               "couldn't extract 'lib/'"}
+  ),
+  [](const testing::TestParamInfo<bad_zip_t> &info) {
+    return std::string {info.param.name};
+  }
+);
+
+TEST_F(PluginsUrlImportTest, BadOffsetsInTheZipAreRefused) {
+  const auto feed = "https://example.com/latest.json"s;
+  auto zip = zip_with({"a.txt", "aaaa"});
+  const auto directory = zip.rfind("PK\x01\x02");
+  ASSERT_NE(directory, std::string::npos);
+
+  // The last entry's local header is somewhere past the end of the file
+  auto bad_local = zip;
+  bad_local[directory + 42 + 3] = '\x7F';
+  serve_feed(feed, bad_local);
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("damaged")) << error;
+
+  // The last entry's data runs past the end of the file
+  auto bad_size = zip;
+  bad_size[directory + 20 + 3] = '\x7F';
+  serve_feed(feed, bad_size);
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("damaged")) << error;
+
+  // The last entry's name runs past the central directory
+  auto bad_name = zip;
+  bad_name[directory + 28 + 1] = '\x7F';
+  serve_feed(feed, bad_name);
+  EXPECT_EQ(import(feed), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("damaged")) << error;
+}
+
+#ifdef _WIN32
+TEST_F(PluginsUrlImportTest, ImportsAZipMadeWithCompressArchive) {
+  // What the plugin guide tells authors to run, in Windows PowerShell 5.1
+  const auto source = root / "dev" / "my-plugin";
+  write_text(source / "plugin.json", R"({"id": "my-plugin", "version": "1.0.0", "scripts": {"install": "install.ps1"}})");
+  write_text(source / "install.ps1", "exit 0\n");
+  write_text(source / "lib" / "deep" / "helper.txt", std::string(3000, 'h'));
+  const auto zip_file = root / "dev" / "my-plugin.zip";
+  const auto command = std::format(R"(powershell.exe -NoProfile -NonInteractive -Command "Compress-Archive -Path '{}\*' -DestinationPath '{}'")", source.string(), zip_file.string());
+  ASSERT_EQ(std::system(command.c_str()), 0) << command;
+
+  serve_feed("https://example.com/latest.json", read_text(zip_file));
+  ASSERT_EQ(import("https://example.com/latest.json"), plugins::result_e::ok) << error;
+  EXPECT_EQ(read_text(custom_dir / "my-plugin" / "install.ps1"), "exit 0\n");
+  EXPECT_EQ(read_text(custom_dir / "my-plugin" / "lib" / "deep" / "helper.txt"), std::string(3000, 'h'));
+}
+#endif
+
+TEST_F(PluginsUrlImportTest, TheRealFetcherReportsWhatWentWrong) {
+  plugins::reset_fetcher_for_testing();
+  // Nothing listens on port 1
+  EXPECT_EQ(import("https://127.0.0.1:1/latest.json"), plugins::result_e::unavailable);
+  EXPECT_TRUE(error.contains("couldn't download https://127.0.0.1:1/latest.json")) << error;
+}
 
 TEST_F(PluginsTest, TheClientsOfferShowsTopLevelCommandsWithTheMenusOwn) {
   write_plugin(builtin_dir, "p", {

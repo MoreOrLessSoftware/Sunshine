@@ -19,6 +19,42 @@ you select *Reinstall*, which runs its install script again. So change the versi
 sets up changes. *Reinstall* is also there for any installed plugin. A custom plugin cannot reuse the ID of a bundled
 plugin.
 
+## Publishing a plugin
+Others can import a published plugin by entering a URL under *Import plugin* instead of a folder. Sunshine downloads
+the plugin's update feed, a `latest.json` file like this:
+
+```json
+{
+  "version": "1.0.0",
+  "url": "my-plugin-1.0.0.zip",
+  "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+}
+```
+
+| Field     | Description                                                                                         |
+|-----------|-----------------------------------------------------------------------------------------------------|
+| `version` | The plugin's version, which must match the `version` in the zip file's `plugin.json`.               |
+| `url`     | The zip file holding the plugin: an `https://` address, or a path relative to the feed's address.   |
+| `sha256`  | The zip file's SHA-256 checksum, as 64 hex digits. Sunshine refuses a zip file that doesn't match.  |
+
+The zip file holds `plugin.json` at its top level, or inside a single top-level folder. It can be up to 20 MB, and
+its entries must be stored or deflated, without encryption. Both files must be served over HTTPS.
+
+On GitHub, attach `latest.json` and the zip file to a release. Users can then enter the repository's address, such as
+`https://github.com/me/my-plugin`: Sunshine reads `latest.json` from the latest release, and a relative `url` points to
+that release's zip file. This builds both files from the plugin's folder:
+
+```powershell
+$version = (Get-Content .\my-plugin\plugin.json -Raw | ConvertFrom-Json).version
+$zip = "my-plugin-$version.zip"
+Compress-Archive -Path .\my-plugin\* -DestinationPath $zip -Force
+$sha256 = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+@{version = $version; url = $zip; sha256 = $sha256} | ConvertTo-Json | Set-Content latest.json
+```
+
+Sunshine remembers the address a plugin was imported from, and shows it on the plugin's page. Importing the same
+address again updates the plugin to its latest release.
+
 ## Manifest
 
 ```json

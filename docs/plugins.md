@@ -56,6 +56,12 @@ While *Virtual Display* runs for an application, Sunshine skips its *Device conf
 that stream, so the plugin alone sets up the displays. Applications that exclude the plugin use *Device configuration*
 as usual.
 
+## Custom plugins
+*Import plugin* on the **Plugins** page adds a plugin that doesn't come with Sunshine. Enter the full path of a folder
+on this PC that holds the plugin's `plugin.json`, or the `https://` address of the plugin's GitHub repository or update
+feed. Sunshine downloads the plugin's latest release, checks it against the checksum in the feed, and copies it into
+its plugins folder. The plugin's page shows where it was imported from; import it from there again to update it.
+
 ## Writing a plugin
 The [plugin guide](../src_assets/windows/assets/plugins/PLUGIN_GUIDE.md) explains how to build your own, step by step and for coding agents, and describes everything a plugin can do. Sunshine ships with it, under *Plugin guide* on the **Plugins** page.
 

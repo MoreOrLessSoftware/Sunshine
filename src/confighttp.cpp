@@ -2746,7 +2746,8 @@ namespace confighttp {
    *
    * Each plugin includes `installed_version`, the version whose install script last succeeded, and
    * `needs_reinstall`, which is `true` when that differs from `version`. Such a plugin doesn't run for streams
-   * until it's reinstalled with `/api/plugins/install`.
+   * until it's reinstalled with `/api/plugins/install`. A custom plugin's `origin` is the folder or update feed it was
+   * last imported from with `/api/plugins/import`, or empty.
    *
    * @api_examples{/api/plugins| GET| null}
    */
@@ -3242,13 +3243,21 @@ namespace confighttp {
   }
 
   /**
-   * @brief Copy a plugin's folder on this host into the custom plugins directory, adding or replacing the plugin.
-   * The body for the post request should be JSON serialized in the following format:
+   * @brief Copy a plugin's folder on this host, or download one from its update feed, into the custom plugins
+   * directory, adding or replacing the plugin.
+   * The body for the post request should be JSON serialized in one of the following formats:
    * @code{.json}
    * {
    *   "path": "C:\\Users\\me\\Documents\\SunshinePlugins\\my-plugin"
    * }
    * @endcode
+   * @code{.json}
+   * {
+   *   "url": "https://github.com/me/my-plugin"
+   * }
+   * @endcode
+   * A URL is an update feed, or a GitHub repository whose latest release has a `latest.json` feed; see
+   * `plugins::import_url()`.
    *
    * @api_examples{/api/plugins/import| POST| {"path":"C:\\Users\\me\\Documents\\SunshinePlugins\\my-plugin"}}
    */
@@ -3276,16 +3285,26 @@ namespace confighttp {
       bad_request(response, request, "Invalid plugin request");
       return;
     }
-    if (!body.is_object() || !body.contains("path") || !body["path"].is_string() || body["path"].get<std::string>().empty()) {
-      bad_request(response, request, "Plugin folder is required");
+    const auto non_empty_string = [&body](const char *key) {
+      return body.is_object() && body.contains(key) && body[key].is_string() && !body[key].get<std::string>().empty();
+    };
+    const bool from_url = non_empty_string("url");
+    if (!from_url && !non_empty_string("path")) {
+      bad_request(response, request, "Plugin folder or URL is required");
       return;
     }
 
-    const auto path = body["path"].get<std::string>();
     std::string id;
     bool updated = false;
     std::string error;
-    if (const auto result = plugins::import_folder(fs::path {std::u8string {path.begin(), path.end()}}, id, updated, error); result != plugins::result_e::ok) {
+    plugins::result_e result;
+    if (from_url) {
+      result = plugins::import_url(body["url"].get<std::string>(), id, updated, error);
+    } else {
+      const auto path = body["path"].get<std::string>();
+      result = plugins::import_folder(fs::path {std::u8string {path.begin(), path.end()}}, id, updated, error);
+    }
+    if (result != plugins::result_e::ok) {
       send_plugin_error(response, request, result, error);
       return;
     }

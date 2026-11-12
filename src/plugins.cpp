@@ -21,8 +21,10 @@
 #include <boost/filesystem.hpp>
 #include <boost/process/v1.hpp>
 #include <curl/curl.h>
+#include <zlib.h>
 
 // local includes
+#include "crypto.h"
 #include "logging.h"
 #include "plugins.h"
 
@@ -69,6 +71,7 @@ namespace plugins {
     };
 
     int run_script(const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const fs::path &working_dir, const fs::path &log_file, std::stop_token stop);
+    bool fetch_https(const std::string &url, std::size_t max_bytes, std::chrono::seconds timeout, std::string &body, std::string &final_url, std::string &error);
 
     /**
      * @brief Check whether install scripts can run yet: on Windows, whether a user is signed in when one is needed.
@@ -104,6 +107,7 @@ namespace plugins {
       std::function<bool()> session_ready = default_session_ready;  ///< Whether install scripts can run yet.
       std::chrono::milliseconds session_poll = DEFAULT_SESSION_POLL;  ///< Time between checks of `session_ready`.
       std::jthread reinstaller;  ///< Thread started by `reinstall_updated_builtins()`.
+      fetcher_t fetcher = fetch_https;  ///< Downloads plugins imported from a URL.
     };
 
     /**
@@ -1389,6 +1393,9 @@ namespace plugins {
         if (plugin.installed && entry.contains("installed_version") && entry["installed_version"].is_string()) {
           plugin.installed_version = entry["installed_version"].get<std::string>();
         }
+        if (entry.contains("origin") && entry["origin"].is_string()) {
+          plugin.origin = entry["origin"].get<std::string>();
+        }
         state[id] = std::move(plugin);
       }
     } catch (const std::exception &e) {
@@ -1405,7 +1412,8 @@ namespace plugins {
         {"installed", plugin.installed},
         {"active", plugin.active},
         {"options", plugin.options},
-        {"installed_version", plugin.installed_version}
+        {"installed_version", plugin.installed_version},
+        {"origin", plugin.origin}
       };
     }
 
@@ -1608,73 +1616,588 @@ namespace plugins {
       fs::remove_all(backup, ec);
       return true;
     }
+
+    /**
+     * @brief Copy a plugin's folder into the custom plugins directory and record where it came from.
+     *
+     * @param source Absolute path of the folder holding the plugin's `plugin.json`.
+     * @param origin Folder or feed to record as the plugin's origin.
+     * @param expected_version Version the manifest must have, or empty to accept any.
+     * @param id Receives the plugin's ID.
+     * @param updated Receives whether a plugin with that ID was replaced.
+     * @param error Receives the reason when the import is rejected.
+     * @return Outcome of the request.
+     */
+    result_e import_from(const fs::path &source, const std::string &origin, const std::string &expected_version, std::string &id, bool &updated, std::string &error) {
+      auto &reg = registry();
+      std::scoped_lock lock {reg.mutex};
+
+      std::error_code ec;
+      json node;
+      try {
+        std::ifstream in {source / MANIFEST_FILE};
+        if (!in.is_open()) {
+          error = std::format("the folder has no {}", MANIFEST_FILE);
+          return result_e::invalid;
+        }
+        node = json::parse(in);
+      } catch (const std::exception &e) {
+        error = std::format("couldn't read {}: {}", MANIFEST_FILE, e.what());
+        return result_e::invalid;
+      }
+
+      auto manifest = parse_manifest(node, source, false, error);
+      if (!manifest) {
+        return result_e::invalid;
+      }
+      if (!expected_version.empty() && manifest->version != expected_version) {
+        error = std::format("the feed says version {}, but the plugin's {} says version {}", expected_version, MANIFEST_FILE, manifest->version.empty() ? "nothing"s : manifest->version);
+        return result_e::invalid;
+      }
+
+      const auto *existing = find_manifest(reg, manifest->id);
+      if (existing && existing->builtin) {
+        error = std::format("a bundled plugin already uses the ID '{}'", manifest->id);
+        return result_e::invalid;
+      }
+      if (reg.task_running) {
+        error = "another plugin operation is still running";
+        return result_e::busy;
+      }
+
+      const auto target = existing ? existing->dir : reg.paths.custom_dir / manifest->id;
+      if (fs::equivalent(source, target, ec)) {
+        error = "that folder is already where Sunshine loads the plugin from";
+        return result_e::invalid;
+      }
+      if (!existing && std::ranges::any_of(reg.manifests, [&target](const manifest_t &other) {
+            std::error_code same;
+            return fs::equivalent(other.dir, target, same);
+          })) {
+        error = std::format("another plugin is in the folder '{}'", manifest->id);
+        return result_e::invalid;
+      }
+
+      const auto staged = reg.paths.data_dir / (".import-" + manifest->id);
+      const auto backup = reg.paths.data_dir / (".replaced-" + manifest->id);
+      fs::remove_all(staged, ec);
+      fs::remove_all(backup, ec);
+      if (!copy_plugin_folder(source, staged, error) || !swap_plugin_folder(staged, target, backup, error)) {
+        fs::remove_all(staged, ec);
+        return result_e::invalid;
+      }
+
+      id = manifest->id;
+      updated = existing != nullptr;
+      reg.manifests = discover(reg.paths.builtin_dir, reg.paths.custom_dir);
+      if (auto &state = reg.state[id]; state.origin != origin) {
+        state.origin = origin;
+        save_state(reg.paths.state_file, reg.state);
+      }
+      BOOST_LOG(info) << "Plugin ["sv << id << ' ' << manifest->version << "] imported from ["sv << origin << ']';
+      return result_e::ok;
+    }
+
+    /**
+     * @brief Largest update feed `import_url()` downloads.
+     */
+    constexpr std::size_t MAX_FEED_BYTES = 64 * 1024;
+
+    /**
+     * @brief Largest zip file `import_url()` downloads.
+     */
+    constexpr std::size_t MAX_PACKAGE_BYTES = 20 * 1024 * 1024;
+
+    /**
+     * @brief Longest a single download for `import_url()` may take.
+     */
+    constexpr std::chrono::seconds DOWNLOAD_TIMEOUT = 60s;
+
+    /**
+     * @brief Owns a parsed URL.
+     */
+    using curl_url_t = std::unique_ptr<CURLU, decltype(&curl_url_cleanup)>;
+
+    /**
+     * @brief Parse a URL, or resolve one relative to another.
+     *
+     * @param url Absolute URL, or one relative to `base`.
+     * @param base Absolute URL `url` is relative to, or empty.
+     * @return Parsed URL, or an empty pointer when it isn't valid.
+     */
+    curl_url_t parse_url(const std::string &url, const std::string &base = {}) {
+      curl_url_t parsed {curl_url(), &curl_url_cleanup};
+      if (!parsed || (!base.empty() && curl_url_set(parsed.get(), CURLUPART_URL, base.c_str(), 0) != CURLUE_OK) ||
+          curl_url_set(parsed.get(), CURLUPART_URL, url.c_str(), 0) != CURLUE_OK) {
+        parsed.reset();
+      }
+      return parsed;
+    }
+
+    /**
+     * @brief Read one part of a parsed URL.
+     *
+     * @param url Parsed URL.
+     * @param part Part to read.
+     * @return The part, or an empty string when the URL doesn't have it.
+     */
+    std::string url_part(CURLU *url, CURLUPart part) {
+      char *value = nullptr;
+      if (curl_url_get(url, part, &value, 0) != CURLUE_OK || !value) {
+        return {};
+      }
+      std::string result {value};
+      curl_free(value);
+      return result;
+    }
+
+    /**
+     * @brief Check whether a parsed URL uses HTTPS.
+     *
+     * @param url Parsed URL.
+     * @return `true` for an `https:` URL.
+     */
+    bool is_https(CURLU *url) {
+      return boost::iequals(url_part(url, CURLUPART_SCHEME), "https");
+    }
+
+    /**
+     * @brief Download a file over HTTPS with curl, following redirects to other HTTPS addresses only.
+     *
+     * @param url Address to download.
+     * @param max_bytes Largest response accepted.
+     * @param timeout Longest the whole download may take.
+     * @param body Receives the response.
+     * @param final_url Receives the address the response came from.
+     * @param error Receives the reason when the download fails.
+     * @return `true` when the server answered 200 OK with no more than `max_bytes`.
+     */
+    bool fetch_https(const std::string &url, std::size_t max_bytes, std::chrono::seconds timeout, std::string &body, std::string &final_url, std::string &error) {
+      std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl {curl_easy_init(), &curl_easy_cleanup};
+      if (!curl) {
+        error = "couldn't start the download";
+        return false;
+      }
+
+      /**
+       * @brief Where the write callback puts the response.
+       */
+      struct sink_t {
+        std::string *body;  ///< Response received so far.
+        std::size_t max_bytes;  ///< Largest response accepted.
+        bool too_large = false;  ///< Whether the response went over `max_bytes`.
+      } sink {&body, max_bytes};
+      body.clear();
+
+      const auto write = +[](char *data, std::size_t size, std::size_t count, void *user) -> std::size_t {
+        auto *s = static_cast<sink_t *>(user);
+        if (s->body->size() + size * count > s->max_bytes) {
+          s->too_large = true;
+          return 0;  // aborts the transfer
+        }
+        s->body->append(data, size * count);
+        return size * count;
+      };
+      curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+#if LIBCURL_VERSION_NUM >= 0x075500
+      curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "https");
+      curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#else
+      curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS, static_cast<long>(CURLPROTO_HTTPS));
+      curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS, static_cast<long>(CURLPROTO_HTTPS));
+#endif
+      curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
+      curl_easy_setopt(curl.get(), CURLOPT_MAXREDIRS, 10L);
+      curl_easy_setopt(curl.get(), CURLOPT_NOSIGNAL, 1L);
+      curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 15L);
+      curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, static_cast<long>(timeout.count()));
+      curl_easy_setopt(curl.get(), CURLOPT_USERAGENT, "Sunshine");
+#ifdef _WIN32
+      curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, static_cast<long>(CURLSSLOPT_NATIVE_CA));  // trust what Windows trusts
+#endif
+      curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, write);
+      curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &sink);
+
+      const auto code = curl_easy_perform(curl.get());
+      if (sink.too_large) {
+        error = std::format("{} is larger than {} KB", url, max_bytes / 1024);
+        return false;
+      }
+      if (code == CURLE_UNSUPPORTED_PROTOCOL) {
+        error = std::format("couldn't download {}: it redirects to an address that isn't https://", url);
+        return false;
+      }
+      if (code != CURLE_OK) {
+        error = std::format("couldn't download {}: {}", url, curl_easy_strerror(code));
+        return false;
+      }
+      long status = 0;
+      curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &status);
+      if (status != 200) {
+        error = std::format("couldn't download {}: the server answered {}", url, status);
+        return false;
+      }
+      if (char *effective = nullptr; curl_easy_getinfo(curl.get(), CURLINFO_EFFECTIVE_URL, &effective) == CURLE_OK && effective) {
+        final_url = effective;
+      } else {
+        final_url = url;
+      }
+      return true;
+    }
+
+    /**
+     * @brief Read a little-endian 16-bit number.
+     *
+     * @param data Bytes to read from.
+     * @param at Offset of the number, which the caller has checked is in range.
+     * @return The number.
+     */
+    std::uint32_t read_le16(std::string_view data, std::size_t at) {
+      return static_cast<std::uint8_t>(data[at]) | (static_cast<std::uint32_t>(static_cast<std::uint8_t>(data[at + 1])) << 8);
+    }
+
+    /**
+     * @brief Read a little-endian 32-bit number.
+     *
+     * @param data Bytes to read from.
+     * @param at Offset of the number, which the caller has checked is in range.
+     * @return The number.
+     */
+    std::uint32_t read_le32(std::string_view data, std::size_t at) {
+      return read_le16(data, at) | (read_le16(data, at + 2) << 16);
+    }
+
+    /**
+     * @brief Turn the name of a zip entry into a path that stays inside the folder it's extracted to.
+     *
+     * @param name Name stored in the zip, with `/` or `\` between folders.
+     * @return Relative path, empty for the top-level folder, or `std::nullopt` when the name leaves the folder or
+     * can't be a file name, such as one with `..` or a drive.
+     */
+    std::optional<fs::path> zip_entry_path(std::string_view name) {
+      if (name.starts_with('/') || name.starts_with('\\')) {
+        return std::nullopt;
+      }
+      fs::path path;
+      std::vector<std::string> parts;
+      boost::split(parts, name, boost::is_any_of("/\\"));
+      for (const auto &part : parts) {
+        if (part == ".." || part.contains(':')) {
+          return std::nullopt;
+        }
+        if (!part.empty() && part != ".") {
+          path /= fs::path {std::u8string {part.begin(), part.end()}};
+        }
+      }
+      return path;
+    }
+
+    /**
+     * @brief Decompress a deflated zip entry.
+     *
+     * @param compressed Entry data.
+     * @param size Size the zip says the entry has.
+     * @param out Receives the data.
+     * @return `false` when the data is damaged or doesn't have that size.
+     */
+    bool inflate_entry(std::string_view compressed, std::size_t size, std::string &out) {
+      // One byte more than expected, so a larger entry is caught rather than cut off
+      out.assign(size + 1, '\0');
+      z_stream stream {};
+      if (inflateInit2(&stream, -MAX_WBITS) != Z_OK) {
+        return false;
+      }
+      stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(compressed.data()));
+      stream.avail_in = static_cast<uInt>(compressed.size());
+      stream.next_out = reinterpret_cast<Bytef *>(out.data());
+      stream.avail_out = static_cast<uInt>(out.size());
+      const auto result = inflate(&stream, Z_FINISH);
+      const bool ok = result == Z_STREAM_END && stream.total_out == size;
+      inflateEnd(&stream);
+      out.resize(size);
+      return ok;
+    }
+
+    /**
+     * @brief Extract a zip file held in memory.
+     *
+     * Only stored and deflated entries are supported, without encryption or ZIP64. Every entry is checked against its
+     * CRC, and the zip may hold no more files or bytes than a folder import.
+     *
+     * @param zip Contents of the zip file.
+     * @param dest Folder to extract into.
+     * @param error Receives the reason when the zip can't be extracted.
+     * @return `false` when the zip is damaged, too large or holds an entry that can't be extracted.
+     */
+    bool extract_zip(std::string_view zip, const fs::path &dest, std::string &error) {
+      constexpr std::uint32_t end_signature = 0x06054b50;
+      constexpr std::uint32_t central_signature = 0x02014b50;
+      constexpr std::uint32_t local_signature = 0x04034b50;
+      constexpr std::size_t end_size = 22;
+      constexpr std::size_t central_size = 46;
+      constexpr std::size_t local_size = 30;
+      const auto damaged = [&error]() {
+        error = "the download isn't a zip file, or it's damaged";
+        return false;
+      };
+
+      // The end of central directory record is followed by a comment of up to 64 KB
+      if (zip.size() < end_size) {
+        return damaged();
+      }
+      std::size_t end = std::string_view::npos;
+      const auto lowest = zip.size() > end_size + 0xFFFF ? zip.size() - end_size - 0xFFFF : 0;
+      for (auto at = zip.size() - end_size; end == std::string_view::npos; --at) {
+        if (read_le32(zip, at) == end_signature) {
+          end = at;
+        }
+        if (at == lowest) {
+          break;
+        }
+      }
+      if (end == std::string_view::npos) {
+        return damaged();
+      }
+
+      const std::size_t count = read_le16(zip, end + 10);
+      const std::size_t directory_size = read_le32(zip, end + 12);
+      const std::size_t directory = read_le32(zip, end + 16);
+      if (count == 0xFFFF || directory + directory_size > end) {
+        return damaged();
+      }
+      if (count > MAX_IMPORT_FILES) {
+        error = std::format("the zip file is too large to import: the limit is {} files", MAX_IMPORT_FILES);
+        return false;
+      }
+
+      std::error_code ec;
+      std::uintmax_t total = 0;
+      std::size_t at = directory;
+      for (std::size_t i = 0; i < count; ++i) {
+        if (at + central_size > end || read_le32(zip, at) != central_signature) {
+          return damaged();
+        }
+        const auto made_by = read_le16(zip, at + 4);
+        const auto flags = read_le16(zip, at + 8);
+        const auto method = read_le16(zip, at + 10);
+        const auto crc = read_le32(zip, at + 16);
+        const std::size_t compressed_size = read_le32(zip, at + 20);
+        const std::size_t size = read_le32(zip, at + 24);
+        const std::size_t name_length = read_le16(zip, at + 28);
+        const auto attributes = read_le32(zip, at + 38);
+        const std::size_t local = read_le32(zip, at + 42);
+        if (at + central_size + name_length > end) {
+          return damaged();
+        }
+        const auto name = zip.substr(at + central_size, name_length);
+        at += central_size + name_length + read_le16(zip, at + 30) + read_le16(zip, at + 32);
+
+        const auto relative = zip_entry_path(name);
+        if (!relative) {
+          error = std::format("the zip file holds '{}', which would be extracted outside the plugin's folder", name);
+          return false;
+        }
+        if (flags & 1) {
+          error = std::format("'{}' in the zip file is encrypted", name);
+          return false;
+        }
+        constexpr std::uint32_t unix_host = 3;
+        constexpr std::uint32_t type_mask = 0170000;
+        constexpr std::uint32_t link_type = 0120000;
+        if ((made_by >> 8) == unix_host && ((attributes >> 16) & type_mask) == link_type) {
+          error = std::format("'{}' in the zip file is a link, which can't be imported", name);
+          return false;
+        }
+        if (name.ends_with('/') || name.ends_with('\\')) {
+          fs::create_directories(dest / *relative, ec);
+          if (ec) {
+            error = std::format("couldn't extract '{}': {}", name, ec.message());
+            return false;
+          }
+          continue;
+        }
+
+        total += size;
+        if (total > MAX_IMPORT_BYTES) {
+          error = std::format("the zip file is too large to import: the limit is {} MB", MAX_IMPORT_BYTES / (1024 * 1024));
+          return false;
+        }
+        if (method != 0 && method != Z_DEFLATED) {
+          error = std::format("'{}' in the zip file uses a compression method other than deflate", name);
+          return false;
+        }
+        if (local + local_size > zip.size() || read_le32(zip, local) != local_signature) {
+          return damaged();
+        }
+        const auto data = local + local_size + read_le16(zip, local + 26) + read_le16(zip, local + 28);
+        if (data + compressed_size > zip.size()) {
+          return damaged();
+        }
+        std::string contents;
+        if (method == 0) {
+          if (compressed_size != size) {
+            return damaged();
+          }
+          contents = zip.substr(data, size);
+        } else if (!inflate_entry(zip.substr(data, compressed_size), size, contents)) {
+          return damaged();
+        }
+        if (crc32(0, reinterpret_cast<const Bytef *>(contents.data()), static_cast<uInt>(contents.size())) != crc) {
+          return damaged();
+        }
+
+        const auto path = dest / *relative;
+        fs::create_directories(path.parent_path(), ec);
+        std::ofstream out {path, std::ios::binary | std::ios::trunc};
+        out.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+        out.close();
+        if (ec || !out) {
+          error = std::format("couldn't extract '{}'", name);
+          return false;
+        }
+      }
+      return true;
+    }
+
+    /**
+     * @brief Find the folder holding `plugin.json` in an extracted zip file.
+     *
+     * @param root Folder the zip was extracted into.
+     * @return `root`, or its only entry when that is a folder holding `plugin.json`, or `std::nullopt`.
+     */
+    std::optional<fs::path> find_plugin_root(const fs::path &root) {
+      std::error_code ec;
+      if (fs::is_regular_file(root / MANIFEST_FILE, ec)) {
+        return root;
+      }
+      fs::directory_iterator it {root, ec};
+      if (ec || it == fs::directory_iterator {}) {
+        return std::nullopt;
+      }
+      const auto only = it->path();
+      if (it.increment(ec); ec || it != fs::directory_iterator {} || !fs::is_regular_file(only / MANIFEST_FILE, ec)) {
+        return std::nullopt;
+      }
+      return only;
+    }
+
+    /**
+     * @brief Format a SHA-256 hash as lowercase hex.
+     *
+     * @param data Data to hash.
+     * @return 64 hex digits.
+     */
+    std::string sha256_hex(std::string_view data) {
+      std::string hex;
+      for (const auto byte : crypto::hash(data)) {
+        hex += std::format("{:02x}", byte);
+      }
+      return hex;
+    }
   }  // namespace
 
-  result_e import_folder(const std::filesystem::path &source, std::string &id, bool &updated, std::string &error) {
-    auto &reg = registry();
-    std::scoped_lock lock {reg.mutex};
+  std::optional<std::string> feed_url(const std::string &url, std::string &error) {
+    const auto parsed = parse_url(url);
+    if (!parsed || !is_https(parsed.get())) {
+      error = std::format("'{}' isn't an https:// address", url);
+      return std::nullopt;
+    }
 
+    // A GitHub repository: its latest release's latest.json
+    if (boost::iequals(url_part(parsed.get(), CURLUPART_HOST), "github.com") && url_part(parsed.get(), CURLUPART_QUERY).empty()) {
+      std::vector<std::string> parts;
+      const auto path = url_part(parsed.get(), CURLUPART_PATH);
+      boost::split(parts, path, boost::is_any_of("/"));
+      std::erase(parts, std::string {});
+      if (parts.size() == 2) {
+        auto repo = parts[1];
+        if (boost::iends_with(repo, ".git")) {
+          repo.resize(repo.size() - 4);
+        }
+        return std::format("https://github.com/{}/{}/releases/latest/download/latest.json", parts[0], repo);
+      }
+    }
+    return url_part(parsed.get(), CURLUPART_URL);
+  }
+
+  result_e import_url(const std::string &url, std::string &id, bool &updated, std::string &error) {
+    const auto feed = feed_url(url, error);
+    if (!feed) {
+      return result_e::invalid;
+    }
+
+    fetcher_t fetch;
+    fs::path data_dir;
+    {
+      auto &reg = registry();
+      std::scoped_lock lock {reg.mutex};
+      fetch = reg.fetcher;
+      data_dir = reg.paths.data_dir;
+    }
+
+    std::string body;
+    std::string final_url;
+    if (!fetch(*feed, MAX_FEED_BYTES, DOWNLOAD_TIMEOUT, body, final_url, error)) {
+      return result_e::unavailable;
+    }
+
+    std::string version;
+    std::string package_url;
+    std::string sha256;
+    try {
+      const auto node = json::parse(body);
+      version = node.at("version").get<std::string>();
+      package_url = node.at("url").get<std::string>();
+      sha256 = boost::to_lower_copy(node.at("sha256").get<std::string>());
+    } catch (const std::exception &) {
+      error = std::format("{} isn't a plugin update feed: it needs \"version\", \"url\" and \"sha256\"", *feed);
+      return result_e::invalid;
+    }
+    if (version.empty() || sha256.size() != 64 || !std::ranges::all_of(sha256, [](const char c) {
+          return std::isxdigit(static_cast<unsigned char>(c));
+        })) {
+      error = std::format("{} needs a \"version\" and the zip file's SHA-256 as 64 hex digits in \"sha256\"", *feed);
+      return result_e::invalid;
+    }
+    const auto package = parse_url(package_url, final_url);
+    if (!package || !is_https(package.get())) {
+      error = std::format("the feed's \"url\" '{}' isn't an https:// address", package_url);
+      return result_e::invalid;
+    }
+    const auto resolved = url_part(package.get(), CURLUPART_URL);
+
+    std::string zip;
+    if (!fetch(resolved, MAX_PACKAGE_BYTES, DOWNLOAD_TIMEOUT, zip, final_url, error)) {
+      return result_e::unavailable;
+    }
+    if (sha256_hex(zip) != sha256) {
+      error = std::format("{} doesn't match the SHA-256 in the feed", resolved);
+      return result_e::invalid;
+    }
+
+    static std::atomic<unsigned> downloads {0};
+    const auto staged = data_dir / std::format(".download-{}", ++downloads);
+    std::error_code ec;
+    fs::remove_all(staged, ec);
+    auto result = result_e::invalid;
+    if (!extract_zip(zip, staged, error)) {
+      error = std::format("{}: {}", resolved, error);
+    } else if (const auto root = find_plugin_root(staged); !root) {
+      error = std::format("{} has no {} at its top level or in a single top-level folder", resolved, MANIFEST_FILE);
+    } else {
+      result = import_from(*root, *feed, version, id, updated, error);
+    }
+    fs::remove_all(staged, ec);
+    return result;
+  }
+
+  result_e import_folder(const std::filesystem::path &source, std::string &id, bool &updated, std::string &error) {
     std::error_code ec;
     if (!source.is_absolute() || !fs::is_directory(source, ec)) {
       error = std::format("the folder '{}' was not found; enter its full path", path_to_utf8(source));
       return result_e::invalid;
     }
-
-    json node;
-    try {
-      std::ifstream in {source / MANIFEST_FILE};
-      if (!in.is_open()) {
-        error = std::format("the folder has no {}", MANIFEST_FILE);
-        return result_e::invalid;
-      }
-      node = json::parse(in);
-    } catch (const std::exception &e) {
-      error = std::format("couldn't read {}: {}", MANIFEST_FILE, e.what());
-      return result_e::invalid;
-    }
-
-    auto manifest = parse_manifest(node, source, false, error);
-    if (!manifest) {
-      return result_e::invalid;
-    }
-
-    const auto *existing = find_manifest(reg, manifest->id);
-    if (existing && existing->builtin) {
-      error = std::format("a bundled plugin already uses the ID '{}'", manifest->id);
-      return result_e::invalid;
-    }
-    if (reg.task_running) {
-      error = "another plugin operation is still running";
-      return result_e::busy;
-    }
-
-    const auto target = existing ? existing->dir : reg.paths.custom_dir / manifest->id;
-    if (fs::equivalent(source, target, ec)) {
-      error = "that folder is already where Sunshine loads the plugin from";
-      return result_e::invalid;
-    }
-    if (!existing && std::ranges::any_of(reg.manifests, [&target](const manifest_t &other) {
-          std::error_code same;
-          return fs::equivalent(other.dir, target, same);
-        })) {
-      error = std::format("another plugin is in the folder '{}'", manifest->id);
-      return result_e::invalid;
-    }
-
-    const auto staged = reg.paths.data_dir / (".import-" + manifest->id);
-    const auto backup = reg.paths.data_dir / (".replaced-" + manifest->id);
-    fs::remove_all(staged, ec);
-    fs::remove_all(backup, ec);
-    if (!copy_plugin_folder(source, staged, error) || !swap_plugin_folder(staged, target, backup, error)) {
-      fs::remove_all(staged, ec);
-      return result_e::invalid;
-    }
-
-    id = manifest->id;
-    updated = existing != nullptr;
-    reg.manifests = discover(reg.paths.builtin_dir, reg.paths.custom_dir);
-    BOOST_LOG(info) << "Plugin ["sv << id << "] imported from ["sv << path_to_utf8(source) << ']';
-    return result_e::ok;
+    return import_from(source, path_to_utf8(source), {}, id, updated, error);
   }
 
   nlohmann::json list() {
@@ -1770,6 +2293,7 @@ namespace plugins {
         {"installed", state.installed},
         {"installed_version", state.installed_version},
         {"needs_reinstall", needs_reinstall(manifest, state)},
+        {"origin", state.origin},
         {"active", state.active},
         {"config", effective_options(reg, manifest)},
         {"task", std::move(task)}
@@ -2229,5 +2753,15 @@ namespace plugins {
 
   void reset_session_check_for_testing() {
     set_session_check_for_testing(default_session_ready, DEFAULT_SESSION_POLL);
+  }
+
+  void set_fetcher_for_testing(fetcher_t fetcher) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.fetcher = std::move(fetcher);
+  }
+
+  void reset_fetcher_for_testing() {
+    set_fetcher_for_testing(fetch_https);
   }
 }  // namespace plugins

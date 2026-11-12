@@ -2144,6 +2144,7 @@ protected:
   void TearDown() override {
     plugins::cancel_task();
     plugins::reset_script_runner_for_testing();
+    plugins::reset_fetcher_for_testing();
     plugins::load({});
     std::filesystem::remove_all(plugins_root);
     ConfigHttpTest::TearDown();
@@ -2320,10 +2321,27 @@ TEST_F(PluginsConfigHttpTest, ImportRejectsBadRequests) {
     EXPECT_TRUE(response->content.string().contains(message)) << response->content.string();
   };
   expect_rejected("not-json", "Invalid plugin request");
-  expect_rejected(R"([])", "Plugin folder is required");
-  expect_rejected(R"({"path": 1})", "Plugin folder is required");
-  expect_rejected(R"({"path": ""})", "Plugin folder is required");
+  expect_rejected(R"([])", "Plugin folder or URL is required");
+  expect_rejected(R"({"path": 1})", "Plugin folder or URL is required");
+  expect_rejected(R"({"path": ""})", "Plugin folder or URL is required");
+  expect_rejected(R"({"url": ""})", "Plugin folder or URL is required");
+  expect_rejected(R"({"url": 1, "path": ""})", "Plugin folder or URL is required");
   expect_rejected(R"({"path": "relative\\folder"})", "enter its full path");
+  expect_rejected(R"({"url": "http://example.com/latest.json"})", "isn't an https:// address");
+}
+
+TEST_F(PluginsConfigHttpTest, ImportsFromAUrlBeforeAFolder) {
+  std::vector<std::string> fetched;
+  plugins::set_fetcher_for_testing([&fetched](const std::string &url, std::size_t, std::chrono::seconds, std::string &, std::string &, std::string &error) {
+    fetched.push_back(url);
+    error = "the test server is down";
+    return false;
+  });
+
+  const auto response = send("POST", "/plugins-import-test", R"({"url": "https://github.com/me/my-plugin", "path": "C:\\ignored"})");
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("the test server is down")) << response->content.string();
+  EXPECT_EQ(fetched, (std::vector<std::string> {"https://github.com/me/my-plugin/releases/latest/download/latest.json"}));
 }
 
 TEST_F(PluginsConfigHttpTest, GetPluginsSaysWhereTheGuideIs) {
