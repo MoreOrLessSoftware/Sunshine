@@ -52,4 +52,14 @@ namespace platf {
    * @return true if version info was successfully extracted, false otherwise.
    */
   bool getFileVersionInfo(const std::filesystem::path &file_path, std::string &version_str);
+
+  /**
+   * @brief Check whether commands that run as the signed-in user can start.
+   *
+   * When Sunshine runs as a service it starts such commands with the token of the user signed in at the console,
+   * so they can't start until someone signs in. Otherwise they run as Sunshine's own user and can always start.
+   *
+   * @return `true` when Sunshine isn't running as SYSTEM, or a user is signed in at the console.
+   */
+  bool user_session_available();
 }  // namespace platf

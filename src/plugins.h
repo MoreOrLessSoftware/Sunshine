@@ -150,6 +150,7 @@ namespace plugins {
     bool installed = false;  ///< Whether the install script completed successfully.
     bool active = false;  ///< Whether the do and undo scripts run for applications.
     nlohmann::json options = nlohmann::json::object();  ///< Option values set by the user.
+    std::string installed_version;  ///< Manifest version whose install script last succeeded, or empty when not installed.
   };
 
   /**
@@ -293,6 +294,19 @@ namespace plugins {
   std::string script_command(const std::filesystem::path &script);
 
   /**
+   * @brief Check whether a plugin's install script must run again before the plugin is used.
+   *
+   * A plugin needs a reinstall when its version changed since its install script last succeeded, for example after
+   * Sunshine updated a bundled plugin or a newer copy of a custom plugin was imported. Until then it doesn't run for
+   * streams or offer client commands.
+   *
+   * @param manifest Plugin as it is now.
+   * @param state Persisted state of the plugin.
+   * @return `true` when the plugin is installed and its installed version differs from the manifest's.
+   */
+  bool needs_reinstall(const manifest_t &manifest, const plugin_state_t &state);
+
+  /**
    * @brief Read the persisted plugin state.
    *
    * @param state_file File to read.
@@ -319,11 +333,24 @@ namespace plugins {
   /**
    * @brief Load the plugin registry from the given locations.
    *
-   * Waits for a running install or uninstall to finish first.
+   * Stops reinstalling updated plugins and waits for a running install or uninstall to finish first. An installed
+   * plugin whose state has no installed version, as written before versions were recorded, is taken to have its
+   * current version installed, so it isn't reinstalled.
    *
    * @param paths Locations to use.
    */
   void load(const paths_t &paths);
+
+  /**
+   * @brief Start reinstalling, in the background, the bundled plugins whose version changed since they were installed.
+   *
+   * Sunshine calls it once at startup, since bundled plugins only change when Sunshine is updated. The plugins are
+   * reinstalled one at a time, after any operation already running, and each is tried once; a failure is shown on
+   * the plugin's page and the plugin waits to be reinstalled from the web UI. When install scripts can't run yet
+   * because no user is signed in, it waits for one first. Custom plugins are never reinstalled automatically.
+   * Returns immediately; `cancel_task()` and `load()` stop it.
+   */
+  void reinstall_updated_builtins();
 
   /**
    * @brief Load the plugin registry from the default locations.
@@ -377,7 +404,8 @@ namespace plugins {
    * @brief Build the preparation commands of the active plugins.
    *
    * @param excluded IDs of plugins the application opted out of.
-   * @return In plugin order, an app command for each active plugin with a do or undo script,
+   * @return In plugin order, an app command for each active plugin with a do or undo script that doesn't need a
+   *         reinstall (see `needs_reinstall()`),
    *         followed by a connect command when the plugin also has a connect or disconnect script.
    */
   std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded);
@@ -389,8 +417,8 @@ namespace plugins {
    * otherwise be applied before the plugin's do script and fight over the display layout.
    *
    * @param excluded IDs of plugins the application opted out of.
-   * @return Name of the first active, installed plugin (in plugin order) whose manifest sets
-   *         `manages_display`, or an empty string when there is none.
+   * @return Name of the first active, installed plugin (in plugin order) that doesn't need a reinstall and whose
+   *         manifest sets `manages_display`, or an empty string when there is none.
    */
   std::string display_plugin(const std::vector<std::string> &excluded);
 
@@ -415,7 +443,7 @@ namespace plugins {
    * @param excluded IDs of plugins the application being streamed opted out of.
    * @param overrides The user's labels, icons and programs, which replace the plugin's. A status file still
    *                  replaces the label and icon while it exists, as it shows what the command will do next.
-   * @return In plugin order, the commands of each active, installed plugin that has any.
+   * @return In plugin order, the commands of each active, installed plugin that has any and doesn't need a reinstall.
    */
   std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides = {});
 
@@ -526,7 +554,7 @@ namespace plugins {
   void wait_for_task();
 
   /**
-   * @brief Terminate the running install or uninstall and wait for it to finish.
+   * @brief Stop reinstalling updated plugins, then terminate the running install or uninstall and wait for it to finish.
    */
   void cancel_task();
 
@@ -549,4 +577,17 @@ namespace plugins {
    * @brief Restore the default script runner.
    */
   void reset_script_runner_for_testing();
+
+  /**
+   * @brief Replace the check `reinstall_updated_builtins()` uses to tell whether install scripts can run yet.
+   *
+   * @param ready Returns `true` once a user is signed in, or Sunshine doesn't need one to run scripts.
+   * @param poll How long to wait between checks.
+   */
+  void set_session_check_for_testing(std::function<bool()> ready, std::chrono::milliseconds poll);
+
+  /**
+   * @brief Restore the default check for a signed-in user.
+   */
+  void reset_session_check_for_testing();
 }  // namespace plugins

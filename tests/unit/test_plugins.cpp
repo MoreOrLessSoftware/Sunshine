@@ -6,10 +6,12 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <regex>
@@ -150,6 +152,7 @@ protected:
   void TearDown() override {
     plugins::cancel_task();
     plugins::reset_script_runner_for_testing();
+    plugins::reset_session_check_for_testing();
     plugins::set_change_callback({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
@@ -471,7 +474,7 @@ TEST_F(PluginsTest, ScriptCommandRunsPowerShellFile) {
 
 TEST_F(PluginsTest, StateRoundTrips) {
   std::unordered_map<std::string, plugins::plugin_state_t> state;
-  state["a"] = {true, true, {{"x", 1}}};
+  state["a"] = {true, true, {{"x", 1}}, "1.2.0"};
   state["b"] = {false, false, json::object()};
   ASSERT_TRUE(plugins::save_state(state_file, state));
   EXPECT_FALSE(fs::exists(state_file.string() + ".tmp"));
@@ -481,7 +484,36 @@ TEST_F(PluginsTest, StateRoundTrips) {
   EXPECT_TRUE(loaded.at("a").installed);
   EXPECT_TRUE(loaded.at("a").active);
   EXPECT_EQ(loaded.at("a").options["x"], 1);
+  EXPECT_EQ(loaded.at("a").installed_version, "1.2.0");
   EXPECT_FALSE(loaded.at("b").installed);
+  EXPECT_EQ(loaded.at("b").installed_version, "");
+}
+
+TEST_F(PluginsTest, LoadStateKeepsOnlyTheInstalledVersionOfInstalledPlugins) {
+  write_text(state_file, R"({"plugins":{
+    "a":{"installed":true,"installed_version":"2.0"},
+    "b":{"installed":false,"installed_version":"2.0"},
+    "c":{"installed":true,"installed_version":2},
+    "d":{"installed":true}
+  }})");
+  const auto state = plugins::load_state(state_file);
+  EXPECT_EQ(state.at("a").installed_version, "2.0");
+  EXPECT_EQ(state.at("b").installed_version, "");
+  EXPECT_EQ(state.at("c").installed_version, "");
+  EXPECT_EQ(state.at("d").installed_version, "");
+}
+
+TEST_F(PluginsTest, NeedsReinstallWhenTheInstalledVersionDiffers) {
+  plugins::manifest_t manifest;
+  manifest.version = "1.2.3";
+
+  EXPECT_FALSE(plugins::needs_reinstall(manifest, {true, true, json::object(), "1.2.3"}));
+  EXPECT_TRUE(plugins::needs_reinstall(manifest, {true, true, json::object(), "1.0.0"}));
+  // Downgrades count too
+  EXPECT_TRUE(plugins::needs_reinstall(manifest, {true, false, json::object(), "2.0.0"}));
+  // Unknown or not installed
+  EXPECT_FALSE(plugins::needs_reinstall(manifest, {true, true, json::object(), ""}));
+  EXPECT_FALSE(plugins::needs_reinstall(manifest, {false, false, json::object(), "1.0.0"}));
 }
 
 TEST_F(PluginsTest, LoadStateHandlesBadInput) {
@@ -2266,4 +2298,304 @@ TEST_F(PluginsTest, TheClientsOfferUsesTheSavedOverrides) {
   ASSERT_EQ(offer.commands.size(), 1);
   EXPECT_EQ(offer.commands[0].id, "plugin:p/top");
   EXPECT_EQ(offer.commands[0].label, "Renamed");
+}
+
+namespace {
+  /**
+   * @brief Wait for a condition that a background thread brings about.
+   *
+   * @param condition Returns `true` once the wait is over.
+   * @return `true` when the condition was met within five seconds.
+   */
+  bool eventually(const std::function<bool()> &condition) {
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!condition()) {
+      if (std::chrono::steady_clock::now() > deadline) {
+        return false;
+      }
+      std::this_thread::sleep_for(5ms);
+    }
+    return true;
+  }
+
+  /**
+   * @brief A manifest with a do script, a client command and display management, at a given version.
+   *
+   * @param id Plugin ID.
+   * @param version Plugin version.
+   * @return Manifest JSON.
+   */
+  json versioned_manifest(const std::string &id, const std::string &version) {
+    auto manifest = full_manifest(id);
+    manifest["version"] = version;
+    manifest["client_commands"] = json::parse(R"([{"id": "esc", "label": "Escape", "steps": [[27]]}])");
+    return manifest;
+  }
+
+  /**
+   * @brief Check whether a plugin's last operation finished with a status.
+   *
+   * @param id Plugin ID.
+   * @param status Expected status.
+   * @return `true` when the plugin has a task with that status.
+   */
+  bool task_is(const std::string &id, const std::string &status) {
+    const auto task = find_plugin(plugins::list(), id)["task"];
+    return !task.is_null() && task["status"] == status;
+  }
+}  // namespace
+
+TEST_F(PluginsTest, InstallRecordsTheVersionAndUninstallClearsIt) {
+  write_plugin(builtin_dir, "p", full_manifest("p"));
+  plugins::load(paths());
+
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  EXPECT_EQ(plugins::load_state(state_file).at("p").installed_version, "1.2.3");
+  auto plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["installed_version"], "1.2.3");
+  EXPECT_EQ(plugin["needs_reinstall"], false);
+
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::uninstall, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  EXPECT_EQ(plugins::load_state(state_file).at("p").installed_version, "");
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["installed_version"], "");
+}
+
+TEST_F(PluginsTest, LoadRecordsTheVersionOfInstallsFromBeforeVersionsWereKept) {
+  write_plugin(builtin_dir, "p", full_manifest("p"));
+  write_plugin(builtin_dir, "unversioned", {{"id", "unversioned"}});
+  write_plugin(builtin_dir, "absent", full_manifest("absent"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true},"unversioned":{"installed":true},"gone":{"installed":true}}})");
+  plugins::load(paths());
+
+  const auto state = plugins::load_state(state_file);
+  EXPECT_EQ(state.at("p").installed_version, "1.2.3");
+  EXPECT_TRUE(state.at("p").active);
+  EXPECT_EQ(state.at("unversioned").installed_version, "");
+  EXPECT_EQ(state.at("gone").installed_version, "");
+  EXPECT_FALSE(state.contains("absent"));
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["needs_reinstall"], false);
+  EXPECT_TRUE(calls.empty());
+}
+
+TEST_F(PluginsTest, LoadLeavesTheStateFileAloneWhenNothingIsRecorded) {
+  write_plugin(builtin_dir, "p", full_manifest("p"));
+  const std::string saved = R"({"plugins":{"p":{"installed":true,"installed_version":"1.2.3"}}})";
+  write_text(state_file, saved);
+  plugins::load(paths());
+  EXPECT_EQ(read_text(state_file), saved);
+}
+
+TEST_F(PluginsTest, APluginThatNeedsAReinstallSitsOutUntilReinstalled) {
+  const auto dir = write_plugin(custom_dir, "p", versioned_manifest("p", "1.2.3"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+
+  auto plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["needs_reinstall"], true);
+  EXPECT_EQ(plugin["installed_version"], "1.0.0");
+  EXPECT_EQ(plugin["active"], true);
+  EXPECT_TRUE(plugins::prep_cmds({}).empty());
+  EXPECT_TRUE(plugins::offered_client_commands({}).empty());
+  EXPECT_EQ(plugins::display_plugin({}), "");
+
+  // A failed reinstall changes nothing
+  runner_exit_code = 1;
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["needs_reinstall"], true);
+  EXPECT_EQ(plugin["installed"], true);
+  EXPECT_EQ(plugin["task"]["status"], "failed");
+  EXPECT_TRUE(plugins::prep_cmds({}).empty());
+
+  // Reinstalling keeps the plugin active and brings it back
+  runner_exit_code = 0;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  ASSERT_EQ(calls.size(), 2);
+  EXPECT_EQ(calls[1].command, plugins::script_command(dir / "install.ps1"));
+  plugin = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(plugin["needs_reinstall"], false);
+  EXPECT_EQ(plugin["installed_version"], "1.2.3");
+  EXPECT_EQ(plugin["active"], true);
+  EXPECT_EQ(plugins::prep_cmds({}).size(), 1);
+  EXPECT_EQ(plugins::offered_client_commands({}).size(), 1);
+  EXPECT_EQ(plugins::display_plugin({}), "Plugin p");
+}
+
+TEST_F(PluginsTest, UpdatedBundledPluginsAreReinstalledInOrderButCustomOnesAreNot) {
+  auto first_manifest = versioned_manifest("first", "2.0.0");
+  first_manifest["order"] = 10;
+  const auto first = write_plugin(builtin_dir, "first", first_manifest);
+  const auto second = write_plugin(builtin_dir, "second", versioned_manifest("second", "2.0.0"));
+  write_plugin(builtin_dir, "current", versioned_manifest("current", "2.0.0"));
+  write_plugin(builtin_dir, "uninstalled", versioned_manifest("uninstalled", "2.0.0"));
+  write_plugin(custom_dir, "custom", versioned_manifest("custom", "2.0.0"));
+  write_text(state_file, R"({"plugins":{
+    "second":{"installed":true,"active":true,"installed_version":"1.0.0"},
+    "first":{"installed":true,"active":false,"installed_version":"1.0.0"},
+    "current":{"installed":true,"installed_version":"2.0.0"},
+    "custom":{"installed":true,"active":true,"installed_version":"1.0.0"}
+  }})");
+  plugins::load(paths());
+  std::atomic<int> changes = 0;
+  plugins::set_change_callback([&changes]() {
+    ++changes;
+  });
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("first", "succeeded") && task_is("second", "succeeded");
+  }));
+  plugins::cancel_task();
+
+  ASSERT_EQ(calls.size(), 2);
+  EXPECT_EQ(calls[0].command, plugins::script_command(first / "install.ps1"));
+  EXPECT_EQ(calls[1].command, plugins::script_command(second / "install.ps1"));
+  EXPECT_EQ(changes, 2);
+
+  const auto list = plugins::list();
+  EXPECT_EQ(find_plugin(list, "first")["needs_reinstall"], false);
+  EXPECT_EQ(find_plugin(list, "first")["active"], false);
+  EXPECT_EQ(find_plugin(list, "second")["active"], true);
+  EXPECT_EQ(find_plugin(list, "custom")["needs_reinstall"], true);
+  EXPECT_EQ(find_plugin(list, "uninstalled")["installed"], false);
+  EXPECT_TRUE(find_plugin(list, "current")["task"].is_null());
+  EXPECT_EQ(plugins::load_state(state_file).at("second").installed_version, "2.0.0");
+}
+
+TEST_F(PluginsTest, AFailedStartupReinstallIsTriedOnce) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  runner_exit_code = 1;
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("p", "failed");
+  }));
+  // Long enough for another attempt if there were one
+  std::this_thread::sleep_for(300ms);
+  plugins::cancel_task();
+
+  EXPECT_EQ(calls.size(), 1);
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["needs_reinstall"], true);
+  EXPECT_TRUE(plugins::prep_cmds({}).empty());
+}
+
+TEST_F(PluginsTest, StartupReinstallsWaitForASignedInUser) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  std::atomic<int> checks = 0;
+  plugins::set_session_check_for_testing([&checks]() {
+    return ++checks >= 3;
+  },
+                                         1ms);
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("p", "succeeded");
+  }));
+  plugins::cancel_task();
+  plugins::reset_session_check_for_testing();
+
+  EXPECT_EQ(checks, 3);
+  EXPECT_EQ(calls.size(), 1);
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["needs_reinstall"], false);
+}
+
+TEST_F(PluginsTest, StartupReinstallsStopWhileWaitingForASignedInUser) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  std::atomic<int> checks = 0;
+  plugins::set_session_check_for_testing([&checks]() {
+    ++checks;
+    return false;
+  },
+                                         1h);
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([&checks] {
+    return checks > 0;
+  }));
+  const auto start = std::chrono::steady_clock::now();
+  plugins::cancel_task();
+  plugins::reset_session_check_for_testing();
+
+  EXPECT_LT(std::chrono::steady_clock::now() - start, 5s);
+  EXPECT_TRUE(calls.empty());
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["needs_reinstall"], true);
+}
+
+TEST_F(PluginsTest, StartupReinstallsDontWaitForAUserWhenNothingChanged) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"installed_version":"2.0.0"}}})");
+  plugins::load(paths());
+  std::atomic<int> checks = 0;
+  plugins::set_session_check_for_testing([&checks]() {
+    ++checks;
+    return true;
+  },
+                                         1ms);
+
+  plugins::reinstall_updated_builtins();
+  // Starting again replaces the first thread
+  plugins::reinstall_updated_builtins();
+  plugins::cancel_task();
+  plugins::reset_session_check_for_testing();
+
+  EXPECT_EQ(checks, 0);
+  EXPECT_TRUE(calls.empty());
+}
+
+TEST_F(PluginsTest, StartupReinstallsWaitForARunningOperation) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_plugin(builtin_dir, "other", full_manifest("other"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  std::atomic<int> runs = 0;
+  plugins::set_script_runner_for_testing([released, &runs](const std::string &, bool, const std::map<std::string, std::string> &, const fs::path &, const fs::path &, std::stop_token) {
+    if (++runs == 1) {
+      released.wait();
+    }
+    return 0;
+  });
+  std::string error;
+  ASSERT_EQ(plugins::start_task("other", plugins::action_e::install, error), plugins::result_e::ok) << error;
+
+  plugins::reinstall_updated_builtins();
+  std::this_thread::sleep_for(300ms);
+  EXPECT_EQ(runs, 1);
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["needs_reinstall"], true);
+
+  release.set_value();
+  ASSERT_TRUE(eventually([] {
+    return task_is("p", "succeeded");
+  }));
+  plugins::cancel_task();
+  EXPECT_EQ(runs, 2);
+}
+
+TEST_F(PluginsTest, LoadStopsStartupReinstalls) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  plugins::set_session_check_for_testing([] {
+    return false;
+  },
+                                         1h);
+
+  plugins::reinstall_updated_builtins();
+  plugins::load(paths());
+  plugins::reset_session_check_for_testing();
+  EXPECT_TRUE(calls.empty());
 }

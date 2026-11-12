@@ -448,6 +448,8 @@ int main(int argc, char *argv[]) {
     proc::refresh(config::stream.file_apps);
   });
   proc::refresh(config::stream.file_apps);
+  // After the callback is set, so the applications pick up each plugin as its reinstall finishes.
+  plugins::reinstall_updated_builtins();
   auto client_commands_deinit_guard = client_commands::init();
 
   // If any of the following fail, we log an error and continue event though sunshine will not function correctly.

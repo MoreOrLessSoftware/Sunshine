@@ -1500,6 +1500,11 @@ p {
     border-color: var(--color-danger);
 }
 
+.plugin-status-reinstall {
+    background-color: var(--color-warning);
+    border-color: var(--color-warning);
+}
+
 /* On the highlighted row, outline the dot so it stays visible against the primary background. */
 .config-nav-list .nav-link.active .plugin-status {
     box-shadow: 0 0 0 2px var(--color-on-primary);

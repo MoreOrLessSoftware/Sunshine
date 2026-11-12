@@ -14,8 +14,10 @@ can change that folder. Keep it that way, and develop a plugin somewhere else:
 4. Select the plugin in the sidebar, then *Install & Activate*.
 
 After changing a plugin, import it again. It replaces the previous copy and keeps the plugin's installed state and
-options. Changes to what the install script sets up need the plugin to be uninstalled and installed again. A custom
-plugin cannot reuse the ID of a bundled plugin.
+options. If the new copy has a different `version`, the plugin shows *Reinstall needed* and sits out of streams until
+you select *Reinstall*, which runs its install script again. So change the version whenever what the install script
+sets up changes. *Reinstall* is also there for any installed plugin. A custom plugin cannot reuse the ID of a bundled
+plugin.
 
 ## Manifest
 
@@ -78,7 +80,7 @@ plugin cannot reuse the ID of a bundled plugin.
 |---------------|----------|---------------------------------------------------------------------------------------------------------------------|
 | `id`          | Yes      | 1 to 64 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit.                                |
 | `name`        | No       | Display name. Defaults to `id`.                                                                                     |
-| `version`     | No       | Shown in the web UI.                                                                                                |
+| `version`     | No       | Shown in the web UI. When it changes, an installed plugin needs its install script to run again; see [Notes for coding agents](#notes-for-coding-agents). |
 | `description` | No       | Shown in the web UI.                                                                                                |
 | `author`      | No       | Shown in the web UI.                                                                                                |
 | `homepage`    | No       | Linked from the web UI.                                                                                             |
@@ -219,5 +221,11 @@ If you are an AI coding agent writing a plugin, follow these as well as the refe
   what most things on the desktop need.
 * Download dependencies in the install script. Pin an exact version and verify a SHA-256 checksum, and retry, since
   downloads can fail briefly.
+* The install script must work when it runs over an earlier install, since a new `version` runs it again without
+  running the old uninstall script first. Replace files in place rather than deleting folders that also hold settings
+  or state, stop anything the plugin left running that holds its files, and remove a firewall rule or scheduled task
+  before adding it again. If the new version no longer needs something an earlier one set up, remove it here.
+  Bundled plugins are reinstalled this way automatically when Sunshine starts after an update; custom plugins wait
+  for *Reinstall*.
 * Don't assume a command is on `PATH` or what the working directory is. Build paths from `$PSScriptRoot` and
   `$env:SUNSHINE_PLUGIN_DATA_DIR`.

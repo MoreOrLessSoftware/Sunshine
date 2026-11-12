@@ -9,6 +9,7 @@ $url = "https://github.com/Merrit/nyrna/releases/download/v$version/Nyrna-Window
 $sha256 = 'A3E609F3B80AB5B2D079F51F59FE6BB113A2003BAFFF3B32439A352000F9C7BC'
 
 $installDir = Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'nyrna'
+$staging = Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'nyrna-unpack'
 $zip = Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'Nyrna-Windows-Portable.zip'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -21,14 +22,22 @@ if ($actual -ne $sha256) {
     throw "Checksum mismatch for Nyrna-Windows-Portable.zip: expected $sha256, got $actual"
 }
 
-if (Test-Path $installDir) {
-    Remove-Item $installDir -Recurse -Force
+if (Test-Path $staging) {
+    Remove-Item $staging -Recurse -Force
 }
-Expand-Archive -Path $zip -DestinationPath $installDir
+Expand-Archive -Path $zip -DestinationPath $staging
 Remove-Item $zip -Force
 
-$exe = Join-Path $installDir 'nyrna.exe'
-if (-not (Test-Path $exe)) {
+if (-not (Test-Path (Join-Path $staging 'nyrna.exe'))) {
+    Remove-Item $staging -Recurse -Force
     throw "nyrna.exe is missing from the download"
 }
+
+# Copy over an earlier install instead of replacing it, since a reinstall must keep the settings, and the window it
+# suspended, that the portable build saves next to nyrna.exe. Exit codes from 8 up are failures.
+& robocopy.exe $staging $installDir /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) {
+    throw "Couldn't copy Nyrna to $installDir (robocopy exit code $LASTEXITCODE). Close Nyrna if it's running and try again."
+}
+Remove-Item $staging -Recurse -Force
 Write-Output "Installed Nyrna $version in $installDir"

@@ -500,6 +500,20 @@ namespace platf {
     return ret;
   }
 
+  bool user_session_available() {
+    if (!is_running_as_system()) {
+      return true;
+    }
+    // The same lookup retrieve_users_token() makes, without its warning, since callers poll this.
+    const DWORD session_id = WTSGetActiveConsoleSessionId();
+    HANDLE token = nullptr;
+    if (session_id == 0xFFFFFFFF || !WTSQueryUserToken(session_id, &token)) {
+      return false;
+    }
+    CloseHandle(token);
+    return true;
+  }
+
   // Note: This does NOT append a null terminator
   /**
    * @brief Append a null-terminated string to a Windows environment block.

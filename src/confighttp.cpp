@@ -2744,6 +2744,10 @@ namespace confighttp {
   /**
    * @brief Get the list of plugins with their state and options.
    *
+   * Each plugin includes `installed_version`, the version whose install script last succeeded, and
+   * `needs_reinstall`, which is `true` when that differs from `version`. Such a plugin doesn't run for streams
+   * until it's reinstalled with `/api/plugins/install`.
+   *
    * @api_examples{/api/plugins| GET| null}
    */
   void getPlugins(const resp_https_t &response, const req_https_t &request) {
@@ -2883,6 +2887,8 @@ namespace confighttp {
 
   /**
    * @brief Start installing a plugin. Poll `/api/plugins` for the result.
+   * Installing a plugin that is already installed runs its install script again, which is how a plugin that
+   * reports `needs_reinstall` is reinstalled; it stays active if it was.
    * The body for the post request should be JSON serialized in the following format,
    * where the optional `activate` activates the plugin once the install succeeds:
    * @code{.json}

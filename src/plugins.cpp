@@ -8,9 +8,11 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <format>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -30,6 +32,8 @@
 
   #include <boost/winapi/process.hpp>
   #include <boost/winapi/wait.hpp>
+
+  #include "platform/windows/misc.h"
 #endif
 
 using namespace std::literals;
@@ -67,10 +71,28 @@ namespace plugins {
     int run_script(const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const fs::path &working_dir, const fs::path &log_file, std::stop_token stop);
 
     /**
+     * @brief Check whether install scripts can run yet: on Windows, whether a user is signed in when one is needed.
+     *
+     * @return `true` when scripts can start.
+     */
+    bool default_session_ready() {
+#ifdef _WIN32
+      return platf::user_session_available();
+#else
+      return true;
+#endif
+    }
+
+    /**
+     * @brief How long `reinstall_updated_builtins()` waits between checks for a signed-in user.
+     */
+    constexpr std::chrono::milliseconds DEFAULT_SESSION_POLL = 10s;
+
+    /**
      * @brief Everything the plugin registry knows, guarded by `mutex`.
      */
     struct registry_t {
-      std::mutex mutex;  ///< Guards every other member except `worker`.
+      std::mutex mutex;  ///< Guards every other member except `worker` and `reinstaller`.
       paths_t paths;  ///< Locations in use.
       std::vector<manifest_t> manifests;  ///< Discovered plugins, sorted by order.
       std::unordered_map<std::string, plugin_state_t> state;  ///< Persisted state keyed by plugin ID.
@@ -79,6 +101,9 @@ namespace plugins {
       script_runner_t runner = run_script;  ///< Runs install and uninstall scripts.
       std::function<void()> on_change;  ///< Called after a background operation changes plugin state.
       std::jthread worker;  ///< Thread running the current install or uninstall.
+      std::function<bool()> session_ready = default_session_ready;  ///< Whether install scripts can run yet.
+      std::chrono::milliseconds session_poll = DEFAULT_SESSION_POLL;  ///< Time between checks of `session_ready`.
+      std::jthread reinstaller;  ///< Thread started by `reinstall_updated_builtins()`.
     };
 
     /**
@@ -920,6 +945,7 @@ namespace plugins {
           } else {
             state.installed = action == action_e::install;
             state.active = state.installed && (state.active || activate);
+            state.installed_version = state.installed ? manifest.version : std::string {};
           }
           save_state(paths.state_file, reg.state);
           on_change = reg.on_change;
@@ -961,7 +987,141 @@ namespace plugins {
         run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, action_id, pending_options, stop);
       });
     }
+
+    /**
+     * @brief Find the persisted state of a plugin.
+     *
+     * @param reg Registry to search.
+     * @param id Plugin ID.
+     * @return The state, or `nullptr` when the plugin has none.
+     */
+    const plugin_state_t *find_state(const registry_t &reg, const std::string &id) {
+      const auto it = reg.state.find(id);
+      return it == reg.state.end() ? nullptr : &it->second;
+    }
+
+    /**
+     * @brief Check whether a plugin runs for streams and offers client commands.
+     *
+     * @param reg Registry holding the plugin's state.
+     * @param manifest Plugin to check.
+     * @return `true` when the plugin is installed, active and doesn't need a reinstall.
+     */
+    bool runs_for_streams(const registry_t &reg, const manifest_t &manifest) {
+      const auto *state = find_state(reg, manifest.id);
+      return state && state->active && state->installed && !needs_reinstall(manifest, *state);
+    }
+
+    /**
+     * @brief Wait for a time unless a stop is requested first.
+     *
+     * @param stop Requests the wait to end early.
+     * @param duration Longest time to wait.
+     * @return `false` when a stop was requested.
+     */
+    bool sleep_unless_stopped(std::stop_token stop, std::chrono::milliseconds duration) {
+      std::mutex mutex;
+      std::condition_variable_any cv;
+      std::unique_lock lock {mutex};
+      cv.wait_for(lock, stop, duration, [] {
+        return false;
+      });
+      return !stop.stop_requested();
+    }
+
+    /**
+     * @brief Find the first bundled plugin that needs a reinstall and hasn't been tried yet.
+     *
+     * @param reg Registry to search.
+     * @param attempted IDs of the plugins already tried.
+     * @return The plugin, or `nullptr` when there is none.
+     */
+    const manifest_t *next_builtin_reinstall(const registry_t &reg, const std::set<std::string> &attempted) {
+      for (const auto &manifest : reg.manifests) {
+        const auto *state = find_state(reg, manifest.id);
+        if (manifest.builtin && state && needs_reinstall(manifest, *state) && !attempted.contains(manifest.id)) {
+          return &manifest;
+        }
+      }
+      return nullptr;
+    }
+
+    /**
+     * @brief Body of the thread started by `reinstall_updated_builtins()`.
+     *
+     * @param stop Requests the thread to end; a reinstall it already started keeps running.
+     */
+    void reinstall_builtins(std::stop_token stop) {
+      auto &reg = registry();
+      std::function<bool()> session_ready;
+      std::chrono::milliseconds poll;
+      {
+        std::scoped_lock lock {reg.mutex};
+        if (!next_builtin_reinstall(reg, {})) {
+          return;
+        }
+        session_ready = reg.session_ready;
+        poll = reg.session_poll;
+      }
+
+      if (!session_ready()) {
+        BOOST_LOG(info) << "Waiting for a user to sign in before reinstalling updated plugins"sv;
+        do {
+          if (!sleep_unless_stopped(stop, poll)) {
+            return;
+          }
+        } while (!session_ready());
+      }
+
+      std::set<std::string> attempted;
+      while (!stop.stop_requested()) {
+        {
+          std::scoped_lock lock {reg.mutex};
+          if (!reg.task_running) {
+            const auto *manifest = next_builtin_reinstall(reg, attempted);
+            if (!manifest) {
+              return;
+            }
+            attempted.insert(manifest->id);
+            BOOST_LOG(info) << "Reinstalling plugin ["sv << manifest->id << "] since it changed from version ["sv
+                            << find_state(reg, manifest->id)->installed_version << "] to ["sv << manifest->version << ']';
+            const auto env = script_env(*manifest, effective_options(reg, *manifest), plugin_data_dir(reg.paths, manifest->id));
+            launch_task(reg, manifest->id, action_e::install, *manifest, env, false, {}, std::nullopt);
+          }
+        }
+        sleep_unless_stopped(stop, 100ms);
+      }
+    }
+
+    /**
+     * @brief Stop the thread started by `reinstall_updated_builtins()` and wait for it to end.
+     *
+     * A reinstall it already started keeps running.
+     */
+    void stop_reinstaller() {
+      auto &reg = registry();
+      std::jthread reinstaller;
+      {
+        std::scoped_lock lock {reg.mutex};
+        reinstaller = std::move(reg.reinstaller);
+      }
+      if (reinstaller.joinable()) {
+        reinstaller.request_stop();
+        reinstaller.join();
+      }
+    }
   }  // namespace
+
+  bool needs_reinstall(const manifest_t &manifest, const plugin_state_t &state) {
+    return state.installed && !state.installed_version.empty() && state.installed_version != manifest.version;
+  }
+
+  void reinstall_updated_builtins() {
+    stop_reinstaller();
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.reinstaller = std::jthread(reinstall_builtins);
+  }
 
   bool is_valid_id(std::string_view id) {
     if (id.empty() || id.size() > 64) {
@@ -1226,6 +1386,9 @@ namespace plugins {
         if (entry.contains("options") && entry["options"].is_object()) {
           plugin.options = entry["options"];
         }
+        if (plugin.installed && entry.contains("installed_version") && entry["installed_version"].is_string()) {
+          plugin.installed_version = entry["installed_version"].get<std::string>();
+        }
         state[id] = std::move(plugin);
       }
     } catch (const std::exception &e) {
@@ -1241,7 +1404,8 @@ namespace plugins {
       plugins[id] = {
         {"installed", plugin.installed},
         {"active", plugin.active},
-        {"options", plugin.options}
+        {"options", plugin.options},
+        {"installed_version", plugin.installed_version}
       };
     }
 
@@ -1279,6 +1443,7 @@ namespace plugins {
   }
 
   void load(const paths_t &paths) {
+    stop_reinstaller();
     wait_for_task();
     proxy_streams_stopping = false;
 
@@ -1293,10 +1458,25 @@ namespace plugins {
     reg.state = load_state(paths.state_file);
     reg.tasks.clear();
 
+    // State written before installed versions were recorded: take the current version to be the installed one,
+    // rather than run every install script again after an update.
+    bool recorded = false;
     for (const auto &manifest : reg.manifests) {
-      const auto it = reg.state.find(manifest.id);
-      const bool active = it != reg.state.end() && it->second.active;
-      BOOST_LOG(info) << "Found plugin ["sv << manifest.id << ' ' << manifest.version << ']' << (active ? " (active)"sv : ""sv);
+      if (const auto it = reg.state.find(manifest.id); !manifest.version.empty() && it != reg.state.end() && it->second.installed && it->second.installed_version.empty()) {
+        it->second.installed_version = manifest.version;
+        recorded = true;
+      }
+    }
+    if (recorded) {
+      save_state(paths.state_file, reg.state);
+    }
+
+    for (const auto &manifest : reg.manifests) {
+      const auto *state = find_state(reg, manifest.id);
+      const bool active = state && state->active;
+      const bool reinstall = state && needs_reinstall(manifest, *state);
+      BOOST_LOG(info) << "Found plugin ["sv << manifest.id << ' ' << manifest.version << ']' << (active ? " (active)"sv : ""sv)
+                      << (reinstall ? std::format(" (installed version {}, needs a reinstall)", state->installed_version) : std::string {});
     }
   }
 
@@ -1588,6 +1768,8 @@ namespace plugins {
         {"icon", manifest.icon},
         {"panel", std::move(panel)},
         {"installed", state.installed},
+        {"installed_version", state.installed_version},
+        {"needs_reinstall", needs_reinstall(manifest, state)},
         {"active", state.active},
         {"config", effective_options(reg, manifest)},
         {"task", std::move(task)}
@@ -1602,8 +1784,7 @@ namespace plugins {
 
     std::vector<config::prep_cmd_t> cmds;
     for (const auto &manifest : reg.manifests) {
-      const auto it = reg.state.find(manifest.id);
-      if (it == reg.state.end() || !it->second.active || !it->second.installed) {
+      if (!runs_for_streams(reg, manifest)) {
         continue;
       }
       if (std::ranges::find(excluded, manifest.id) != excluded.end()) {
@@ -1633,11 +1814,7 @@ namespace plugins {
     std::vector<offered_commands_t> offered;
     std::optional<std::string> foreground;  // Only looked up when a command is limited to programs
     for (const auto &manifest : reg.manifests) {
-      if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end()) {
-        continue;
-      }
-      const auto it = reg.state.find(manifest.id);
-      if (it == reg.state.end() || !it->second.active || !it->second.installed) {
+      if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end() || !runs_for_streams(reg, manifest)) {
         continue;
       }
 
@@ -1699,11 +1876,7 @@ namespace plugins {
     std::scoped_lock lock {reg.mutex};
 
     for (const auto &manifest : reg.manifests) {
-      if (!manifest.manages_display || std::ranges::find(excluded, manifest.id) != excluded.end()) {
-        continue;
-      }
-      const auto it = reg.state.find(manifest.id);
-      if (it != reg.state.end() && it->second.active && it->second.installed) {
+      if (manifest.manages_display && std::ranges::find(excluded, manifest.id) == excluded.end() && runs_for_streams(reg, manifest)) {
         return manifest.name;
       }
     }
@@ -1813,6 +1986,7 @@ namespace plugins {
   }
 
   void cancel_task() {
+    stop_reinstaller();
     auto &reg = registry();
     {
       std::scoped_lock lock {reg.mutex};
@@ -2044,5 +2218,16 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     reg.runner = run_script;
+  }
+
+  void set_session_check_for_testing(std::function<bool()> ready, std::chrono::milliseconds poll) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.session_ready = std::move(ready);
+    reg.session_poll = poll;
+  }
+
+  void reset_session_check_for_testing() {
+    set_session_check_for_testing(default_session_ready, DEFAULT_SESSION_POLL);
   }
 }  // namespace plugins

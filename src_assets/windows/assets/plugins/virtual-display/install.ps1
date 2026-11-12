@@ -11,6 +11,7 @@ $sha256 = '638579CECDF4675F5EB956E1CA5962A32EB747181B9303EAD5B6041DFB1272E5'
 $dataDir = $env:SUNSHINE_PLUGIN_DATA_DIR
 $zip = Join-Path $dataDir 'vdisplay.zip'
 $dest = Join-Path $dataDir 'vdisplay'
+$staging = Join-Path $dataDir 'vdisplay-unpack'
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
@@ -41,11 +42,19 @@ if ($actual -ne $sha256) {
     throw "Checksum mismatch for vdisplay.zip: expected $sha256, got $actual"
 }
 
-if (Test-Path $dest) {
-    Remove-Item $dest -Recurse -Force
+if (Test-Path $staging) {
+    Remove-Item $staging -Recurse -Force
 }
-Expand-Archive -Path $zip -DestinationPath $dest
+Expand-Archive -Path $zip -DestinationPath $staging
 Remove-Item $zip -Force
+
+# Copy over an earlier install instead of replacing it, since a reinstall must keep the vdisplay.state that vdisplay
+# saves next to its exe. Exit codes from 8 up are failures, such as a vdisplay left running.
+& robocopy.exe $staging $dest /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+if ($LASTEXITCODE -ge 8) {
+    throw "Couldn't copy vdisplay to $dest (robocopy exit code $LASTEXITCODE). End any stream using the virtual display and try again."
+}
+Remove-Item $staging -Recurse -Force
 
 # vdisplay writes vdisplay.log and vdisplay.state next to the exe, and do.ps1 runs as the signed-in user.
 # S-1-5-32-545 is the local Users group.
@@ -66,7 +75,8 @@ try {
     if ($actual -ne $desktopModuleSha256) {
         throw "Checksum mismatch: expected $desktopModuleSha256, got $actual"
     }
-    Expand-Archive -Path $desktopModuleZip -DestinationPath (Join-Path $dest 'virtualdesktop')
+    # -Force replaces the copy from an earlier install
+    Expand-Archive -Path $desktopModuleZip -DestinationPath (Join-Path $dest 'virtualdesktop') -Force
 }
 catch {
     Write-Output "Warning: could not install the VirtualDesktop module, so the new desktop option will not work: $_"
