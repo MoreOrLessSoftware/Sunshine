@@ -122,6 +122,8 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `description` | No       | Shown in the web UI.                                                                                                |
 | `author`      | No       | Shown in the web UI.                                                                                                |
 | `homepage`    | No       | Linked from the web UI.                                                                                             |
+| `notice`      | No       | Something users must know or do before the plugin works, shown in a box on its page even before it is installed. |
+| `notice_url`  | No       | An `https://` page with more about `notice`, linked after it.                                                      |
 | `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50 to 500.                          |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. Defaults to `false`. |

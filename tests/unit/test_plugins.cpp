@@ -107,6 +107,8 @@ namespace {
       {"description", "A test plugin"},
       {"author", "Tester"},
       {"homepage", "https://example.invalid"},
+      {"notice", "Set it up first"},
+      {"notice_url", "https://example.invalid/setup"},
       {"order", order},
       {"elevated", true},
       {"manages_display", true},
@@ -250,6 +252,8 @@ TEST_F(PluginsTest, ParseManifestReadsEveryField) {
   EXPECT_EQ(manifest->description, "A test plugin");
   EXPECT_EQ(manifest->author, "Tester");
   EXPECT_EQ(manifest->homepage, "https://example.invalid");
+  EXPECT_EQ(manifest->notice, "Set it up first");
+  EXPECT_EQ(manifest->notice_url, "https://example.invalid/setup");
   EXPECT_EQ(manifest->order, 42);
   EXPECT_TRUE(manifest->elevated);
   EXPECT_TRUE(manifest->manages_display);
@@ -330,6 +334,9 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"MissingId", R"({})", "invalid plugin id ''"},
     invalid_manifest_t {"BadId", R"({"id":"Bad Id"})", "invalid plugin id"},
     invalid_manifest_t {"NameNotString", R"({"id":"p","name":1})", "'name' must be a string"},
+    invalid_manifest_t {"NoticeNotString", R"({"id":"p","notice":1})", "'notice' must be a string"},
+    invalid_manifest_t {"NoticeUrlNotHttps", R"({"id":"p","notice":"n","notice_url":"http://example.invalid"})", "'notice_url' must be an https:// address"},
+    invalid_manifest_t {"NoticeUrlScript", R"json({"id":"p","notice_url":"javascript:alert(1)"})json", "'notice_url' must be an https:// address"},
     invalid_manifest_t {"OrderNotInteger", R"({"id":"p","order":1.5})", "'order' must be an integer"},
     invalid_manifest_t {"ElevatedNotBoolean", R"({"id":"p","elevated":"yes"})", "'elevated' must be a boolean"},
     invalid_manifest_t {"ManagesDisplayNotBoolean", R"({"id":"p","manages_display":1})", "'manages_display' must be a boolean"},
@@ -1310,6 +1317,8 @@ TEST_F(PluginsTest, ListDescribesActionsAndPanel) {
 
   const auto plain = find_plugin(list, "plain");
   EXPECT_TRUE(plain["actions"].empty());
+  EXPECT_EQ(plain["notice"], "Set it up first");
+  EXPECT_EQ(plain["notice_url"], "https://example.invalid/setup");
   EXPECT_TRUE(plain["panel"].is_null());
 }
 

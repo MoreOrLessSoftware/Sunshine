@@ -131,6 +131,8 @@ namespace plugins {
     std::string description;  ///< Short description.
     std::string author;  ///< Author name.
     std::string homepage;  ///< Project URL.
+    std::string notice;  ///< Something to know before using the plugin, shown on its page.
+    std::string notice_url;  ///< An https:// page about `notice`, linked after it, or empty.
     int order;  ///< Do scripts run in ascending order, undo scripts in descending order.
     bool elevated;  ///< Whether the do and undo scripts run elevated.
     bool manages_display;  ///< Whether the plugin sets up the display itself, replacing Sunshine's display device configuration.

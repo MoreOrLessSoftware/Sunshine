@@ -261,6 +261,11 @@
               {{ $t('plugins.update_check_failed', {error: plugin.update.error}) }}
             </div>
 
+            <div v-if="plugin.notice" class="alert alert-info py-2 mb-2" role="note">
+              {{ plugin.notice }}
+              <a v-if="plugin.notice_url" :href="plugin.notice_url" target="_blank" rel="noopener noreferrer">{{ $t('plugins.notice_link') }}</a>
+            </div>
+
             <p class="mb-1">{{ plugin.description }}</p>
             <p class="small text-muted mb-2" v-if="plugin.author || plugin.homepage">
               <span v-if="plugin.author">{{ plugin.author }}</span>

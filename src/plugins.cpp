@@ -1168,7 +1168,13 @@ namespace plugins {
         !read_string(node, "version", manifest.version, error) ||
         !read_string(node, "description", manifest.description, error) ||
         !read_string(node, "author", manifest.author, error) ||
-        !read_string(node, "homepage", manifest.homepage, error)) {
+        !read_string(node, "homepage", manifest.homepage, error) ||
+        !read_string(node, "notice", manifest.notice, error) ||
+        !read_string(node, "notice_url", manifest.notice_url, error)) {
+      return std::nullopt;
+    }
+    if (!manifest.notice_url.empty() && !manifest.notice_url.starts_with("https://")) {
+      error = "'notice_url' must be an https:// address";
       return std::nullopt;
     }
     if (!is_valid_id(manifest.id)) {
@@ -2423,6 +2429,8 @@ namespace plugins {
         {"description", manifest.description},
         {"author", manifest.author},
         {"homepage", manifest.homepage},
+        {"notice", manifest.notice},
+        {"notice_url", manifest.notice_url},
         {"builtin", manifest.builtin},
         {"elevated", manifest.elevated},
         {"manages_display", manifest.manages_display},

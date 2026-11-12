@@ -746,6 +746,7 @@
     "matrix_toggle_plugin": "Run {name} for every application",
     "no_plugins": "No plugins found.",
     "not_installed": "Not installed",
+    "notice_link": "Learn more",
     "options": "Options",
     "panel_title": "{name} panel",
     "reinstall": "Reinstall",
