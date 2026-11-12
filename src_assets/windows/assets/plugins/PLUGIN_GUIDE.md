@@ -128,7 +128,7 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect` and `apply`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply`. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 | `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |
-| `panel`       | No       | A page shown on the plugin's card once it is installed: `file` (an `.html` file directly inside the plugin folder), and optionally `port` and `height` (in pixels, 100 to 2000, default 360). |
+| `panel`       | No       | A page shown on the plugin's card once it is installed: `file` (an `.html` file directly inside the plugin folder), and optionally `port` and `height`: in pixels from 100 to 2000 (default 360), or `"auto"` to grow and shrink with the page's content, which then shouldn't set its own height to fill the frame. |
 | `client_commands` | No   | Commands added to Moonlight's in-stream menu while the plugin is active; see [Client commands](#client-commands). |
 | `icon`        | No       | Icon of the plugin's group of client commands in the menu, such as `material:extension` (a [Material Symbols](https://fonts.google.com/icons) name). |
 

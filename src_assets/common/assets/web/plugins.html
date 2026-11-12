@@ -283,7 +283,10 @@
             <!-- Panel: a page from the plugin folder, e.g. a live view of a service the plugin runs -->
             <iframe v-if="plugin.installed && plugin.panel" class="plugin-panel border rounded w-100 mb-2"
                     :src="'./api/plugins/panel?id=' + encodeURIComponent(plugin.id)"
-                    :style="{height: plugin.panel.height + 'px'}" :title="$t('plugins.panel_title', {name: plugin.name})"></iframe>
+                    :style="{height: (panelHeights[plugin.id] || plugin.panel.height) + 'px'}"
+                    :scrolling="panelHeights[plugin.id] ? 'no' : null"
+                    @load="plugin.panel.fit && fitPanel(plugin, $event.target)"
+                    :title="$t('plugins.panel_title', {name: plugin.name})"></iframe>
 
             <!-- Install / uninstall / action status -->
             <div v-if="plugin.task" class="mb-2">
@@ -375,6 +378,8 @@
 
   // Where the folder or URL imported last is remembered, in this browser
   const IMPORT_PATH_KEY = 'sunshine.plugins.importPath';
+  // ResizeObservers of panels that fit their content, by plugin ID; kept out of Vue's reactive data
+  const panelObservers = new Map();
 
   const EXAMPLE_MANIFEST = `{
   "id": "my-first-plugin",
@@ -475,6 +480,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         currentView: 'apps',
         importForm: {open: false, path: '', busy: false, error: null},
         checkingUpdates: false,
+        // Measured heights of panels that fit their content, by plugin ID
+        panelHeights: {},
         // Plugin IDs being updated from their feed
         updating: {},
         // Where the guide is on this host, from the server
@@ -742,6 +749,33 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       async reinstall(plugin) {
         await this.post(plugin, './api/plugins/install', {});
         await this.loadPlugins();
+      },
+
+      /**
+       * Size a panel's frame to its content, and again whenever the content changes size. Panels are served from
+       * this origin, so their document can be measured.
+       */
+      fitPanel(plugin, frame) {
+        panelObservers.get(plugin.id)?.disconnect();
+        let doc;
+        try {
+          doc = frame.contentDocument;
+        } catch {
+          return;  // not reachable, so it keeps its height
+        }
+        if (!doc?.documentElement) {
+          return;
+        }
+        // The frame's border is part of its height
+        const border = frame.offsetHeight - frame.clientHeight;
+        const observer = new ResizeObserver(() => {
+          const height = Math.ceil(doc.documentElement.getBoundingClientRect().height);
+          if (height > 0) {
+            this.panelHeights[plugin.id] = height + border;
+          }
+        });
+        observer.observe(doc.documentElement);
+        panelObservers.set(plugin.id, observer);
       },
 
       /**

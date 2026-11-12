@@ -1254,6 +1254,18 @@ TEST_F(PluginsTest, ParseManifestReadsActionsAndPanel) {
   EXPECT_EQ(manifest->panel->file, "panel.html");
   EXPECT_EQ(manifest->panel->port, 8008);
   EXPECT_EQ(manifest->panel->height, 360);
+  EXPECT_FALSE(manifest->panel->fit);
+}
+
+TEST_F(PluginsTest, APanelCanFitItsContent) {
+  const auto dir = write_panel_plugin(builtin_dir, "p", 8008);
+  auto node = manifest_with_panel("p", 8008);
+  node["panel"]["height"] = "auto";
+  std::string error;
+  const auto manifest = plugins::parse_manifest(node, dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_TRUE(manifest->panel->fit);
+  EXPECT_EQ(manifest->panel->height, 360);  // until its content is measured
 }
 
 TEST_F(PluginsTest, InvalidActionsAndPanelsAreRejected) {
@@ -1275,7 +1287,8 @@ TEST_F(PluginsTest, InvalidActionsAndPanelsAreRejected) {
     {R"({"id":"p","panel":{"file":"missing.html"}})", "does not exist"},
     {R"({"id":"p","panel":{"file":"panel.html","port":0}})", "'port' must be an integer from 1 to 65535"},
     {R"({"id":"p","panel":{"file":"panel.html","port":"8008"}})", "'port' must be an integer from 1 to 65535"},
-    {R"({"id":"p","panel":{"file":"panel.html","height":50}})", "'height' must be an integer from 100 to 2000"},
+    {R"({"id":"p","panel":{"file":"panel.html","height":50}})", "'height' must be \"auto\" or an integer from 100 to 2000"},
+    {R"({"id":"p","panel":{"file":"panel.html","height":"tall"}})", "'height' must be \"auto\" or an integer"},
   };
   for (const auto &[manifest, expected] : cases) {
     std::string error;
@@ -1293,7 +1306,7 @@ TEST_F(PluginsTest, ListDescribesActionsAndPanel) {
   const auto plugin = find_plugin(list, "p");
   ASSERT_EQ(plugin["actions"].size(), 2);
   EXPECT_EQ(plugin["actions"][0], json({{"id", "test_start"}, {"label", "Start test"}, {"description", "Starts the service"}}));
-  EXPECT_EQ(plugin["panel"], json({{"height", 360}, {"proxy", true}}));
+  EXPECT_EQ(plugin["panel"], json({{"height", 360}, {"fit", false}, {"proxy", true}}));
 
   const auto plain = find_plugin(list, "plain");
   EXPECT_TRUE(plain["actions"].empty());

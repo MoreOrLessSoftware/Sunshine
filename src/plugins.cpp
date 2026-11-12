@@ -697,9 +697,11 @@ namespace plugins {
         }
         panel.port = node["port"].get<int>();
       }
-      if (node.contains("height")) {
+      if (node.contains("height") && node["height"] == "auto") {
+        panel.fit = true;
+      } else if (node.contains("height")) {
         if (!node["height"].is_number_integer() || node["height"].get<int>() < 100 || node["height"].get<int>() > 2000) {
-          error = "panel 'height' must be an integer from 100 to 2000";
+          error = "panel 'height' must be \"auto\" or an integer from 100 to 2000";
           return std::nullopt;
         }
         panel.height = node["height"].get<int>();
@@ -2411,7 +2413,7 @@ namespace plugins {
       }
       json panel = nullptr;
       if (manifest.panel) {
-        panel = {{"height", manifest.panel->height}, {"proxy", manifest.panel->port != 0}};
+        panel = {{"height", manifest.panel->height}, {"fit", manifest.panel->fit}, {"proxy", manifest.panel->port != 0}};
       }
 
       result.push_back({

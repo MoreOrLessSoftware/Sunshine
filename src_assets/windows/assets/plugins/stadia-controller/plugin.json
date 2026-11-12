@@ -30,7 +30,7 @@
   "panel": {
     "file": "panel.html",
     "port": 8008,
-    "height": 440
+    "height": "auto"
   },
   "options": [
     {

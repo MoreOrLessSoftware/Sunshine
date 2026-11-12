@@ -117,7 +117,8 @@ namespace plugins {
   struct panel_t {
     std::string file;  ///< HTML file relative to the plugin directory.
     int port = 0;  ///< Local port `/api/plugins/proxy` forwards GET requests to, or 0 for none.
-    int height = 360;  ///< Height of the panel in pixels.
+    int height = 360;  ///< Height of the panel in pixels, or its height until its content is measured when `fit` is set.
+    bool fit = false;  ///< Whether the panel grows and shrinks to fit its content, from `"height": "auto"`.
   };
 
   /**
