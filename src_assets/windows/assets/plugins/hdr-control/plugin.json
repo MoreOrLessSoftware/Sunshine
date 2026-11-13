@@ -1,0 +1,46 @@
+{
+  "id": "hdr-control",
+  "name": "HDR Control",
+  "version": "1.0.0",
+  "description": "Makes a chosen color profile the primary display's HDR profile while a client streams in HDR, then puts back the previous profile when the application quits. Pick a profile made with the Windows HDR Calibration app, or any other installed HDR profile.",
+  "author": "Sunshine",
+  "homepage": "https://apps.microsoft.com/detail/9N7F2SM5D1LR",
+  "order": 150,
+  "elevated": false,
+  "scripts": {
+    "install": "install.ps1",
+    "do": "do.ps1",
+    "undo": "undo.ps1",
+    "connect": "connect.ps1"
+  },
+  "options": [
+    {
+      "id": "profile",
+      "type": "choice",
+      "label": "HDR profile",
+      "description": "Color profile the primary display uses in HDR mode during the stream. Profiles already linked to the display are listed first. Override it for an application or a client to give each its own.",
+      "default": "",
+      "choices": [
+        {"value": "", "label": "Don't change"}
+      ],
+      "choices_script": "choices.ps1"
+    },
+    {
+      "id": "wait_seconds",
+      "type": "number",
+      "label": "Wait for HDR mode (seconds)",
+      "description": "How long to wait for the display to switch to HDR mode before leaving its profile as it is.",
+      "default": 5,
+      "min": 0,
+      "max": 30,
+      "step": 1
+    },
+    {
+      "id": "restore",
+      "type": "boolean",
+      "label": "Put back the previous profile",
+      "description": "When the application quits, make the display's previous HDR profile its HDR profile again and unlink any profile the plugin linked. Turn this off to keep the stream's profile.",
+      "default": true
+    }
+  ]
+}

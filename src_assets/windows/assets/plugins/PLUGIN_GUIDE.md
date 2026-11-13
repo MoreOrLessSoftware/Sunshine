@@ -157,7 +157,12 @@ variables: `SUNSHINE_PLUGIN_CHOICE_OPTION`, the ID of the option, so one script 
 `SUNSHINE_PLUGIN_CHOICES_FILE`, the file to write the list to. The list is a JSON array in the same form as
 `choices`; choices with a `group` are listed under it, after those without one. A value can't be empty, longer than
 512 bytes or hold control characters, and the list can't hold more than 1000 choices or 256 KiB. The script has 15
-seconds to exit with 0, and its output goes to `.choices.log` in its data folder.
+seconds to exit with 0, and its output goes to `.choices.log` in its data folder. The list file is in the data
+folder too, which only administrators can write to by default, so grant users access to it in the install script:
+
+```powershell
+& icacls.exe $env:SUNSHINE_PLUGIN_DATA_DIR /grant '*S-1-5-32-545:(OI)(CI)M' | Out-Null
+```
 
 ```powershell
 $choices = Get-ChildItem "$env:windir\System32\spool\drivers\color" -Filter *.icc |

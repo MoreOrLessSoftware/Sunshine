@@ -2540,6 +2540,22 @@ TEST(PluginsBundledTest, LatencyTestManifestIsValid) {
   EXPECT_TRUE(manifest->client_commands[0].programs.empty());
   EXPECT_EQ(manifest->client_commands[1].programs, (std::vector<std::string> {"latency-test"}));
 }
+
+TEST(PluginsBundledTest, HdrControlManifestIsValid) {
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "hdr-control";
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->id, "hdr-control");
+  EXPECT_FALSE(manifest->elevated);  // Color profile settings belong to the signed-in user
+  EXPECT_FALSE(manifest->scripts.connect_script.empty());
+  ASSERT_EQ(manifest->options.size(), 3);
+  const auto &profile = manifest->options[0];
+  EXPECT_EQ(profile.choices_script, "choices.ps1");
+  EXPECT_EQ(profile.default_value, "");
+  EXPECT_TRUE(plugins::is_overridable(profile));
+  EXPECT_TRUE(fs::is_regular_file(dir / "hdr.ps1"));
+}
 #endif
 
 /**
