@@ -2564,6 +2564,27 @@ TEST(PluginsBundledTest, HdrControlManifestIsValid) {
   EXPECT_TRUE(plugins::is_overridable(profile));
   EXPECT_TRUE(fs::is_regular_file(dir / "hdr.ps1"));
 }
+
+TEST(PluginsBundledTest, DisplayManagerManifestIsValid) {
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "display-manager";
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->id, "display-manager");
+  EXPECT_FALSE(manifest->elevated);  // Display settings belong to the signed-in user's session
+  EXPECT_TRUE(manifest->manages_display);  // Sunshine's own display device configuration would undo its changes
+  EXPECT_FALSE(manifest->scripts.undo_script.empty());
+  ASSERT_EQ(manifest->options.size(), 3);
+  const auto &display = manifest->options[0];
+  EXPECT_EQ(display.id, "display");
+  EXPECT_EQ(display.default_value, "");  // Don't change: the current primary display
+  EXPECT_EQ(display.choices_script, "choices.ps1");
+  EXPECT_TRUE(plugins::is_overridable(display));
+  EXPECT_EQ(manifest->options[1].id, "exclusive");  // The same option IDs as Virtual Display
+  EXPECT_EQ(manifest->options[2].id, "new_desktop");
+  EXPECT_TRUE(fs::is_regular_file(dir / "display.ps1"));
+  EXPECT_TRUE(fs::is_regular_file(dir / "desktop.ps1"));
+}
 #endif
 
 /**

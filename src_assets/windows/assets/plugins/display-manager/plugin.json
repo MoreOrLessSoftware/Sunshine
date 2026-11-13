@@ -1,0 +1,42 @@
+{
+  "id": "display-manager",
+  "name": "Display Manager",
+  "version": "1.0.0",
+  "description": "Sets a physical display to the client's resolution for the length of the stream, with the client's refresh rate or the closest one the display has, and makes it the primary display. Leaves the resolution as it is when the display doesn't support the client's. Puts back the previous display settings when the application quits.",
+  "author": "Sunshine",
+  "order": 100,
+  "elevated": false,
+  "manages_display": true,
+  "scripts": {
+    "install": "install.ps1",
+    "do": "do.ps1",
+    "undo": "undo.ps1"
+  },
+  "options": [
+    {
+      "id": "display",
+      "type": "choice",
+      "label": "Primary display",
+      "description": "Physical display to stream from. It is turned on if it is off and made the primary display. With Don't change, the current primary display is used.",
+      "default": "",
+      "choices": [
+        {"value": "", "label": "Don't change"}
+      ],
+      "choices_script": "choices.ps1"
+    },
+    {
+      "id": "exclusive",
+      "type": "boolean",
+      "label": "Turn off other displays",
+      "description": "Turn off the other displays while streaming.",
+      "default": false
+    },
+    {
+      "id": "new_desktop",
+      "type": "boolean",
+      "label": "Start the stream on a new desktop",
+      "description": "Create a new Windows desktop before setting up the display, and remove it when the stream ends. Default: Off",
+      "default": false
+    }
+  ]
+}
