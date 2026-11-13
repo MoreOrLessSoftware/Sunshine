@@ -2334,6 +2334,19 @@ p {
     vertical-align: top;
 }
 
+/* On a phone, each variable sits above its description instead of beside it. */
+@media (max-width: 575.98px) {
+    .env-table tr,
+    .env-table td {
+        display: block;
+    }
+
+    .env-table td:first-child {
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+}
+
 /* Monospace Text */
 .monospace {
     font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', 'Courier New', monospace;
