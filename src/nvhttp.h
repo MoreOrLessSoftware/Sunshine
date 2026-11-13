@@ -337,6 +337,14 @@ namespace nvhttp {
    * @return true if the client was found and updated.
    */
   bool set_client_enabled(std::string_view uuid, bool enabled);
+
+  /**
+   * @brief Rename a client.
+   * @param uuid The UUID of the client.
+   * @param name The client's new name.
+   * @return true if the client was found and renamed.
+   */
+  bool set_client_name(std::string_view uuid, const std::string &name);
   /**
    * @brief Get cert by UUID.
    *

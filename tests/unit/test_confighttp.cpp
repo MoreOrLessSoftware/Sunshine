@@ -2727,6 +2727,7 @@ protected:
     server->resource["^/client-plugin-options-test$"]["POST"] = confighttp::saveClientPluginOptions;
     server->resource["^/unpair-test$"]["POST"] = confighttp::unpair;
     server->resource["^/unpair-all-test$"]["POST"] = confighttp::unpairAll;
+    server->resource["^/client-update-test$"]["POST"] = confighttp::updateClient;
   }
 
   void TearDown() override {
@@ -2819,6 +2820,50 @@ TEST_F(ClientPluginOptionsTest, UnpairingAClientRemovesItsOverrides) {
 
   ASSERT_EQ(send("POST", "/unpair-all-test")->status_code, "200 OK");
   EXPECT_EQ(get_overrides(), nlohmann::json::object());
+}
+
+TEST_F(ClientPluginOptionsTest, RenamesAClientWithoutChangingWhetherItIsEnabled) {
+  const auto client_of = [this]() {
+    for (const auto &client : nvhttp::get_all_clients()) {
+      if (client["uuid"] == uuid) {
+        return client;
+      }
+    }
+    return nlohmann::json {};
+  };
+
+  auto response = send("POST", "/client-update-test", nlohmann::json {{"uuid", uuid}, {"enabled", false}}.dump());
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(client_of()["enabled"], false);
+
+  response = send("POST", "/client-update-test", nlohmann::json {{"uuid", uuid}, {"name", "  Living Room  "}}.dump());
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("status"), true);
+  EXPECT_EQ(client_of()["name"], "Living Room");
+  EXPECT_EQ(client_of()["enabled"], false);
+
+  response = send("POST", "/client-update-test", nlohmann::json {{"uuid", uuid}, {"name", "Den"}, {"enabled", true}}.dump());
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(client_of()["name"], "Den");
+  EXPECT_EQ(client_of()["enabled"], true);
+
+  response = send("POST", "/client-update-test", R"({"uuid":"unknown","name":"Other"})");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("status"), false);
+
+  const std::vector<std::pair<std::string, std::string>> rejected {
+    {R"({"name":1})", "'name' must be a string"},
+    {R"({"name":"   "})", "'name' must not be empty"},
+    {R"({"enabled":"yes"})", "'enabled' must be a boolean"},
+  };
+  for (const auto &[fields, error] : rejected) {
+    auto body = nlohmann::json::parse(fields);
+    body["uuid"] = uuid;
+    response = send("POST", "/client-update-test", body.dump());
+    EXPECT_EQ(response->status_code, "400 Bad Request") << fields;
+    EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("error"), error) << fields;
+  }
+  EXPECT_EQ(client_of()["name"], "Den");
 }
 
 TEST_F(PluginsConfigHttpTest, SaveAppKeepsValidPluginOptions) {

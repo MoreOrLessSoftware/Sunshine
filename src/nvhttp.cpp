@@ -1932,6 +1932,18 @@ namespace nvhttp {
     return false;
   }
 
+  bool set_client_name(const std::string_view uuid, const std::string &name) {
+    std::lock_guard lock {client_auth_mutex()};
+    for (auto &named_cert : client_root.named_devices) {
+      if (named_cert.uuid == uuid) {
+        named_cert.name = name;
+        save_state();
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * @brief Get cert by UUID.
    */

@@ -183,6 +183,14 @@ namespace confighttp {
   void unpairAll(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Rename a client, or enable or disable it.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void updateClient(resp_https_t response, req_https_t request);
+
+  /**
    * @brief Start installing a plugin, optionally activating it once the install succeeds.
    *
    * @param response HTTP response object to populate.

@@ -1618,18 +1618,22 @@ namespace confighttp {
   }
 
   /**
-   * @brief Enable or disable a client.
+   * @brief Rename a client, or enable or disable it.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
-   * The body for the POST request should be JSON serialized in the following format:
+   * The body for the POST request should be JSON serialized in the following format, where `name` and `enabled`
+   * are each optional. A name has its surrounding spaces removed and must not be empty then.
    * @code{.json}
    * {
    *   "uuid": "<uuid>",
+   *   "name": "Living Room TV",
    *   "enabled": true
    * }
    * @endcode
    *
-   * @api_examples{/api/clients/update| POST| {"uuid":"<uuid>","enabled":true}}
+   * The response's `status` is `false` when no paired client has the UUID.
+   *
+   * @api_examples{/api/clients/update| POST| {"uuid":"<uuid>","name":"Living Room TV","enabled":true}}
    */
   void updateClient(resp_https_t response, req_https_t request) {
     if (!check_content_type(response, request, "application/json")) {
@@ -1651,10 +1655,38 @@ namespace confighttp {
       nlohmann::json input_tree = nlohmann::json::parse(ss.str());
       nlohmann::json output_tree;
       std::string uuid = input_tree.value("uuid", "");
-      bool enabled = input_tree.value("enabled", true);
-      output_tree["status"] = nvhttp::set_client_enabled(uuid, enabled);
 
-      if (!enabled && output_tree["status"]) {
+      std::optional<std::string> name;
+      if (input_tree.contains("name")) {
+        if (!input_tree["name"].is_string()) {
+          bad_request(response, request, "'name' must be a string");
+          return;
+        }
+        name = boost::algorithm::trim_copy(input_tree["name"].get<std::string>());
+        if (name->empty()) {
+          bad_request(response, request, "'name' must not be empty");
+          return;
+        }
+      }
+      std::optional<bool> enabled;
+      if (input_tree.contains("enabled")) {
+        if (!input_tree["enabled"].is_boolean()) {
+          bad_request(response, request, "'enabled' must be a boolean");
+          return;
+        }
+        enabled = input_tree["enabled"].get<bool>();
+      }
+
+      bool found = !nvhttp::get_cert_by_uuid(uuid).empty();
+      if (found && name) {
+        found = nvhttp::set_client_name(uuid, *name);
+      }
+      if (found && enabled) {
+        found = nvhttp::set_client_enabled(uuid, *enabled);
+      }
+      output_tree["status"] = found;
+
+      if (found && enabled == false) {
         auto cert = nvhttp::get_cert_by_uuid(uuid);
         if (!cert.empty()) {
           rtsp_stream::terminate_sessions_by_cert(cert);
