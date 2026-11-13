@@ -793,6 +793,12 @@
     "updating": "Updating...",
     "view_log": "View log"
   },
+  "plugin_choices": {
+    "error": "Couldn't list the choices: {error}",
+    "loading": "Listing the choices...",
+    "not_found": "{value} (not found)",
+    "refresh": "List the choices again"
+  },
   "plugin_overrides": {
     "inherited_app": "Not overridden: uses the application's setting if it has one, otherwise the plugin's ({value})",
     "inherited_plugin": "Not overridden: uses the plugin's setting ({value})",

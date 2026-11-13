@@ -332,10 +332,8 @@
                   <template v-else>
                     <label class="form-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
                     <span v-if="isOverridden(plugin, option)" class="plugin-overridden ms-1" :title="$t('plugins.overridden_option')">*</span>
-                    <select v-if="option.type === 'choice'" class="form-select"
-                            :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]">
-                      <option v-for="choice in option.choices" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
-                    </select>
+                    <plugin-choice-select v-if="option.type === 'choice'" :plugin="plugin" :option="option"
+                                          :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]"></plugin-choice-select>
                     <input v-else-if="option.type === 'number'" type="number" class="form-control"
                            :id="'opt-' + plugin.id + '-' + option.id" v-model.number="drafts[plugin.id][option.id]"
                            :min="option.min" :max="option.max" :step="option.step ?? 'any'"
@@ -376,6 +374,7 @@
   import { createApp } from 'vue'
   import { initApp } from './init'
   import Navbar from './Navbar.vue'
+  import PluginChoiceSelect from './PluginChoiceSelect.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
   import { BookOpen, CloudDownload, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
@@ -460,6 +459,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
   const app = createApp({
     components: {
       Navbar,
+      PluginChoiceSelect,
       BookOpen,
       CloudDownload,
       CopyBlock,
@@ -666,10 +666,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         switch (option.type) {
           case 'boolean':
             return this.i18n.t(option.default ? 'plugins.default_on' : 'plugins.default_off');
-          case 'choice': {
-            const choice = option.choices.find((c) => c.value === option.default);
-            return choice ? choice.label : String(option.default);
-          }
+          case 'choice':
+            return option.choices.find((c) => c.value === option.default)?.label ?? String(option.default);
           default:
             return option.default === '' || option.default === null || option.default === undefined ? '' : String(option.default);
         }

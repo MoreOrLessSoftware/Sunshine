@@ -10,6 +10,7 @@
  * options overridden, as the API expects.
  */
 import { computed } from 'vue'
+import PluginChoiceSelect, { choiceLabel } from './PluginChoiceSelect.vue'
 
 const model = defineModel({ type: Object, required: true });
 const props = defineProps({
@@ -72,8 +73,7 @@ function describe(t, option, value) {
     return t(value ? 'plugin_overrides.on' : 'plugin_overrides.off');
   }
   if (option.type === 'choice') {
-    const choice = option.choices.find((c) => c.value === value);
-    return choice ? choice.label : String(value);
+    return choiceLabel(props.plugin, option, value);
   }
   return value === '' || value === null || value === undefined ? '""' : String(value);
 }
@@ -97,11 +97,9 @@ function describe(t, option, value) {
                @change="setValue(option, $event.target.checked)">
         <label class="form-check-label" :for="controlId(option)">{{ $t(valueOf(option) ? 'plugin_overrides.on' : 'plugin_overrides.off') }}</label>
       </div>
-      <select v-else-if="option.type === 'choice'" class="form-select" :id="controlId(option)"
-              :disabled="!isOverridden(option)" :value="valueOf(option)"
-              @change="setValue(option, $event.target.value)">
-        <option v-for="choice in option.choices" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
-      </select>
+      <PluginChoiceSelect v-else-if="option.type === 'choice'" :plugin="plugin" :option="option" :id="controlId(option)"
+                          :disabled="!isOverridden(option)" :model-value="valueOf(option)"
+                          @update:model-value="setValue(option, $event)" />
       <input v-else-if="option.type === 'number'" type="number" class="form-control" :id="controlId(option)"
              :disabled="!isOverridden(option)" :value="valueOf(option)"
              :min="option.min" :max="option.max" :step="option.step ?? 'any'"
