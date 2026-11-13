@@ -64,7 +64,18 @@ namespace plugins {
     std::optional<double> step;  ///< Increment suggested to the web UI for a number option.
     std::vector<choice_t> choices;  ///< Accepted values of a choice option.
     bool apply = false;  ///< Whether saving a new value runs the plugin's `apply` script.
+    bool host = false;  ///< Whether the option is set for the whole host only, from `"scope": "host"`, so applications and clients can't override it.
   };
+
+  /**
+   * @brief Check whether applications and clients may override an option.
+   *
+   * Options marked `apply` change the host itself and options with `"scope": "host"` are host-wide, so neither can.
+   *
+   * @param option Option to check.
+   * @return `true` when an override may set the option.
+   */
+  bool is_overridable(const option_t &option);
 
   /**
    * @brief Scripts a plugin runs, as file names relative to its directory. Empty when absent.
@@ -155,6 +166,7 @@ namespace plugins {
     nlohmann::json options = nlohmann::json::object();  ///< Option values set by the user.
     std::string installed_version;  ///< Manifest version whose install script last succeeded, or empty when not installed.
     std::string origin;  ///< Folder or update feed URL a custom plugin was last imported from, or empty.
+    nlohmann::json clients = nlohmann::json::object();  ///< Overrides for each client, keyed by its UUID, as `{"active": false, "options": {...}}` with either key optional.
   };
 
   /**
@@ -275,6 +287,91 @@ namespace plugins {
    * @return An object holding a value for every declared option, or `std::nullopt` when rejected.
    */
   std::optional<nlohmann::json> normalize_options(const manifest_t &manifest, const nlohmann::json &input, bool strict, std::string &error);
+
+  /**
+   * @brief Validate the option values an application or client overrides for a plugin.
+   *
+   * Unlike `normalize_options()`, the result only holds the options the input sets.
+   *
+   * @param manifest Plugin declaring the options.
+   * @param input Object of option values.
+   * @param strict When `true`, an unknown option, an invalid value or an option that can't be overridden (see
+   *               `is_overridable()`) rejects the input; otherwise each is dropped.
+   * @param error Receives the reason when the input is rejected.
+   * @return Object holding the accepted values, or `std::nullopt` when rejected.
+   */
+  std::optional<nlohmann::json> normalize_overrides(const manifest_t &manifest, const nlohmann::json &input, bool strict, std::string &error);
+
+  /**
+   * @brief Combine a plugin's option values with an application's and a client's overrides.
+   *
+   * Each layer replaces the values of the one before: the plugin's own values, then the application's, then the
+   * client's. Invalid values and options that can't be overridden are ignored in the overrides.
+   *
+   * @param manifest Plugin declaring the options.
+   * @param options The plugin's own option values.
+   * @param app_overrides Values the application overrides, or `null`.
+   * @param client_overrides Values the client overrides, or `null`.
+   * @return An object holding a value for every declared option.
+   */
+  nlohmann::json resolve_options(const manifest_t &manifest, const nlohmann::json &options, const nlohmann::json &app_overrides, const nlohmann::json &client_overrides);
+
+  /**
+   * @brief Build the environment of a plugin's stream scripts for an application and a client.
+   *
+   * @param id Plugin ID.
+   * @param app_overrides The application's `plugin-options`: override objects keyed by plugin ID.
+   * @param client_uuid UUID of the client streaming, or empty for none.
+   * @return The plugin's script environment with the options resolved by `resolve_options()`, or `std::nullopt`
+   *         when the plugin no longer exists or the client turned it off.
+   */
+  std::optional<std::map<std::string, std::string>> stream_env(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid);
+
+  /**
+   * @brief Check whether a client turned a plugin off for its streams.
+   *
+   * @param id Plugin ID.
+   * @param client_uuid Client UUID, or empty for none.
+   * @return `true` when the client's overrides set `"active": false` for the plugin.
+   */
+  bool disabled_for_client(const std::string &id, const std::string &client_uuid);
+
+  /**
+   * @brief Validate the `plugin-options` of an application.
+   *
+   * @param input Object mapping plugin IDs to objects of option values.
+   * @param error Receives the reason when the input is rejected.
+   * @return The input with each plugin's values validated by `normalize_overrides()` in strict mode and empty entries
+   *         removed, or `std::nullopt` when an entry names an unknown plugin or is rejected.
+   */
+  std::optional<nlohmann::json> normalize_app_overrides(const nlohmann::json &input, std::string &error);
+
+  /**
+   * @brief List every client's plugin overrides.
+   *
+   * @return Object mapping client UUIDs to objects mapping plugin IDs to `{"active": false, "options": {...}}`,
+   *         with either key optional.
+   */
+  nlohmann::json client_overrides();
+
+  /**
+   * @brief Replace a client's plugin overrides.
+   *
+   * @param client_uuid Client UUID.
+   * @param input Object mapping plugin IDs to `{"active": bool, "options": {...}}`, with either key optional.
+   *              `"active": true` is the same as leaving it out. Options are validated by `normalize_overrides()`
+   *              in strict mode. Plugins missing from the input lose the client's overrides.
+   * @param error Receives the reason when the input is rejected.
+   * @return `result_e::ok`, `result_e::not_found` for an unknown plugin, or `result_e::invalid`.
+   */
+  result_e set_client_overrides(const std::string &client_uuid, const nlohmann::json &input, std::string &error);
+
+  /**
+   * @brief Remove the plugin overrides of a client that was unpaired.
+   *
+   * @param client_uuid Client UUID, or empty to remove every client's overrides.
+   */
+  void forget_client(const std::string &client_uuid);
 
   /**
    * @brief Build the environment variable name that carries an option to the scripts.
@@ -476,12 +573,16 @@ namespace plugins {
   /**
    * @brief Build the preparation commands of the active plugins.
    *
+   * Each command names its plugin in `plugin`, and its environment holds the options with the application's
+   * overrides. When a client starts or resumes the application, `stream_env()` adds the client's.
+   *
    * @param excluded IDs of plugins the application opted out of.
+   * @param app_overrides The application's `plugin-options`: override objects keyed by plugin ID.
    * @return In plugin order, an app command for each active plugin with a do or undo script that doesn't need a
    *         reinstall (see `needs_reinstall()`),
    *         followed by a connect command when the plugin also has a connect or disconnect script.
    */
-  std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded);
+  std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded, const nlohmann::json &app_overrides = nullptr);
 
   /**
    * @brief Find the active plugin that sets up the display for an application.
@@ -490,10 +591,11 @@ namespace plugins {
    * otherwise be applied before the plugin's do script and fight over the display layout.
    *
    * @param excluded IDs of plugins the application opted out of.
+   * @param client_uuid UUID of the client streaming, whose turned-off plugins are skipped too, or empty for none.
    * @return Name of the first active, installed plugin (in plugin order) that doesn't need a reinstall and whose
    *         manifest sets `manages_display`, or an empty string when there is none.
    */
-  std::string display_plugin(const std::vector<std::string> &excluded);
+  std::string display_plugin(const std::vector<std::string> &excluded, const std::string &client_uuid = {});
 
   /**
    * @brief The client commands of one plugin, as offered to clients.
@@ -516,9 +618,12 @@ namespace plugins {
    * @param excluded IDs of plugins the application being streamed opted out of.
    * @param overrides The user's labels, icons and programs, which replace the plugin's. A status file still
    *                  replaces the label and icon while it exists, as it shows what the command will do next.
+   * @param app_overrides The `plugin-options` of the application being streamed, used in the scripts' environment.
+   * @param client_uuid UUID of the client asking: its overrides are used in the scripts' environment, and the
+   *                    plugins it turned off are left out. Empty for none.
    * @return In plugin order, the commands of each active, installed plugin that has any and doesn't need a reinstall.
    */
-  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides = {});
+  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides = {}, const nlohmann::json &app_overrides = nullptr, const std::string &client_uuid = {});
 
   /**
    * @brief Change whether a plugin is active and the values of its options.

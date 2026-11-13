@@ -107,6 +107,7 @@ namespace client_commands {
     std::string client_name;  ///< Name of the client that picked the command, as `SUNSHINE_CLIENT_NAME`.
     std::string app_id;  ///< ID of the application being streamed, as `SUNSHINE_APP_ID`.
     std::string app_name;  ///< Name of the application being streamed, as `SUNSHINE_APP_NAME`.
+    std::string client_uuid;  ///< UUID of the client that picked the command, or empty when it's unknown.
   };
 
   /**
@@ -429,10 +430,12 @@ namespace client_commands {
   /**
    * @brief Build what is offered to a client now.
    *
+   * @param client_uuid UUID of the client asking, whose plugin overrides apply (see `plugins::offered_client_commands()`),
+   *                    or empty for none.
    * @return The global commands followed by the active plugins' top-level commands, then the groups of the
    *         application being streamed, of the program in the foreground, and of the active plugins.
    */
-  offer_t current_offer();
+  offer_t current_offer(const std::string &client_uuid = {});
 
   /**
    * @brief Describe an offer for the client.

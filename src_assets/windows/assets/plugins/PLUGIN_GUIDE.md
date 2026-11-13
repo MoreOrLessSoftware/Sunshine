@@ -135,7 +135,7 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `icon`        | No       | Icon of the plugin's group of client commands in the menu, such as `material:extension` (a [Material Symbols](https://fonts.google.com/icons) name). |
 
 Each option has an `id` (lowercase letters, digits and `_`, starting with a letter), a `type`, and optionally a
-`label`, `description`, `default` and `apply`.
+`label`, `description`, `default`, `apply` and `scope`.
 
 | Type      | Value                                    | Extra fields                                                                                  |
 |-----------|------------------------------------------|-----------------------------------------------------------------------------------------------|
@@ -153,6 +153,20 @@ Every new value of that save is stored only if the script exits with 0. If it fa
 user can select *Save options* again, so the script should leave things as they were before it exits with an error.
 Saves that change no such option don't run the script. An option changed before the plugin is installed doesn't
 run it either, so the install script should read the option too.
+
+## Overriding options
+Each application and each client can override a plugin's options for their streams. The values are combined in
+this order, the last one that sets an option winning: the plugin's own value, then the application's, then the
+client's. A client can also turn the plugin off for its streams. The do, undo, connect and disconnect scripts and the
+client commands' scripts get the combined values; install, uninstall, action and apply scripts and the panel always
+get the plugin's own.
+
+An option marked `apply` can't be overridden, as it changes the host itself. Set `"scope": "host"` on any other
+option that only makes sense for the whole host, such as a cache size or a setting the install script uses, to keep
+applications and clients from overriding it. The default, `"stream"`, lets them.
+
+The do and undo scripts run with the values of the client that launched the application, even when another client
+resumes it later. The connect and disconnect scripts run with the values of the client resuming it.
 
 ## Client commands
 A plugin can add commands that Moonlight clients show in their in-stream menu, which run on this host. They're offered while the plugin is installed and active and not turned off for the application being
@@ -210,7 +224,7 @@ when it exits with a non-zero code, including when it throws. Every script recei
 | `SUNSHINE_PLUGIN_ID`         | The plugin ID.                                                                                |
 | `SUNSHINE_PLUGIN_DIR`        | The plugin folder. `$PSScriptRoot` gives the same path.                                       |
 | `SUNSHINE_PLUGIN_DATA_DIR`   | A folder for downloaded dependencies and saved state. It is deleted after a successful uninstall. |
-| `SUNSHINE_PLUGIN_OPT_<ID>`   | The value of each option, with the option ID in upper case. Booleans are `true` or `false`.   |
+| `SUNSHINE_PLUGIN_OPT_<ID>`   | The value of each option, with the option ID in upper case. Booleans are `true` or `false`. Stream scripts get the values the application and client [override](#overriding-options). |
 
 The data folder is created when the plugin is installed, and only administrators can write to it by default. If a do
 or undo script that is not elevated needs to write there, grant users access to it in the install script.

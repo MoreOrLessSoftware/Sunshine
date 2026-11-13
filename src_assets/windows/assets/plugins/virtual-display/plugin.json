@@ -80,6 +80,7 @@
     {
       "id": "remove_driver",
       "type": "boolean",
+      "scope": "host",
       "label": "Remove the driver when uninstalling",
       "description": "Also remove the SudoVDA driver when this plugin is uninstalled. Leave this off if Apollo is installed, since it uses the same driver.",
       "default": false

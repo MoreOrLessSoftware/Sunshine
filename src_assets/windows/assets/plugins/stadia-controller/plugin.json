@@ -61,6 +61,7 @@
     {
       "id": "dns_upstream",
       "type": "string",
+      "scope": "host",
       "label": "DNS upstream",
       "description": "Where the receiver's DNS server forwards the names it does not answer itself, usually your router. Leave empty to use this PC's own DNS server. The controller must use this PC as its DNS server, for example through a DHCP option on your router.",
       "default": ""
@@ -82,6 +83,7 @@
     {
       "id": "keep_logs",
       "type": "number",
+      "scope": "host",
       "label": "Receiver logs to keep",
       "description": "How many receiver run directories to keep in the plugin's data folder.",
       "default": 10,

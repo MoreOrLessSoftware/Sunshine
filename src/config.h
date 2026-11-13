@@ -382,6 +382,7 @@ namespace config {
     static type_e parse_type(std::string_view value);
 
     std::map<std::string, std::string> env;  ///< Variables added to the environment of these commands only.
+    std::string plugin;  ///< ID of the plugin whose scripts these are, or empty for other commands.
   };
 
   /**

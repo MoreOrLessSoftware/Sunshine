@@ -846,11 +846,12 @@ namespace client_commands {
     return offer;
   }
 
-  offer_t current_offer() {
+  offer_t current_offer(const std::string &client_uuid) {
     std::string app_id;
     std::string app_name;
     std::vector<command_t> app_commands;
     std::vector<std::string> excluded_plugins;
+    nlohmann::json plugin_options;
 
     if (const int running_id = proc::proc.running(); running_id > 0) {
       for (const auto &app : proc::proc.get_apps()) {
@@ -858,6 +859,7 @@ namespace client_commands {
           app_id = app.id;
           app_name = app.name;
           excluded_plugins = app.exclude_plugins;
+          plugin_options = app.plugin_options;
           app_commands = app.client_commands;
           break;
         }
@@ -874,7 +876,7 @@ namespace client_commands {
     }
 
     // The active plugins' commands: some with the menu's own, the rest in a group for each plugin
-    for (auto &plugin : plugins::offered_client_commands(excluded_plugins, load_plugin_overrides(file()))) {
+    for (auto &plugin : plugins::offered_client_commands(excluded_plugins, load_plugin_overrides(file()), plugin_options, client_uuid)) {
       for (auto &command : plugin.top_level) {
         offer.commands.push_back(std::move(command));
       }

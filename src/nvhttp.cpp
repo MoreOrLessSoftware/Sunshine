@@ -202,6 +202,7 @@ namespace nvhttp {
   // Set by TLS verify callback, read by launch/resume handler (single-threaded HTTPS server)
   std::string last_verified_client_cert;  ///< Last client certificate accepted by the TLS verify callback.  // NOSONAR(cpp:S5421): intentionally mutable global
   std::string last_verified_client_name;  ///< Friendly name of last client certificate accepted by the TLS verify callback. // NOSONAR(cpp:S5421): intentionally mutable global
+  std::string last_verified_client_uuid;  ///< UUID of last client certificate accepted by the TLS verify callback. // NOSONAR(cpp:S5421): intentionally mutable global
 
   /**
    * @brief Case-insensitive map used for HTTP headers and query parameters.
@@ -471,7 +472,7 @@ namespace nvhttp {
    * @param launch_session Launch session with the client's display settings.
    */
   void prepare_display(const int app_id, const rtsp_stream::launch_session_t &launch_session) {
-    if (const auto plugin = proc::proc.get_display_plugin(app_id); !plugin.empty()) {
+    if (const auto plugin = proc::proc.get_display_plugin(app_id, launch_session.client_uuid); !plugin.empty()) {
       BOOST_LOG(info) << "Skipping display device configuration: the "sv << plugin << " plugin sets up the display for this application"sv;
       return;
     }
@@ -535,6 +536,7 @@ namespace nvhttp {
     launch_session->rtsp_url_scheme = launch_session->rtsp_cipher ? "rtspenc://"s : "rtsp://"s;
     launch_session->client_cert = last_verified_client_cert;
     launch_session->client_name = last_verified_client_name;
+    launch_session->client_uuid = last_verified_client_uuid;
 
     // Generate the unique identifiers for this connection that we will send later during RTSP handshake
     unsigned char raw_payload[8];
@@ -1642,7 +1644,12 @@ namespace nvhttp {
   void clientcommands(resp_https_t response, req_https_t request) {
     print_req<SunshineHTTPS>(request);
 
-    write_json(response, SimpleWeb::StatusCode::success_ok, client_commands::describe(client_commands::current_offer()));
+    std::string client_uuid;
+    {
+      std::lock_guard lock {client_auth_mutex()};
+      client_uuid = last_verified_client_uuid;
+    }
+    write_json(response, SimpleWeb::StatusCode::success_ok, client_commands::describe(client_commands::current_offer(client_uuid)));
   }
 
   /**
@@ -1669,13 +1676,14 @@ namespace nvhttp {
       std::lock_guard lock {client_auth_mutex()};
       cert = last_verified_client_cert;
       context.client_name = last_verified_client_name;
+      context.client_uuid = last_verified_client_uuid;
     }
     if (!rtsp_stream::has_session_for_cert(cert)) {
       write_json(response, SimpleWeb::StatusCode::client_error_forbidden, {{"status", "error"}, {"message", "Commands only run while streaming"}});
       return;
     }
 
-    const auto offer = client_commands::current_offer();
+    const auto offer = client_commands::current_offer(context.client_uuid);
     auto command = client_commands::find(offer, id->second);
     if (!command) {
       write_json(response, SimpleWeb::StatusCode::client_error_not_found, {{"status", "error"}, {"message", "The command is no longer available"}});
@@ -1723,13 +1731,21 @@ namespace nvhttp {
   }
 
   /**
-   * @brief Check whether a paired client certificate is allowed to connect and retrieve its friendly name.
+   * @brief What the paired-client database says about a client certificate.
+   */
+  struct client_status_t {
+    bool enabled;  ///< Whether the certificate may connect: `false` only for a paired client that was disabled.
+    std::string name;  ///< Friendly client name set during pairing, or empty when the certificate isn't found.
+    std::string uuid;  ///< UUID of the paired client, or empty when the certificate isn't found.
+  };
+
+  /**
+   * @brief Check whether a paired client certificate is allowed to connect and retrieve its name and UUID.
    *
    * @param cert_pem PEM-encoded client certificate to look up.
-   * @return Pair of (bool enabled, string name) where "enabled" is True when the client certificate belongs to an
-             enabled device and "name" is the friendly client name set during pairing.
+   * @return The client's status.
    */
-  std::pair<bool, std::string> get_client_status(const std::string_view cert_pem);
+  client_status_t get_client_status(const std::string_view cert_pem);
 
   void start() {
     platf::set_thread_name("nvhttp");
@@ -1790,7 +1806,7 @@ namespace nvhttp {
 
       // Check if this client is enabled
       auto pem = crypto::pem(x509);
-      auto [enabled, client_name] = get_client_status(pem);
+      auto [enabled, client_name, client_uuid] = get_client_status(pem);
       if (!enabled) {
         BOOST_LOG(info) << "Client is disabled -- denied"sv;
         return verified;
@@ -1798,6 +1814,7 @@ namespace nvhttp {
 
       last_verified_client_cert = pem;
       last_verified_client_name = client_name;
+      last_verified_client_uuid = client_uuid;
       verified = 1;
 
       return verified;
@@ -1929,16 +1946,16 @@ namespace nvhttp {
   }
 
   /**
-   * @brief Check whether a paired client certificate is allowed to connect and return its friendly name.
+   * @brief Check whether a paired client certificate is allowed to connect and return its name and UUID.
    */
-  std::pair<bool, std::string> get_client_status(const std::string_view cert_pem) {
+  client_status_t get_client_status(const std::string_view cert_pem) {
     const client_t &client = client_root;
     for (const auto &named_cert : client.named_devices) {
       if (named_cert.cert == cert_pem) {
-        return {named_cert.enabled, named_cert.name};
+        return {named_cert.enabled, named_cert.name, named_cert.uuid};
       }
     }
-    return {true, {}};
+    return {true, {}, {}};
   }
 
 #ifdef SUNSHINE_TESTS

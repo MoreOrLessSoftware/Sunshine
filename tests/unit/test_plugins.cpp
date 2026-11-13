@@ -492,7 +492,7 @@ TEST_F(PluginsTest, ScriptCommandRunsPowerShellFile) {
 TEST_F(PluginsTest, StateRoundTrips) {
   std::unordered_map<std::string, plugins::plugin_state_t> state;
   state["a"] = {true, true, {{"x", 1}}, "1.2.0", "C:/dev/a"};
-  state["b"] = {false, false, json::object(), "", "https://example.com/latest.json"};
+  state["b"] = {false, false, json::object(), "", "https://example.com/latest.json", {{"tv", {{"active", false}}}}};
   ASSERT_TRUE(plugins::save_state(state_file, state));
   EXPECT_FALSE(fs::exists(state_file.string() + ".tmp"));
 
@@ -506,6 +506,8 @@ TEST_F(PluginsTest, StateRoundTrips) {
   EXPECT_EQ(loaded.at("b").installed_version, "");
   EXPECT_EQ(loaded.at("a").origin, "C:/dev/a");
   EXPECT_EQ(loaded.at("b").origin, "https://example.com/latest.json");
+  EXPECT_EQ(loaded.at("a").clients, json::object());
+  EXPECT_EQ(loaded.at("b").clients, json::parse(R"({"tv":{"active":false}})"));
 }
 
 TEST_F(PluginsTest, LoadStateKeepsOnlyTheInstalledVersionOfInstalledPlugins) {
@@ -3184,4 +3186,428 @@ TEST_F(PluginsTest, LoadStopsStartupReinstalls) {
   plugins::load(paths());
   plugins::reset_session_check_for_testing();
   EXPECT_TRUE(calls.empty());
+}
+
+namespace {
+  /**
+   * @brief A manifest whose `mode` option runs the apply script and whose `name` option is set for the host only.
+   *
+   * @param id Plugin ID.
+   * @return Manifest JSON.
+   */
+  json override_manifest(const std::string &id) {
+    auto manifest = apply_manifest(id);
+    manifest["options"][2]["scope"] = "host";
+    return manifest;
+  }
+
+#ifdef _WIN32
+  /**
+   * @brief Build a command that prints a label and the plugin's `multiplier` option.
+   *
+   * @param label Text printed before the value.
+   * @return Command line.
+   */
+  std::string echo_multiplier(std::string_view label) {
+    return std::format("cmd /c echo {}=%SUNSHINE_PLUGIN_OPT_MULTIPLIER%", label);
+  }
+#else
+  /**
+   * @brief Build a command that prints a label and the plugin's `multiplier` option.
+   *
+   * @param label Text printed before the value.
+   * @return Command line.
+   */
+  std::string echo_multiplier(std::string_view label) {
+    return std::format("sh -c \"echo {}=$SUNSHINE_PLUGIN_OPT_MULTIPLIER\"", label);
+  }
+#endif
+}  // namespace
+
+TEST_F(PluginsTest, AnOptionCanBeSetForTheHostOnly) {
+  const auto dir = write_plugin(builtin_dir, "p", override_manifest("p"));
+  std::string error;
+  auto manifest = plugins::parse_manifest(override_manifest("p"), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_TRUE(plugins::is_overridable(manifest->options[0]));
+  EXPECT_TRUE(manifest->options[2].host);
+  EXPECT_FALSE(plugins::is_overridable(manifest->options[2]));  // host only
+  EXPECT_FALSE(plugins::is_overridable(manifest->options[3]));  // runs the apply script
+
+  auto stream = full_manifest("p");
+  stream["options"][0]["scope"] = "stream";
+  manifest = plugins::parse_manifest(stream, dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_FALSE(manifest->options[0].host);
+
+  for (const json &scope : {json("everywhere"), json(true)}) {
+    auto bad = full_manifest("p");
+    bad["options"][0]["scope"] = scope;
+    EXPECT_FALSE(plugins::parse_manifest(bad, dir, true, error));
+    EXPECT_EQ(error, R"(option 'enabled': 'scope' must be "host" or "stream")");
+  }
+}
+
+TEST_F(PluginsTest, OverridesKeepOnlyTheValuesTheySet) {
+  const auto dir = write_plugin(builtin_dir, "p", override_manifest("p"));
+  std::string error;
+  const auto manifest = plugins::parse_manifest(override_manifest("p"), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+
+  auto result = plugins::normalize_overrides(*manifest, json::parse(R"({"multiplier":4,"enabled":false})"), true, error);
+  ASSERT_TRUE(result) << error;
+  EXPECT_EQ(*result, json::parse(R"({"multiplier":4,"enabled":false})"));
+
+  EXPECT_EQ(*plugins::normalize_overrides(*manifest, nullptr, true, error), json::object());
+
+  const std::vector<std::pair<std::string, std::string>> rejected {
+    {R"({"missing":1})", "plugin 'p' has no option 'missing'"},
+    {R"({"name":"Mine"})", "option 'name' of plugin 'p' can't be overridden"},
+    {R"({"mode":"on"})", "option 'mode' of plugin 'p' can't be overridden"},
+    {R"({"multiplier":99})", "invalid value for option 'multiplier'"},
+    {R"([1])", "options must be an object"},
+  };
+  for (const auto &[input, expected] : rejected) {
+    EXPECT_FALSE(plugins::normalize_overrides(*manifest, json::parse(input), true, error)) << input;
+    EXPECT_EQ(error, expected);
+  }
+
+  // Leniently, what can't be used is dropped
+  result = plugins::normalize_overrides(*manifest, json::parse(R"({"missing":1,"name":"Mine","mode":"on","multiplier":99,"enabled":false})"), false, error);
+  EXPECT_EQ(*result, json::parse(R"({"enabled":false})"));
+  EXPECT_EQ(*plugins::normalize_overrides(*manifest, json::array(), false, error), json::object());
+}
+
+TEST_F(PluginsTest, TheClientOverridesTheAppWhichOverridesThePlugin) {
+  const auto dir = write_plugin(builtin_dir, "p", override_manifest("p"));
+  std::string error;
+  const auto manifest = plugins::parse_manifest(override_manifest("p"), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+
+  const auto plugin = json::parse(R"({"multiplier":3,"name":"Plugin","mode":"on"})");
+  EXPECT_EQ(plugins::resolve_options(*manifest, plugin, nullptr, nullptr), json::parse(R"({"enabled":true,"multiplier":3,"name":"Plugin","mode":"on"})"));
+
+  const auto app = json::parse(R"({"multiplier":5,"enabled":false,"name":"App","mode":"off"})");
+  EXPECT_EQ(plugins::resolve_options(*manifest, plugin, app, nullptr), json::parse(R"({"enabled":false,"multiplier":5,"name":"Plugin","mode":"on"})"));
+
+  const auto client = json::parse(R"({"multiplier":7,"bogus":1})");
+  EXPECT_EQ(plugins::resolve_options(*manifest, plugin, app, client), json::parse(R"({"enabled":false,"multiplier":7,"name":"Plugin","mode":"on"})"));
+  EXPECT_EQ(plugins::resolve_options(*manifest, plugin, nullptr, client), json::parse(R"({"enabled":true,"multiplier":7,"name":"Plugin","mode":"on"})"));
+}
+
+TEST_F(PluginsTest, ClientOverridesAreSavedAndForgotten) {
+  write_plugin(builtin_dir, "p", override_manifest("p"));
+  write_plugin(builtin_dir, "q", full_manifest("q"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"options":{"multiplier":3}}}})");
+  plugins::load(paths());
+
+  std::string error;
+  ASSERT_EQ(plugins::set_client_overrides("tv", json::parse(R"({"p":{"options":{"multiplier":6}},"q":{"active":false,"options":{}}})"), error), plugins::result_e::ok) << error;
+  ASSERT_EQ(plugins::set_client_overrides("phone", json::parse(R"({"p":{"active":true,"options":{"enabled":false}}})"), error), plugins::result_e::ok) << error;
+  EXPECT_EQ(plugins::client_overrides(), json::parse(R"({
+    "tv":{"p":{"options":{"multiplier":6}},"q":{"active":false}},
+    "phone":{"p":{"options":{"enabled":false}}}
+  })"));
+
+  // They're kept with the plugin's own state
+  plugins::load(paths());
+  EXPECT_EQ(plugins::client_overrides()["tv"]["q"], json::parse(R"({"active":false})"));
+  EXPECT_EQ(find_plugin(plugins::list(), "p")["config"]["multiplier"], 3);
+
+  // Replacing a client's overrides drops the plugins left out, and an entry with nothing in it
+  ASSERT_EQ(plugins::set_client_overrides("tv", json::parse(R"({"p":{"active":true,"options":{}}})"), error), plugins::result_e::ok) << error;
+  EXPECT_FALSE(plugins::client_overrides().contains("tv"));
+
+  ASSERT_EQ(plugins::set_client_overrides("tv", json::parse(R"({"q":{"active":false}})"), error), plugins::result_e::ok) << error;
+  plugins::forget_client("tv");
+  EXPECT_EQ(plugins::client_overrides(), json::parse(R"({"phone":{"p":{"options":{"enabled":false}}}})"));
+  plugins::forget_client("unknown");
+
+  plugins::forget_client("");
+  EXPECT_EQ(plugins::client_overrides(), json::object());
+  plugins::load(paths());
+  EXPECT_EQ(plugins::client_overrides(), json::object());
+}
+
+TEST_F(PluginsTest, BadClientOverridesChangeNothing) {
+  write_plugin(builtin_dir, "p", override_manifest("p"));
+  plugins::load(paths());
+
+  std::string error;
+  ASSERT_EQ(plugins::set_client_overrides("tv", json::parse(R"({"p":{"options":{"multiplier":6}}})"), error), plugins::result_e::ok) << error;
+
+  EXPECT_EQ(plugins::set_client_overrides("", json::object(), error), plugins::result_e::invalid);
+  EXPECT_EQ(error, "a client UUID is required");
+  EXPECT_EQ(plugins::set_client_overrides("tv", json::array(), error), plugins::result_e::invalid);
+  EXPECT_EQ(error, "'plugins' must be an object");
+  EXPECT_EQ(plugins::set_client_overrides("tv", json::parse(R"({"missing":{}})"), error), plugins::result_e::not_found);
+  EXPECT_EQ(error, "plugin 'missing' not found");
+
+  const std::vector<std::pair<std::string, std::string>> rejected {
+    {R"({"p":true})", "the overrides of plugin 'p' must be an object"},
+    {R"({"p":{"active":"no"}})", "'active' of plugin 'p' must be a boolean"},
+    {R"({"p":{"options":{"name":"Mine"}}})", "option 'name' of plugin 'p' can't be overridden"},
+  };
+  for (const auto &[input, expected] : rejected) {
+    EXPECT_EQ(plugins::set_client_overrides("tv", json::parse(input), error), plugins::result_e::invalid) << input;
+    EXPECT_EQ(error, expected);
+  }
+  EXPECT_EQ(plugins::client_overrides(), json::parse(R"({"tv":{"p":{"options":{"multiplier":6}}}})"));
+}
+
+TEST_F(PluginsTest, AppOverridesAreValidated) {
+  write_plugin(builtin_dir, "p", override_manifest("p"));
+  write_plugin(builtin_dir, "q", full_manifest("q"));
+  plugins::load(paths());
+
+  std::string error;
+  const auto result = plugins::normalize_app_overrides(json::parse(R"({"p":{"multiplier":2},"q":{}})"), error);
+  ASSERT_TRUE(result) << error;
+  EXPECT_EQ(*result, json::parse(R"({"p":{"multiplier":2}})"));
+
+  EXPECT_FALSE(plugins::normalize_app_overrides(json::array(), error));
+  EXPECT_EQ(error, "'plugin-options' must be an object");
+  EXPECT_FALSE(plugins::normalize_app_overrides(json::parse(R"({"missing":{}})"), error));
+  EXPECT_EQ(error, "plugin 'missing' not found");
+  EXPECT_FALSE(plugins::normalize_app_overrides(json::parse(R"({"p":{"mode":"on"}})"), error));
+  EXPECT_EQ(error, "option 'mode' of plugin 'p' can't be overridden");
+}
+
+TEST_F(PluginsTest, StreamScriptsGetTheAppsAndTheClientsValues) {
+  write_plugin(builtin_dir, "p", override_manifest("p"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"options":{"multiplier":3},"clients":{
+    "tv":{"options":{"multiplier":7}},
+    "phone":{"active":false},
+    "broken":"not an object"
+  }}}})");
+  plugins::load(paths());
+
+  const auto app = json::parse(R"({"p":{"multiplier":5}})");
+  EXPECT_EQ(plugins::stream_env("p", nullptr, {})->at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "3");
+  EXPECT_EQ(plugins::stream_env("p", app, {})->at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+  EXPECT_EQ(plugins::stream_env("p", app, "tv")->at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "7");
+  EXPECT_EQ(plugins::stream_env("p", app, "broken")->at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+  EXPECT_EQ(plugins::stream_env("p", app, "unknown")->at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+  EXPECT_EQ(plugins::stream_env("p", app, "tv")->at("SUNSHINE_PLUGIN_ID"), "p");
+  EXPECT_FALSE(plugins::stream_env("p", app, "phone"));
+  EXPECT_FALSE(plugins::stream_env("missing", app, "tv"));
+
+  EXPECT_TRUE(plugins::disabled_for_client("p", "phone"));
+  EXPECT_FALSE(plugins::disabled_for_client("p", "tv"));
+  EXPECT_FALSE(plugins::disabled_for_client("p", ""));
+  EXPECT_FALSE(plugins::disabled_for_client("missing", "phone"));
+
+  // The commands of an app name their plugin and carry the app's values until a client is known
+  const auto cmds = plugins::prep_cmds({}, app);
+  ASSERT_EQ(cmds.size(), 1);
+  EXPECT_EQ(cmds[0].plugin, "p");
+  EXPECT_EQ(cmds[0].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+  EXPECT_EQ(plugins::prep_cmds({})[0].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "3");
+
+  const auto listed = find_plugin(plugins::list(), "p");
+  EXPECT_EQ(listed["options"][0]["overridable"], true);
+  EXPECT_EQ(listed["options"][2]["overridable"], false);
+  EXPECT_EQ(listed["options"][3]["overridable"], false);
+}
+
+TEST_F(PluginsTest, AClientCanTurnOffThePluginThatSetsUpTheDisplay) {
+  write_plugin(builtin_dir, "display", {{"id", "display"}, {"name", "Display"}, {"order", 10}, {"manages_display", true}});
+  write_plugin(builtin_dir, "later", {{"id", "later"}, {"name", "Later"}, {"order", 20}, {"manages_display", true}});
+  write_text(state_file, R"({"plugins":{
+    "display":{"installed":true,"active":true,"clients":{"tv":{"active":false},"both":{"active":false}}},
+    "later":{"installed":true,"active":true,"clients":{"both":{"active":false}}}
+  }})");
+  plugins::load(paths());
+
+  EXPECT_EQ(plugins::display_plugin({}), "Display");
+  EXPECT_EQ(plugins::display_plugin({}, "phone"), "Display");
+  EXPECT_EQ(plugins::display_plugin({}, "tv"), "Later");
+  EXPECT_EQ(plugins::display_plugin({}, "both"), "");
+
+  const auto apps_file = root / "apps.json";
+  write_text(apps_file, R"({"env":{},"apps":[{"name":"Default"},{"name":"Excluded","exclude-plugins":["display","later"]}]})");
+  auto proc = proc::parse(apps_file.string());
+  ASSERT_TRUE(proc);
+  const auto &apps = proc->get_apps();
+  EXPECT_EQ(proc->get_display_plugin(std::stoi(apps[0].id), "tv"), "Later");
+  EXPECT_EQ(proc->get_display_plugin(std::stoi(apps[0].id), "both"), "");
+  EXPECT_EQ(proc->get_display_plugin(std::stoi(apps[0].id), "phone"), "Display");
+  EXPECT_EQ(proc->get_display_plugin(std::stoi(apps[1].id), "tv"), "");
+}
+
+TEST_F(PluginsTest, ClientCommandsUseTheAppsAndTheClientsValues) {
+  auto manifest = override_manifest("p");
+  manifest["client_commands"] = json::parse(R"([{"id": "run", "script": "do.ps1"}])");
+  write_plugin(builtin_dir, "p", manifest);
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"clients":{
+    "tv":{"options":{"multiplier":7}},
+    "phone":{"active":false}
+  }}}})");
+  plugins::load(paths());
+
+  const auto app = json::parse(R"({"p":{"multiplier":5}})");
+  auto offered = plugins::offered_client_commands({}, {}, app, "tv");
+  ASSERT_EQ(offered.size(), 1);
+  EXPECT_EQ(offered[0].grouped.at(0).env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "7");
+
+  offered = plugins::offered_client_commands({}, {}, app);
+  EXPECT_EQ(offered.at(0).grouped.at(0).env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+
+  EXPECT_TRUE(plugins::offered_client_commands({}, {}, app, "phone").empty());
+}
+
+TEST_F(PluginsTest, AppsReadTheirPluginOptions) {
+  write_plugin(builtin_dir, "p", override_manifest("p"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"options":{"multiplier":3}}}})");
+  plugins::load(paths());
+
+  const auto apps_file = root / "apps.json";
+  write_text(apps_file, R"({"env":{},"apps":[
+    {"name":"Overriding","plugin-options":{"p":{"multiplier":5}}},
+    {"name":"Plain"},
+    {"name":"Broken","plugin-options":"not an object"}
+  ]})");
+  auto proc = proc::parse(apps_file.string());
+  ASSERT_TRUE(proc);
+
+  const auto &apps = proc->get_apps();
+  ASSERT_EQ(apps.size(), 3);
+  EXPECT_EQ(apps[0].plugin_options, json::parse(R"({"p":{"multiplier":5}})"));
+  EXPECT_EQ(apps[0].prep_cmds.at(0).env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "5");
+  EXPECT_EQ(apps[1].plugin_options, json::object());
+  EXPECT_EQ(apps[1].prep_cmds.at(0).env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "3");
+  EXPECT_EQ(apps[2].plugin_options, json::object());
+}
+
+TEST_F(PluginsTest, ResolvingCommandsLeavesOthersAloneAndSkipsTurnedOffPlugins) {
+  write_plugin(builtin_dir, "p", override_manifest("p"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"clients":{
+    "tv":{"options":{"multiplier":7}},
+    "phone":{"active":false}
+  }}}})");
+  plugins::load(paths());
+
+  std::vector<proc::cmd_t> cmds;
+  cmds.emplace_back("plugin-do", "plugin-undo", false).plugin = "p";
+  cmds.emplace_back("gone-do", "", false).plugin = "gone";
+  cmds.emplace_back("other-do", "", false).env = {{"X", "1"}};
+
+  auto resolved = proc::resolve_plugin_cmds(cmds, json::parse(R"({"p":{"multiplier":5}})"), "tv");
+  ASSERT_EQ(resolved.size(), 2);
+  EXPECT_EQ(resolved[0].do_cmd, "plugin-do");
+  EXPECT_EQ(resolved[0].undo_cmd, "plugin-undo");
+  EXPECT_EQ(resolved[0].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "7");
+  EXPECT_EQ(resolved[1].do_cmd, "other-do");
+  EXPECT_EQ(resolved[1].env, (std::map<std::string, std::string> {{"X", "1"}}));
+
+  resolved = proc::resolve_plugin_cmds(cmds, nullptr, "phone");
+  ASSERT_EQ(resolved.size(), 1);
+  EXPECT_EQ(resolved[0].do_cmd, "other-do");
+}
+
+/**
+ * @brief Launches an app whose plugin commands print the plugin's `multiplier` option.
+ */
+class PluginsLaunchTest: public PluginsTest {
+protected:
+  void SetUp() override {
+    PluginsTest::SetUp();
+    output_file = root / "output.log";
+    write_plugin(builtin_dir, "p", override_manifest("p"));
+    write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"options":{"multiplier":3},"clients":{
+      "tv":{"options":{"multiplier":7}},
+      "phone":{"active":false}
+    }}}})");
+    plugins::load(paths());
+
+    proc::ctx_t ctx {};
+    ctx.name = "Desktop";
+    ctx.id = "1";
+    ctx.output = output_file.string();
+    ctx.plugin_options = json::parse(R"({"p":{"multiplier":5}})");
+    ctx.prep_cmds.emplace_back(echo_multiplier("do"), echo_multiplier("undo"), false).plugin = "p";
+    ctx.connect_cmds.emplace_back(echo_multiplier("connect"), echo_multiplier("disconnect"), false, proc::cmd_t::type_e::connect).plugin = "p";
+    ctx.exit_timeout = std::chrono::seconds {1};
+    std::vector<proc::ctx_t> apps;
+    apps.emplace_back(std::move(ctx));
+    process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
+  }
+
+  void TearDown() override {
+    process->terminate();
+    process.reset();
+    PluginsTest::TearDown();
+  }
+
+  /**
+   * @brief Build a launch session for a client.
+   *
+   * @param uuid The client's UUID.
+   * @return The launch session.
+   */
+  static std::shared_ptr<rtsp_stream::launch_session_t> session(const std::string &uuid) {
+    auto session = std::make_shared<rtsp_stream::launch_session_t>();
+    session->client_name = uuid;
+    session->client_uuid = uuid;
+    return session;
+  }
+
+  /**
+   * @brief Read what the commands printed since the last call.
+   *
+   * @return One entry per printed line.
+   */
+  std::vector<std::string> take_output() {
+    std::vector<std::string> lines;
+    std::ifstream file(output_file, std::ios::binary);
+    file.seekg(read_offset);
+    for (std::string line; std::getline(file, line);) {
+      boost::trim_right(line);
+      if (!line.empty()) {
+        lines.push_back(line);
+      }
+    }
+    file.clear();
+    file.seekg(0, std::ios::end);
+    if (const auto end = file.tellg(); end >= 0) {
+      read_offset = end;
+    }
+    return lines;
+  }
+
+  fs::path output_file;  ///< Where the app's commands print.
+  std::streamoff read_offset {};  ///< How much of the output take_output() has returned.
+  std::unique_ptr<proc::proc_t> process;  ///< The process manager under test.
+};
+
+TEST_F(PluginsLaunchTest, ScriptsRunWithTheLaunchingClientsValuesAndResumesResolveAgain) {
+  ASSERT_EQ(0, process->execute(1, session("tv")));
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"do=7"}));
+
+  // A resume by another client runs the connect scripts with its values
+  process->disconnect();
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"disconnect=7"}));
+  process->connect(*session("laptop"));
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"connect=5"}));
+  process->disconnect();
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"disconnect=5"}));
+
+  // A client that turned the plugin off doesn't run it
+  process->connect(*session("phone"));
+  process->disconnect();
+  EXPECT_TRUE(take_output().empty());
+
+  // Undo runs with the values Do ran with, even after the options change
+  std::string error;
+  ASSERT_EQ(plugins::set_client_overrides("tv", json::parse(R"({"p":{"options":{"multiplier":8}}})"), error), plugins::result_e::ok) << error;
+  process->terminate();
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"undo=7"}));
+}
+
+TEST_F(PluginsLaunchTest, AClientThatTurnedThePluginOffDoesNotRunIt) {
+  ASSERT_EQ(0, process->execute(1, session("phone")));
+  process->disconnect();
+  process->connect(*session("tv"));
+  process->terminate();
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"connect=7"}));
 }

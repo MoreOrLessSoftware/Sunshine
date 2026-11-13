@@ -392,6 +392,14 @@ namespace plugins {
         }
         option.apply = node["apply"].get<bool>();
       }
+      if (node.contains("scope")) {
+        const auto &scope = node["scope"];
+        if (!scope.is_string() || (scope != "host" && scope != "stream")) {
+          error = std::format("option '{}': 'scope' must be \"host\" or \"stream\"", option.id);
+          return std::nullopt;
+        }
+        option.host = scope == "host";
+      }
       if (option.label.empty()) {
         option.label = option.id;
       }
@@ -763,6 +771,52 @@ namespace plugins {
       const auto it = reg.state.find(manifest.id);
       const auto &stored = it == reg.state.end() ? json::object() : it->second.options;
       return *normalize_options(manifest, stored, false, error);
+    }
+
+    /**
+     * @brief Return one client's overrides of a plugin. The caller must hold the registry mutex.
+     *
+     * @param reg Registry holding the state.
+     * @param id Plugin ID.
+     * @param client_uuid Client UUID, or empty for none.
+     * @return The client's `{"active": false, "options": {...}}` entry, or `null` when it has none.
+     */
+    json client_entry(const registry_t &reg, const std::string &id, const std::string &client_uuid) {
+      const auto it = reg.state.find(id);
+      if (client_uuid.empty() || it == reg.state.end()) {
+        return nullptr;
+      }
+      const auto entry = it->second.clients.find(client_uuid);
+      return entry == it->second.clients.end() || !entry->is_object() ? json(nullptr) : *entry;
+    }
+
+    /**
+     * @brief Check whether a client turned a plugin off. The caller must hold the registry mutex.
+     *
+     * @param reg Registry holding the state.
+     * @param id Plugin ID.
+     * @param client_uuid Client UUID, or empty for none.
+     * @return `true` when the client's entry sets `"active": false`.
+     */
+    bool off_for_client(const registry_t &reg, const std::string &id, const std::string &client_uuid) {
+      const auto entry = client_entry(reg, id, client_uuid);
+      return entry.is_object() && entry.contains("active") && entry["active"] == false;
+    }
+
+    /**
+     * @brief Resolve a plugin's options for an application and a client. The caller must hold the registry mutex.
+     *
+     * @param reg Registry holding the state.
+     * @param manifest Plugin whose options to resolve.
+     * @param app_overrides The application's `plugin-options`, keyed by plugin ID, or `null`.
+     * @param client_uuid Client UUID, or empty for none.
+     * @return An object holding a value for every declared option.
+     */
+    json stream_options(const registry_t &reg, const manifest_t &manifest, const json &app_overrides, const std::string &client_uuid) {
+      const json app = app_overrides.is_object() && app_overrides.contains(manifest.id) ? app_overrides[manifest.id] : json(nullptr);
+      const auto entry = client_entry(reg, manifest.id, client_uuid);
+      const json client = entry.is_object() && entry.contains("options") ? entry["options"] : json(nullptr);
+      return resolve_options(manifest, effective_options(reg, manifest), app, client);
     }
 
     /**
@@ -1337,6 +1391,57 @@ namespace plugins {
     return result;
   }
 
+  bool is_overridable(const option_t &option) {
+    return !option.apply && !option.host;
+  }
+
+  std::optional<nlohmann::json> normalize_overrides(const manifest_t &manifest, const nlohmann::json &input, bool strict, std::string &error) {
+    json result = json::object();
+    if (input.is_null()) {
+      return result;
+    }
+    if (!input.is_object()) {
+      if (strict) {
+        error = "options must be an object";
+        return std::nullopt;
+      }
+      return result;
+    }
+
+    for (const auto &[key, value] : input.items()) {
+      const auto option = std::ranges::find_if(manifest.options, [&key](const option_t &candidate) {
+        return candidate.id == key;
+      });
+      std::string problem;
+      if (option == manifest.options.end()) {
+        problem = std::format("plugin '{}' has no option '{}'", manifest.id, key);
+      } else if (!is_overridable(*option)) {
+        problem = std::format("option '{}' of plugin '{}' can't be overridden", key, manifest.id);
+      } else if (!is_valid_value(*option, value)) {
+        problem = std::format("invalid value for option '{}'", key);
+      } else {
+        result[key] = value;
+        continue;
+      }
+      if (strict) {
+        error = std::move(problem);
+        return std::nullopt;
+      }
+    }
+    return result;
+  }
+
+  nlohmann::json resolve_options(const manifest_t &manifest, const nlohmann::json &options, const nlohmann::json &app_overrides, const nlohmann::json &client_overrides) {
+    std::string error;
+    auto result = *normalize_options(manifest, options, false, error);
+    for (const auto *layer : {&app_overrides, &client_overrides}) {
+      for (const auto &[key, value] : normalize_overrides(manifest, *layer, false, error)->items()) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
   std::string option_env_name(std::string_view option_id) {
     std::string name = "SUNSHINE_PLUGIN_OPT_";
     for (const char c : option_id) {
@@ -1413,6 +1518,9 @@ namespace plugins {
         if (entry.contains("origin") && entry["origin"].is_string()) {
           plugin.origin = entry["origin"].get<std::string>();
         }
+        if (entry.contains("clients") && entry["clients"].is_object()) {
+          plugin.clients = entry["clients"];
+        }
         state[id] = std::move(plugin);
       }
     } catch (const std::exception &e) {
@@ -1430,7 +1538,8 @@ namespace plugins {
         {"active", plugin.active},
         {"options", plugin.options},
         {"installed_version", plugin.installed_version},
-        {"origin", plugin.origin}
+        {"origin", plugin.origin},
+        {"clients", plugin.clients}
       };
     }
 
@@ -2358,7 +2467,8 @@ namespace plugins {
           {"type", option_type_name(option.type)},
           {"label", option.label},
           {"description", option.description},
-          {"default", option.default_value}
+          {"default", option.default_value},
+          {"overridable", is_overridable(option)}
         };
         if (option.min) {
           entry["min"] = *option.min;
@@ -2454,7 +2564,7 @@ namespace plugins {
     return result;
   }
 
-  std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded) {
+  std::vector<config::prep_cmd_t> prep_cmds(const std::vector<std::string> &excluded, const nlohmann::json &app_overrides) {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
 
@@ -2466,7 +2576,7 @@ namespace plugins {
       if (std::ranges::find(excluded, manifest.id) != excluded.end()) {
         continue;
       }
-      const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
+      const auto env = script_env(manifest, stream_options(reg, manifest, app_overrides, {}), plugin_data_dir(reg.paths, manifest.id));
       auto add = [&](const std::string &do_script, const std::string &undo_script, config::prep_cmd_t::type_e type) {
         if (do_script.empty() && undo_script.empty()) {
           return;
@@ -2476,6 +2586,7 @@ namespace plugins {
         auto elevated = manifest.elevated;
         auto &cmd = cmds.emplace_back(std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type);
         cmd.env = env;
+        cmd.plugin = manifest.id;
       };
       add(manifest.scripts.do_script, manifest.scripts.undo_script, config::prep_cmd_t::type_e::app);
       add(manifest.scripts.connect_script, manifest.scripts.disconnect_script, config::prep_cmd_t::type_e::connect);
@@ -2483,20 +2594,20 @@ namespace plugins {
     return cmds;
   }
 
-  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides) {
+  std::vector<offered_commands_t> offered_client_commands(const std::vector<std::string> &excluded, const client_commands::plugin_overrides_t &overrides, const nlohmann::json &app_overrides, const std::string &client_uuid) {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
 
     std::vector<offered_commands_t> offered;
     const client_commands::host_programs_t host;  // looked up only when a command is limited to programs
     for (const auto &manifest : reg.manifests) {
-      if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end() || !runs_for_streams(reg, manifest)) {
+      if (manifest.client_commands.empty() || std::ranges::find(excluded, manifest.id) != excluded.end() || !runs_for_streams(reg, manifest) || off_for_client(reg, manifest.id, client_uuid)) {
         continue;
       }
 
       offered_commands_t plugin {manifest.id, manifest.name, manifest.icon, {}, {}};
       const auto data_dir = plugin_data_dir(reg.paths, manifest.id);
-      const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, manifest.id));
+      const auto env = script_env(manifest, stream_options(reg, manifest, app_overrides, client_uuid), data_dir);
       for (const auto &source : manifest.client_commands) {
         const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id));
         const bool has_override = entry != overrides.end();
@@ -2542,16 +2653,152 @@ namespace plugins {
     return offered;
   }
 
-  std::string display_plugin(const std::vector<std::string> &excluded) {
+  std::string display_plugin(const std::vector<std::string> &excluded, const std::string &client_uuid) {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
 
     for (const auto &manifest : reg.manifests) {
-      if (manifest.manages_display && std::ranges::find(excluded, manifest.id) == excluded.end() && runs_for_streams(reg, manifest)) {
+      if (manifest.manages_display && std::ranges::find(excluded, manifest.id) == excluded.end() && runs_for_streams(reg, manifest) && !off_for_client(reg, manifest.id, client_uuid)) {
         return manifest.name;
       }
     }
     return {};
+  }
+
+  std::optional<std::map<std::string, std::string>> stream_env(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    const auto *manifest = find_manifest(reg, id);
+    if (!manifest || off_for_client(reg, id, client_uuid)) {
+      return std::nullopt;
+    }
+    return script_env(*manifest, stream_options(reg, *manifest, app_overrides, client_uuid), plugin_data_dir(reg.paths, id));
+  }
+
+  bool disabled_for_client(const std::string &id, const std::string &client_uuid) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    return off_for_client(reg, id, client_uuid);
+  }
+
+  std::optional<nlohmann::json> normalize_app_overrides(const nlohmann::json &input, std::string &error) {
+    if (!input.is_object()) {
+      error = "'plugin-options' must be an object";
+      return std::nullopt;
+    }
+
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    json result = json::object();
+    for (const auto &[id, options] : input.items()) {
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        error = std::format("plugin '{}' not found", id);
+        return std::nullopt;
+      }
+      auto normalized = normalize_overrides(*manifest, options, true, error);
+      if (!normalized) {
+        return std::nullopt;
+      }
+      if (!normalized->empty()) {
+        result[id] = std::move(*normalized);
+      }
+    }
+    return result;
+  }
+
+  nlohmann::json client_overrides() {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    json result = json::object();
+    for (const auto &[id, state] : reg.state) {
+      for (const auto &[uuid, entry] : state.clients.items()) {
+        result[uuid][id] = entry;
+      }
+    }
+    return result;
+  }
+
+  result_e set_client_overrides(const std::string &client_uuid, const nlohmann::json &input, std::string &error) {
+    if (client_uuid.empty()) {
+      error = "a client UUID is required";
+      return result_e::invalid;
+    }
+    if (!input.is_object()) {
+      error = "'plugins' must be an object";
+      return result_e::invalid;
+    }
+
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    std::map<std::string, json> entries;
+    for (const auto &[id, node] : input.items()) {
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        error = std::format("plugin '{}' not found", id);
+        return result_e::not_found;
+      }
+      if (!node.is_object()) {
+        error = std::format("the overrides of plugin '{}' must be an object", id);
+        return result_e::invalid;
+      }
+      json entry = json::object();
+      if (node.contains("active")) {
+        if (!node["active"].is_boolean()) {
+          error = std::format("'active' of plugin '{}' must be a boolean", id);
+          return result_e::invalid;
+        }
+        if (!node["active"].get<bool>()) {
+          entry["active"] = false;
+        }
+      }
+      if (node.contains("options")) {
+        auto options = normalize_overrides(*manifest, node["options"], true, error);
+        if (!options) {
+          return result_e::invalid;
+        }
+        if (!options->empty()) {
+          entry["options"] = std::move(*options);
+        }
+      }
+      if (!entry.empty()) {
+        entries[id] = std::move(entry);
+      }
+    }
+
+    for (auto &[id, state] : reg.state) {
+      state.clients.erase(client_uuid);
+    }
+    for (auto &[id, entry] : entries) {
+      reg.state[id].clients[client_uuid] = std::move(entry);
+    }
+    save_state(reg.paths.state_file, reg.state);
+    return result_e::ok;
+  }
+
+  void forget_client(const std::string &client_uuid) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    bool changed = false;
+    for (auto &[id, state] : reg.state) {
+      if (state.clients.empty()) {
+        continue;
+      }
+      if (client_uuid.empty()) {
+        state.clients = json::object();
+        changed = true;
+      } else if (state.clients.erase(client_uuid) > 0) {
+        changed = true;
+      }
+    }
+    if (changed) {
+      save_state(reg.paths.state_file, reg.state);
+    }
   }
 
   result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error, bool *applying) {

@@ -161,6 +161,25 @@ namespace proc {
     return env;
   }
 
+  std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid) {
+    std::vector<cmd_t> resolved;
+    resolved.reserve(cmds.size());
+    for (const auto &cmd : cmds) {
+      if (cmd.plugin.empty()) {
+        resolved.push_back(cmd);
+        continue;
+      }
+      auto env = plugins::stream_env(cmd.plugin, app_overrides, client_uuid);
+      if (!env) {
+        BOOST_LOG(info) << "Skipping the "sv << cmd.plugin << " plugin: it's turned off for this client or no longer exists"sv;
+        continue;
+      }
+      auto &added = resolved.emplace_back(cmd);
+      added.env = std::move(*env);
+    }
+    return resolved;
+  }
+
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
     terminate();
@@ -176,6 +195,11 @@ namespace proc {
 
     _app_id = app_id;
     _app = *iter;
+    // Plugin scripts run with the options the app and the launching client override. Undo keeps
+    // the options Do ran with; connect() resolves the connect commands for each client resuming.
+    _app.prep_cmds = resolve_plugin_cmds(iter->prep_cmds, iter->plugin_options, launch_session->client_uuid);
+    _connect_cmds_base = iter->connect_cmds;
+    _app.connect_cmds = resolve_plugin_cmds(_connect_cmds_base, iter->plugin_options, launch_session->client_uuid);
     _app_prep_begin = std::begin(_app.prep_cmds);
     _app_prep_it = _app_prep_begin;
 
@@ -346,6 +370,7 @@ namespace proc {
 
     // The connect commands, and the Undo commands of the app later, act for the client now streaming
     set_client_env(launch_session);
+    _app.connect_cmds = resolve_plugin_cmds(_connect_cmds_base, _app.plugin_options, launch_session.client_uuid);
 
     for (; _connect_cmds_in_effect < _app.connect_cmds.size(); ++_connect_cmds_in_effect) {
       const auto &cmd = _app.connect_cmds[_connect_cmds_in_effect];
@@ -479,11 +504,18 @@ namespace proc {
     return validate_app_image_path(app_image_path);
   }
 
-  std::string proc_t::get_display_plugin(int app_id) const {
+  std::string proc_t::get_display_plugin(int app_id, const std::string &client_uuid) const {
     const auto iter = std::ranges::find_if(_apps, [app_id](const auto &app) {
       return app.id == std::to_string(app_id);
     });
-    return iter == _apps.end() ? std::string() : iter->display_plugin;
+    if (iter == _apps.end()) {
+      return {};
+    }
+    // A client that turned the plugin off may leave the display to another plugin, or to Sunshine
+    if (!iter->display_plugin.empty() && !client_uuid.empty()) {
+      return plugins::display_plugin(iter->exclude_plugins, client_uuid);
+    }
+    return iter->display_plugin;
   }
 
   std::string proc_t::get_last_run_app_name() {
@@ -797,6 +829,9 @@ namespace proc {
         if (app_index < apps_json.size() && apps_json[app_index].is_object() && apps_json[app_index].contains("client-commands")) {
           ctx.client_commands = client_commands::parse_commands(apps_json[app_index]["client-commands"], std::format("app{}", app_index));
         }
+        if (app_index < apps_json.size() && apps_json[app_index].is_object() && apps_json[app_index].contains("plugin-options") && apps_json[app_index]["plugin-options"].is_object()) {
+          ctx.plugin_options = apps_json[app_index]["plugin-options"];
+        }
         app_index++;
 
         auto prep_nodes_opt = app_node.get_child_optional("prep-cmd"s);
@@ -832,7 +867,7 @@ namespace proc {
           add_cmd(proc::cmd_t {std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type});
         };
 
-        for (auto &plugin_cmd : plugins::prep_cmds(exclude_plugins)) {
+        for (auto &plugin_cmd : plugins::prep_cmds(exclude_plugins, ctx.plugin_options)) {
           add_cmd(std::move(plugin_cmd));
         }
         ctx.display_plugin = plugins::display_plugin(exclude_plugins);

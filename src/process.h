@@ -18,6 +18,7 @@
 
 // lib includes
 #include <boost/process/v1.hpp>
+#include <nlohmann/json.hpp>
 
 // local includes
 #include "client_commands.h"
@@ -42,6 +43,17 @@ namespace proc {
    * @brief Parsed command arguments used when launching a child process.
    */
   typedef config::prep_cmd_t cmd_t;
+
+  /**
+   * @brief Resolve the options of plugin commands for the client streaming.
+   *
+   * @param cmds Preparation commands of an application.
+   * @param app_overrides The application's `plugin-options`.
+   * @param client_uuid UUID of the client streaming, or empty for none.
+   * @return The commands with each plugin command's environment rebuilt by `plugins::stream_env()`, leaving out
+   *         those of plugins the client turned off or that no longer exist. Other commands are unchanged.
+   */
+  std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid);
 
   /**
    * pre_cmds -- guaranteed to be executed unless any of the commands fail.
@@ -82,6 +94,7 @@ namespace proc {
     std::string display_plugin;  ///< Name of an active plugin that sets up the display for this app; empty when Sunshine's display device configuration applies.
     std::vector<client_commands::command_t> client_commands;  ///< Commands a client can run from its overlay menu while this app is streamed.
     std::vector<std::string> exclude_plugins;  ///< IDs of plugins this app opted out of.
+    nlohmann::json plugin_options = nlohmann::json::object();  ///< Plugin option values this app overrides, keyed by plugin ID.
     bool elevated;  ///< Whether the process should be launched elevated.
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.
@@ -175,10 +188,11 @@ namespace proc {
      * @brief Find the plugin that sets up the display for an application.
      *
      * @param app_id Application ID.
+     * @param client_uuid UUID of the client streaming, whose turned-off plugins don't count, or empty for none.
      * @return Name of the plugin, or an empty string when Sunshine's display device configuration applies
      *         (also for unknown application IDs).
      */
-    std::string get_display_plugin(int app_id) const;
+    std::string get_display_plugin(int app_id, const std::string &client_uuid = {}) const;
     /**
      * @brief Get last run app name.
      *
@@ -210,6 +224,9 @@ namespace proc {
 
     // How many of _app.connect_cmds, from the front, have their Do in effect; their Undo runs on disconnect()
     std::size_t _connect_cmds_in_effect {};
+
+    // The running app's connect commands before plugin options were resolved for a client; connect() resolves them again
+    std::vector<cmd_t> _connect_cmds_base;
 
     /**
      * @brief Point the client environment variables at a launch session's client.
