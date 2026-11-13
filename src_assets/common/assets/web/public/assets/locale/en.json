@@ -812,6 +812,7 @@
     "none": "This plugin has no settings that can be overridden.",
     "off": "Off",
     "on": "On",
+    "overridden_by_devices": "Devices with their own setting: {names}",
     "override": "Override"
   },
   "resource_card": {

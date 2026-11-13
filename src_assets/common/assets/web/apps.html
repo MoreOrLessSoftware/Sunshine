@@ -224,6 +224,7 @@
                                            inherited-key="plugin_overrides.inherited_plugin"
                                            id-prefix="app-override"
                                            :model-value="editForm['plugin-options'][plugin.id] || {}"
+                                           :overridden-by="deviceOverrides(plugin.id)"
                                            @update:model-value="setPluginOptions(plugin.id, $event)"></plugin-option-overrides>
                 </div>
               </div>
@@ -730,6 +731,8 @@
     data() {
       return {
         activePlugins: [],
+        clientNames: {},
+        clientOverrides: {},
         pluginSettingsOpen: {},
         apps: [],
         editForm: null,
@@ -838,6 +841,7 @@
         .then(r => r.json())
         .then(r => this.activePlugins = (r.plugins || []).filter(plugin => plugin.active))
         .catch((e) => console.error(e));
+      this.loadClientOverrides();
 
       fetch("./api/config")
         .then(r => r.json())
@@ -855,6 +859,35 @@
         });
     },
     methods: {
+      /**
+       * Fetch the plugin settings each client device overrides, and the devices' names.
+       */
+      async loadClientOverrides() {
+        try {
+          const [overrides, list] = await Promise.all([
+            fetch('./api/clients/plugin-options').then((r) => r.json()),
+            fetch('./api/clients/list').then((r) => r.json()),
+          ]);
+          this.clientOverrides = overrides.clients || {};
+          this.clientNames = Object.fromEntries((list.named_certs || []).map((client) => [client.uuid, client.name]));
+        } catch (e) {
+          console.error('Failed to load the plugin settings of client devices', e);
+        }
+      },
+
+      /**
+       * The names of the client devices that override each of a plugin's options, by option ID.
+       */
+      deviceOverrides(pluginId) {
+        const byOption = {};
+        for (const [uuid, plugins] of Object.entries(this.clientOverrides)) {
+          for (const optionId of Object.keys(plugins[pluginId]?.options || {})) {
+            (byOption[optionId] ||= []).push(this.clientNames[uuid] || this.$t('troubleshooting.unpair_single_unknown'));
+          }
+        }
+        return byOption;
+      },
+
       newApp() {
         this.editForm = {
           name: "",

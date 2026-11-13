@@ -8,8 +8,12 @@
  * Each option that can be overridden gets an "Override" switch. While it's off, the option shows the value it
  * inherits, greyed out; turning it on starts from that value and lets it be changed. The model holds only the
  * options overridden, as the API expects.
+ *
+ * `overriddenBy` optionally names, for each option ID, the client devices that override that option themselves,
+ * whose own setting wins over the one made here.
  */
 import { computed } from 'vue'
+import { Layers } from '@lucide/vue'
 import PluginChoiceSelect, { choiceLabel } from './PluginChoiceSelect.vue'
 
 const model = defineModel({ type: Object, required: true });
@@ -29,6 +33,10 @@ const props = defineProps({
   idPrefix: {
     type: String,
     required: true
+  },
+  overriddenBy: {
+    type: Object,
+    default: () => ({})
   }
 });
 
@@ -111,6 +119,10 @@ function describe(t, option, value) {
         {{ $t(inheritedKey, {value: describe($t, option, inherited[option.id])}) }}
       </div>
       <div class="form-text" v-else-if="option.description">{{ option.description }}</div>
+      <div class="form-text plugin-overridden" v-if="overriddenBy[option.id]?.length">
+        <Layers :size="14" class="icon" />
+        {{ $t('plugin_overrides.overridden_by_devices', {names: overriddenBy[option.id].join(', ')}) }}
+      </div>
     </div>
   </div>
 </template>
