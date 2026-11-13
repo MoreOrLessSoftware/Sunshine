@@ -2708,6 +2708,13 @@ namespace plugins {
     return {};
   }
 
+  bool manages_display(const std::string &id) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    const auto *manifest = find_manifest(reg, id);
+    return manifest && manifest->manages_display;
+  }
+
   std::optional<std::map<std::string, std::string>> stream_env(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid) {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};

@@ -620,6 +620,16 @@ namespace plugins {
   std::string display_plugin(const std::vector<std::string> &excluded, const std::string &client_uuid = {});
 
   /**
+   * @brief Check whether a plugin sets up the display itself.
+   *
+   * Only one such plugin runs for a stream, since two would each rearrange the displays the other set up.
+   *
+   * @param id Plugin ID.
+   * @return true if the plugin exists and its manifest sets `manages_display`.
+   */
+  bool manages_display(const std::string &id);
+
+  /**
    * @brief The client commands of one plugin, as offered to clients.
    */
   struct offered_commands_t {

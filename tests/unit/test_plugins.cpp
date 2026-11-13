@@ -3956,6 +3956,62 @@ TEST_F(PluginsLaunchTest, ScriptsRunWithTheLaunchingClientsValuesAndResumesResol
   EXPECT_EQ(take_output(), (std::vector<std::string> {"undo=7"}));
 }
 
+TEST_F(PluginsLaunchTest, OnlyTheFirstPluginThatSetsUpTheDisplayRuns) {
+  auto display_manifest = [this](const std::string &id, int order) {
+    auto manifest = override_manifest(id);
+    manifest["manages_display"] = true;
+    manifest["order"] = order;
+    return manifest;
+  };
+  write_plugin(builtin_dir, "screen-a", display_manifest("screen-a", 1));
+  write_plugin(builtin_dir, "screen-b", display_manifest("screen-b", 2));
+  auto other = override_manifest("p");
+  other["manages_display"] = false;
+  write_plugin(builtin_dir, "p", other);
+  write_text(state_file, R"({"plugins":{
+    "p":{"installed":true,"active":true},
+    "screen-a":{"installed":true,"active":true,"clients":{"phone":{"active":false}}},
+    "screen-b":{"installed":true,"active":true}
+  }})");
+  plugins::load(paths());
+  ASSERT_TRUE(plugins::manages_display("screen-a"));
+  EXPECT_FALSE(plugins::manages_display("p"));
+  EXPECT_FALSE(plugins::manages_display("missing"));
+
+  proc::ctx_t ctx {};
+  ctx.name = "Desktop";
+  ctx.id = "1";
+  ctx.output = output_file.string();
+  ctx.prep_cmds.emplace_back(echo_multiplier("a-do"), echo_multiplier("a-undo"), false).plugin = "screen-a";
+  ctx.prep_cmds.emplace_back(echo_multiplier("b-do"), echo_multiplier("b-undo"), false).plugin = "screen-b";
+  ctx.prep_cmds.emplace_back(echo_multiplier("p-do"), echo_multiplier("p-undo"), false).plugin = "p";
+  ctx.exit_timeout = std::chrono::seconds {1};
+  std::vector<proc::ctx_t> apps;
+  apps.emplace_back(std::move(ctx));
+  process->terminate();
+  process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
+
+  // Each printed line is "label=value"; only the labels matter here
+  auto labels = [this]() {
+    std::vector<std::string> result;
+    for (const auto &line : take_output()) {
+      result.push_back(line.substr(0, line.find('=')));
+    }
+    return result;
+  };
+
+  ASSERT_EQ(0, process->execute(1, session("tv")));
+  process->terminate();
+  EXPECT_EQ(labels(), (std::vector<std::string> {"a-do", "p-do", "p-undo", "a-undo"}));
+
+  // A client that turned the first one off gets the next one
+  fs::remove(output_file);
+  read_offset = 0;
+  ASSERT_EQ(0, process->execute(1, session("phone")));
+  process->terminate();
+  EXPECT_EQ(labels(), (std::vector<std::string> {"b-do", "p-do", "p-undo", "b-undo"}));
+}
+
 TEST_F(PluginsLaunchTest, AClientThatTurnedThePluginOffDoesNotRunIt) {
   ASSERT_EQ(0, process->execute(1, session("phone")));
   process->disconnect();

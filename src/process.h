@@ -51,7 +51,8 @@ namespace proc {
    * @param app_overrides The application's `plugin-options`.
    * @param client_uuid UUID of the client streaming, or empty for none.
    * @return The commands with each plugin command's environment rebuilt by `plugins::stream_env()`, leaving out
-   *         those of plugins the client turned off or that no longer exist. Other commands are unchanged.
+   *         those of plugins the client turned off or that no longer exist, and those of every plugin that sets up
+   *         the display after the first one that runs. Other commands are unchanged.
    */
   std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid);
 

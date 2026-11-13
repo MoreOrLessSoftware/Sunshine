@@ -126,7 +126,7 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `notice_url`  | No       | An `https://` page with more about `notice`, linked after it.                                                      |
 | `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50 to 500.                          |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
-| `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. Defaults to `false`. |
+| `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. When several such plugins are active for an application, only the first in plugin order runs. Defaults to `false`. |
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect` and `apply`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply`. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 | `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |

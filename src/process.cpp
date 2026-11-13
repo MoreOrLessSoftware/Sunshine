@@ -164,15 +164,26 @@ namespace proc {
   std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid) {
     std::vector<cmd_t> resolved;
     resolved.reserve(cmds.size());
+    // Plugins that set up the display would each rearrange the displays the one before set up, so only the
+    // first that runs for this client does. The commands are in plugin order, like plugins::display_plugin().
+    std::string display_plugin;
     for (const auto &cmd : cmds) {
       if (cmd.plugin.empty()) {
         resolved.push_back(cmd);
+        continue;
+      }
+      const bool sets_up_display = plugins::manages_display(cmd.plugin);
+      if (sets_up_display && !display_plugin.empty() && display_plugin != cmd.plugin) {
+        BOOST_LOG(warning) << "Skipping the "sv << cmd.plugin << " plugin: the "sv << display_plugin << " plugin already sets up the display for this application"sv;
         continue;
       }
       auto env = plugins::stream_env(cmd.plugin, app_overrides, client_uuid);
       if (!env) {
         BOOST_LOG(info) << "Skipping the "sv << cmd.plugin << " plugin: it's turned off for this client or no longer exists"sv;
         continue;
+      }
+      if (sets_up_display) {
+        display_plugin = cmd.plugin;
       }
       auto &added = resolved.emplace_back(cmd);
       added.env = std::move(*env);
