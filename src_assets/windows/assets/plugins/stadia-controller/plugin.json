@@ -59,14 +59,6 @@
       ]
     },
     {
-      "id": "dns_upstream",
-      "type": "string",
-      "scope": "host",
-      "label": "DNS upstream",
-      "description": "Where the receiver's DNS server forwards the names it does not answer itself, usually your router. Leave empty to use this PC's own DNS server. The controller must use this PC as its DNS server, for example through a DHCP option on your router.",
-      "default": ""
-    },
-    {
       "id": "deadzone",
       "type": "boolean",
       "label": "Stick deadzones",
@@ -79,6 +71,14 @@
       "label": "Pause Windows Time while running",
       "description": "The receiver answers the controller's time requests on UDP 123, which the Windows Time service holds. Stop the service while the receiver runs and start it again afterwards.",
       "default": true
+    },
+    {
+      "id": "dns_upstream",
+      "type": "string",
+      "scope": "host",
+      "label": "DNS upstream",
+      "description": "Where the receiver's DNS server forwards the names it does not answer itself, usually your router. Leave empty to use this PC's own DNS server. The controller must use this PC as its DNS server, for example through a DHCP option on your router.",
+      "default": ""
     },
     {
       "id": "keep_logs",
