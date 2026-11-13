@@ -117,6 +117,7 @@ namespace plugins {
       std::jthread reinstaller;  ///< Thread started by `reinstall_updated_builtins()`.
       fetcher_t fetcher = fetch_https;  ///< Downloads plugins imported from a URL.
       std::unordered_map<std::string, update_check_t> updates;  ///< Last check for updates keyed by plugin ID.
+      std::chrono::milliseconds choices_timeout = DEFAULT_CHOICES_TIMEOUT;  ///< How long `list_choices()` lets a choices script run.
     };
 
     /**
@@ -207,7 +208,8 @@ namespace plugins {
      *
      * @param option Option to check against.
      * @param value Candidate value.
-     * @return `true` when the value has the right type and lies within the allowed range or list.
+     * @return `true` when the value has the right type and lies within the allowed range or list. A choice option
+     *         with a choices script also accepts any value the script could offer, since its list can change.
      */
     bool is_valid_value(const option_t &option, const json &value) {
       switch (option.type) {
@@ -224,9 +226,16 @@ namespace plugins {
         case option_type_e::string:
           return value.is_string();
         case option_type_e::choice:
-          return value.is_string() && std::ranges::any_of(option.choices, [&value](const choice_t &choice) {
-                   return choice.value == value.get<std::string>();
-                 });
+          {
+            if (!value.is_string()) {
+              return false;
+            }
+            const auto &text = value.get_ref<const std::string &>();
+            return std::ranges::any_of(option.choices, [&text](const choice_t &choice) {
+                     return choice.value == text;
+                   }) ||
+                   (!option.choices_script.empty() && is_valid_script_choice(text));
+          }
       }
       return false;
     }
@@ -312,9 +321,35 @@ namespace plugins {
     }
 
     /**
+     * @brief Parse one entry of a list of choices.
+     *
+     * @param entry A string, or an object with a string `value` and optional `label` and `group`.
+     * @param out Receives the choice, labeled with its value when it has no label.
+     * @param error Receives the reason when the entry is invalid.
+     * @return `false` when the entry is invalid.
+     */
+    bool parse_choice(const json &entry, choice_t &out, std::string &error) {
+      if (entry.is_string()) {
+        out.value = entry.get<std::string>();
+      } else if (entry.is_object() && entry.contains("value") && entry["value"].is_string()) {
+        out.value = entry["value"].get<std::string>();
+        if (!read_string(entry, "label", out.label, error) || !read_string(entry, "group", out.group, error)) {
+          return false;
+        }
+      } else {
+        error = "each choice must be a string or an object with a string 'value'";
+        return false;
+      }
+      if (out.label.empty()) {
+        out.label = out.value;
+      }
+      return true;
+    }
+
+    /**
      * @brief Parse the list of values a choice option accepts.
      *
-     * @param node Array of strings or of objects with `value` and optional `label`.
+     * @param node Array of entries accepted by `parse_choice()`.
      * @param out Receives the parsed choices.
      * @param error Receives the reason when the list is invalid.
      * @return `false` when the list is invalid.
@@ -326,19 +361,8 @@ namespace plugins {
       }
       for (const auto &entry : node) {
         choice_t choice;
-        if (entry.is_string()) {
-          choice.value = entry.get<std::string>();
-        } else if (entry.is_object() && entry.contains("value") && entry["value"].is_string()) {
-          choice.value = entry["value"].get<std::string>();
-          if (!read_string(entry, "label", choice.label, error)) {
-            return false;
-          }
-        } else {
-          error = "each choice must be a string or an object with a string 'value'";
+        if (!parse_choice(entry, choice, error)) {
           return false;
-        }
-        if (choice.label.empty()) {
-          choice.label = choice.value;
         }
         out.emplace_back(std::move(choice));
       }
@@ -404,7 +428,13 @@ namespace plugins {
         option.label = option.id;
       }
 
-      if (option.type == option_type_e::choice && !parse_choices(node.value("choices", json::array()), option.choices, error)) {
+      if (option.type == option_type_e::choice) {
+        if (!parse_choices(node.value("choices", json::array()), option.choices, error) ||
+            !read_string(node, "choices_script", option.choices_script, error)) {
+          return std::nullopt;
+        }
+      } else if (node.contains("choices_script")) {
+        error = std::format("option '{}': only a choice option can have a 'choices_script'", option.id);
         return std::nullopt;
       }
 
@@ -1298,6 +1328,9 @@ namespace plugins {
               return existing.id == option->id;
             })) {
           error = std::format("duplicate option id '{}'", option->id);
+          return std::nullopt;
+        }
+        if (!is_valid_script(option->choices_script, dir, error)) {
           return std::nullopt;
         }
         if (option->apply && manifest.scripts.apply.empty()) {
@@ -2451,6 +2484,18 @@ namespace plugins {
     return import_from(source, path_to_utf8(source), {}, {}, id, updated, error);
   }
 
+  nlohmann::json choices_json(const std::vector<choice_t> &choices) {
+    json result = json::array();
+    for (const auto &choice : choices) {
+      json entry = {{"value", choice.value}, {"label", choice.label}};
+      if (!choice.group.empty()) {
+        entry["group"] = choice.group;
+      }
+      result.push_back(std::move(entry));
+    }
+    return result;
+  }
+
   nlohmann::json list() {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
@@ -2480,10 +2525,8 @@ namespace plugins {
           entry["step"] = *option.step;
         }
         if (option.type == option_type_e::choice) {
-          entry["choices"] = json::array();
-          for (const auto &choice : option.choices) {
-            entry["choices"].push_back({{"value", choice.value}, {"label", choice.label}});
-          }
+          entry["choices"] = choices_json(option.choices);
+          entry["dynamic"] = !option.choices_script.empty();
         }
         options.push_back(std::move(entry));
       }
@@ -2889,6 +2932,190 @@ namespace plugins {
     launch_task(reg, id, action, manifest, env, activate, action_id, std::nullopt);
 
     return result_e::ok;
+  }
+
+  bool is_valid_script_choice(std::string_view value) {
+    return !value.empty() && value.size() <= MAX_CHOICE_VALUE_LENGTH && std::ranges::none_of(value, [](const char c) {
+      return std::iscntrl(static_cast<unsigned char>(c));
+    });
+  }
+
+  bool parse_script_choices(const nlohmann::json &node, std::vector<choice_t> &out, std::string &error) {
+    if (!node.is_array()) {
+      error = "the list must be an array";
+      return false;
+    }
+    if (node.size() > MAX_SCRIPT_CHOICES) {
+      error = std::format("the list has more than {} choices", MAX_SCRIPT_CHOICES);
+      return false;
+    }
+    for (const auto &entry : node) {
+      choice_t choice;
+      if (!parse_choice(entry, choice, error)) {
+        return false;
+      }
+      if (!is_valid_script_choice(choice.value)) {
+        error = std::format("each value must be 1 to {} bytes without control characters", MAX_CHOICE_VALUE_LENGTH);
+        return false;
+      }
+      out.emplace_back(std::move(choice));
+    }
+    return true;
+  }
+
+  namespace {
+    /**
+     * @brief Numbers the files choices scripts write, so scripts running at the same time don't share one.
+     */
+    std::atomic<std::uint64_t> choices_file_counter {0};
+
+    /**
+     * @brief Read the list a choices script wrote, then delete the file.
+     *
+     * @param file File the script wrote.
+     * @param out Receives the parsed choices.
+     * @param error Receives the reason when the list is missing or rejected.
+     * @return `false` when the file is missing, too large, not JSON, or rejected by `parse_script_choices()`.
+     */
+    bool read_choices_file(const fs::path &file, std::vector<choice_t> &out, std::string &error) {
+      std::error_code ec;
+      const auto size = fs::file_size(file, ec);
+      if (ec) {
+        error = "the choices script wrote no list";
+        return false;
+      }
+      if (size > MAX_CHOICES_FILE_SIZE) {
+        fs::remove(file, ec);
+        error = std::format("the choices script wrote more than {} bytes", MAX_CHOICES_FILE_SIZE);
+        return false;
+      }
+
+      std::string content;
+      {
+        std::ifstream in(file, std::ios::binary);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        content = ss.str();
+      }
+      fs::remove(file, ec);
+
+      // PowerShell 5.1 writes a byte order mark with -Encoding UTF8
+      if (content.starts_with("\xEF\xBB\xBF"sv)) {
+        content.erase(0, 3);
+      }
+      const auto node = json::parse(content, nullptr, false);
+      if (node.is_discarded()) {
+        error = "the choices script wrote invalid JSON";
+        return false;
+      }
+      if (!parse_script_choices(node, out, error)) {
+        error = "the choices script wrote a bad list: " + error;
+        return false;
+      }
+      return true;
+    }
+  }  // namespace
+
+  result_e list_choices(const std::string &id, const std::string &option_id, std::vector<choice_t> &out, std::string &reason) {
+    auto &reg = registry();
+    option_t option;
+    std::string command;
+    std::map<std::string, std::string> env;
+    fs::path data_dir;
+    script_runner_t runner;
+    std::chrono::milliseconds timeout;
+    {
+      std::scoped_lock lock {reg.mutex};
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        reason = std::format("plugin '{}' not found", id);
+        return result_e::not_found;
+      }
+      const auto found = std::ranges::find_if(manifest->options, [&option_id](const option_t &candidate) {
+        return candidate.id == option_id && !candidate.choices_script.empty();
+      });
+      if (found == manifest->options.end()) {
+        reason = std::format("plugin '{}' has no option '{}' with a choices script", id, option_id);
+        return result_e::invalid;
+      }
+      if (const auto *state = find_state(reg, id); !state || !state->installed) {
+        reason = std::format("plugin '{}' must be installed before listing its choices", id);
+        return result_e::not_installed;
+      }
+      if (!reg.session_ready()) {
+        reason = "a user must be signed in to list the choices";
+        return result_e::unavailable;
+      }
+      option = *found;
+      command = script_command(manifest->dir / option.choices_script);
+      data_dir = plugin_data_dir(reg.paths, id);
+      env = script_env(*manifest, effective_options(reg, *manifest), data_dir);
+      runner = reg.runner;
+      timeout = reg.choices_timeout;
+    }
+
+    std::error_code ec;
+    fs::create_directories(data_dir, ec);
+    const auto choices_file = data_dir / std::format(".choices-{}-{}.json", option_id, choices_file_counter++);
+    const auto log_file = data_dir / ".choices.log";
+    fs::remove(choices_file, ec);
+    env["SUNSHINE_PLUGIN_CHOICE_OPTION"] = option_id;
+    env["SUNSHINE_PLUGIN_CHOICES_FILE"] = path_to_utf8(fs::path(choices_file).make_preferred());
+
+    if (std::unique_ptr<FILE, decltype(&std::fclose)> file {open_shared(log_file, L"w"), &std::fclose}; file) {
+      std::fputs(std::format("Listing choices for option '{}'\n", option_id).c_str(), file.get());
+    }
+
+    BOOST_LOG(info) << "Running plugin script ["sv << command << ']';
+    std::stop_source stop;
+    int exit_code;
+    {
+      // Stops the script once the timeout passes, unless the script finished first and stopped this thread.
+      std::jthread watchdog([&stop, timeout](std::stop_token finished) {
+        std::mutex mutex;
+        std::condition_variable_any cv;
+        std::unique_lock lock {mutex};
+        cv.wait_for(lock, finished, timeout, [] {
+          return false;
+        });
+        if (!finished.stop_requested()) {
+          stop.request_stop();
+        }
+      });
+      exit_code = runner(command, false, env, data_dir, log_file, stop.get_token());
+    }
+
+    if (stop.stop_requested()) {
+      fs::remove(choices_file, ec);
+      reason = std::format("the choices script did not finish within {} seconds", std::chrono::ceil<std::chrono::seconds>(timeout).count());
+    } else if (exit_code != 0) {
+      fs::remove(choices_file, ec);
+      reason = std::format("the choices script failed with exit code {}", exit_code);
+    } else {
+      std::vector<choice_t> listed;
+      if (read_choices_file(choices_file, listed, reason)) {
+        out = option.choices;
+        std::set<std::string> seen;
+        for (const auto &choice : out) {
+          seen.insert(choice.value);
+        }
+        for (auto &choice : listed) {
+          if (seen.insert(choice.value).second) {
+            out.emplace_back(std::move(choice));
+          }
+        }
+        return result_e::ok;
+      }
+    }
+
+    BOOST_LOG(error) << "Plugin ["sv << id << "] couldn't list the choices of option ["sv << option_id << "]: "sv << reason;
+    return result_e::invalid;
+  }
+
+  void set_choices_timeout_for_testing(std::chrono::milliseconds timeout) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.choices_timeout = timeout;
   }
 
   void wait_for_task() {

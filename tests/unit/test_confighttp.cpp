@@ -344,6 +344,7 @@ protected:
     server->resource["^/plugins-install-test$"]["POST"] = confighttp::installPlugin;
     server->resource["^/plugins-uninstall-test$"]["POST"] = confighttp::uninstallPlugin;
     server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
+    server->resource["^/plugins-choices-test$"]["GET"] = confighttp::getPluginChoices;
     server->resource["^/plugins-guide-test$"]["GET"] = confighttp::getPluginGuide;
     server->resource["^/plugins-import-test$"]["POST"] = confighttp::importPlugin;
     server->resource["^/plugins-check-updates-test$"]["POST"] = confighttp::checkPluginUpdates;
@@ -2121,6 +2122,7 @@ protected:
     std::filesystem::create_directories(plugin_dir);
     std::ofstream(plugin_dir / "install.ps1") << "exit 0\n";
     std::ofstream(plugin_dir / "go.ps1") << "exit 0\n";
+    std::ofstream(plugin_dir / "choices.ps1") << "exit 0\n";
     std::ofstream(plugin_dir / "panel.html") << "<!doctype html><title>Test panel</title>";
     // The panel reads from a port nothing listens on: bind one, then close it.
     {
@@ -2133,7 +2135,10 @@ protected:
       "name": "Test Plugin",
       "version": "1.0.0",
       "scripts": {{"install": "install.ps1"}},
-      "options": [{{"id": "level", "type": "number", "default": 1, "min": 0, "max": 10}}],
+      "options": [
+        {{"id": "level", "type": "number", "default": 1, "min": 0, "max": 10}},
+        {{"id": "profile", "type": "choice", "choices": [{{"value": "", "label": "Don't change"}}], "choices_script": "choices.ps1"}}
+      ],
       "actions": [{{"id": "go", "label": "Go", "script": "go.ps1"}}],
       "panel": {{"file": "panel.html", "port": {}}}
     }})",
@@ -2445,6 +2450,38 @@ TEST_F(PluginsConfigHttpTest, GetPluginLogReturnsText) {
 TEST_F(PluginsConfigHttpTest, GetPluginLogValidatesId) {
   EXPECT_EQ(send("GET", "/plugins-log-test")->status_code, "400 Bad Request");
   EXPECT_EQ(send("GET", "/plugins-log-test?id=missing")->status_code, "404 Not Found");
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginChoicesRunsTheChoicesScript) {
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  plugins::set_script_runner_for_testing([](const std::string &, bool, const std::map<std::string, std::string> &env, const std::filesystem::path &, const std::filesystem::path &, std::stop_token) {
+    std::ofstream(std::filesystem::path(env.at("SUNSHINE_PLUGIN_CHOICES_FILE"))) << R"([{"value":"a.icc","label":"A","group":"Installed"}])";
+    return 0;
+  });
+
+  const auto response = send("GET", "/plugins-choices-test?id=p&option=profile");
+  ASSERT_EQ(response->status_code, "200 OK");
+  const auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_TRUE(body.at("status").get<bool>());
+  EXPECT_EQ(body.at("choices"), nlohmann::json::parse(R"([{"value":"","label":"Don't change"},{"value":"a.icc","label":"A","group":"Installed"}])"));
+  EXPECT_EQ(get_plugin()["options"][1]["dynamic"], true);
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginChoicesReportsErrors) {
+  EXPECT_EQ(send("GET", "/plugins-choices-test?id=p")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-choices-test?option=profile")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-choices-test?id=missing&option=profile")->status_code, "404 Not Found");
+  EXPECT_EQ(send("GET", "/plugins-choices-test?id=p&option=profile")->status_code, "400 Bad Request");  // Not installed
+
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  const auto response = send("GET", "/plugins-choices-test?id=p&option=profile");  // The script writes no list
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("wrote no list")) << response->content.string();
+
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  EXPECT_EQ(client->request("GET", "/plugins-choices-test?id=p&option=profile", "", headers)->status_code, "401 Unauthorized");
 }
 
 TEST_F(PluginsConfigHttpTest, RunPluginActionAfterInstall) {

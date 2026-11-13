@@ -142,7 +142,33 @@ Each option has an `id` (lowercase letters, digits and `_`, starting with a lett
 | `boolean` | `true` or `false`                        |                                                                                               |
 | `number`  | A number                                 | `min`, `max` and `step`                                                                       |
 | `string`  | Text                                     |                                                                                               |
-| `choice`  | One of the listed values                 | `choices`: an array of strings, or of objects with a `value` and a `label`                    |
+| `choice`  | One of the listed values                 | `choices`: an array of strings, or of objects with a `value`, a `label` and a `group`; and `choices_script` |
+
+A choice option can list more values when the web UI shows it, such as the devices or files on this host, by naming a
+`choices_script` (a `.ps1` file directly inside the plugin folder). See [Listing choices](#listing-choices).
+
+## Listing choices
+When the web UI shows a choice option with a `choices_script`, Sunshine runs the script as the signed-in user,
+without elevation, and the select offers the option's `choices` followed by the values the script lists. A refresh
+button next to the select runs the script again. The plugin must be installed first.
+
+The script gets the [script environment](#script-environment) with the plugin's own option values, and two more
+variables: `SUNSHINE_PLUGIN_CHOICE_OPTION`, the ID of the option, so one script can serve several options, and
+`SUNSHINE_PLUGIN_CHOICES_FILE`, the file to write the list to. The list is a JSON array in the same form as
+`choices`; choices with a `group` are listed under it, after those without one. A value can't be empty, longer than
+512 bytes or hold control characters, and the list can't hold more than 1000 choices or 256 KiB. The script has 15
+seconds to exit with 0, and its output goes to `.choices.log` in its data folder.
+
+```powershell
+$choices = Get-ChildItem "$env:windir\System32\spool\drivers\color" -Filter *.icc |
+    ForEach-Object { @{ value = $_.Name; label = $_.BaseName; group = 'Installed' } }
+ConvertTo-Json -InputObject @($choices) -Compress | Set-Content -LiteralPath $env:SUNSHINE_PLUGIN_CHOICES_FILE -Encoding UTF8
+```
+
+`choices` must still list at least one value, which the option uses until the list is in and when the script lists
+nothing; something like "Don't change" works well. Since the script's list can change, the option accepts any value
+the script could list, and a saved value the script no longer lists stays selected, marked as not found. The do and
+undo scripts should handle such a value, for example by logging a warning and leaving things as they are.
 
 ## Applying options
 An option that needs more than a new value at the next stream, such as a driver setting, can set `"apply": true`.
@@ -251,7 +277,8 @@ A client command's script receives `SUNSHINE_CLIENT_COMMAND_ID`, `SUNSHINE_CLIEN
 
 ## Logs
 The output of install, uninstall, action, apply and client command scripts goes to `<id>.log` in the `plugin-data`
-folder of the config directory, and *View log* on the plugin's page shows it. The output of do, undo, connect and
+folder of the config directory, and *View log* on the plugin's page shows it. The output of a choices script goes to
+`.choices.log` in the plugin's data folder. The output of do, undo, connect and
 disconnect scripts isn't kept, so have them write to their own file if you need a record.
 
 ## Notes for coding agents

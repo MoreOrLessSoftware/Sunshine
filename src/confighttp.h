@@ -247,6 +247,14 @@ namespace confighttp {
   void getPluginLog(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief List the values a plugin's choice option accepts, running the option's choices script.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPluginChoices(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Run one of a plugin's actions in the background.
    *
    * @param response HTTP response object to populate.

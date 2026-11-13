@@ -3219,6 +3219,50 @@ namespace confighttp {
   }
 
   /**
+   * @brief List the values a plugin's choice option accepts, running the option's choices script.
+   *
+   * The response holds the manifest's choices followed by the script's:
+   * @code{.json}
+   * {
+   *   "status": true,
+   *   "choices": [
+   *     {"value": "", "label": "Don't change"},
+   *     {"value": "HDR Calibrated.icc", "label": "HDR Calibrated", "group": "Installed"}
+   *   ]
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/choices?id=hdr-control&option=profile| GET| null}
+   */
+  void getPluginChoices(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto query_params = request->parse_query_string();
+    const auto id_it = query_params.find("id");
+    const auto option_it = query_params.find("option");
+    if (id_it == query_params.end() || option_it == query_params.end()) {
+      bad_request(response, request, "Plugin id and option are required");
+      return;
+    }
+
+    std::vector<plugins::choice_t> choices;
+    std::string error;
+    if (const auto result = plugins::list_choices(id_it->second, option_it->second, choices, error); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["choices"] = plugins::choices_json(choices);
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Get a plugin's panel page, shown in a frame on the plugin's card.
    *
    * Unlike every other response, the page may be framed by Sunshine's own pages (and no others).
@@ -3670,6 +3714,7 @@ namespace confighttp {
     server.resource["^/api/plugins/update$"]["POST"] = updatePlugin;
     server.resource["^/api/plugins/guide$"]["GET"] = getPluginGuide;
     server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
+    server.resource["^/api/plugins/choices$"]["GET"] = getPluginChoices;
     server.resource["^/api/plugins/panel$"]["GET"] = getPluginPanel;
     server.resource["^/api/plugins/proxy$"]["GET"] = proxyPluginRequest;
     server.resource["^/api/plugins/rescan$"]["POST"] = rescanPlugins;

@@ -134,6 +134,19 @@ namespace {
     manifest["options"][3]["apply"] = true;
     return manifest;
   }
+
+  /**
+   * @brief A manifest whose `mode` option lists more values with `choices.ps1`.
+   *
+   * @param id Plugin ID.
+   * @return Manifest JSON.
+   */
+  json choices_manifest(const std::string &id) {
+    auto manifest = full_manifest(id);
+    manifest["options"][3]["choices_script"] = "choices.ps1";
+    manifest["options"][3]["choices"][1]["group"] = "Fixed";
+    return manifest;
+  }
 }  // namespace
 
 /**
@@ -164,6 +177,7 @@ protected:
     plugins::reset_script_runner_for_testing();
     plugins::reset_session_check_for_testing();
     plugins::reset_fetcher_for_testing();
+    plugins::set_choices_timeout_for_testing(plugins::DEFAULT_CHOICES_TIMEOUT);
     plugins::set_change_callback({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
@@ -370,7 +384,14 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"ChoicesEmpty", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[]}]})", "'choices' must be a non-empty array"},
     invalid_manifest_t {"ChoiceInvalid", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[1]}]})", "each choice must be"},
     invalid_manifest_t {"ChoiceValueMissing", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[{"label":"x"}]}]})", "each choice must be"},
-    invalid_manifest_t {"ChoiceLabelNotString", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[{"value":"a","label":1}]}]})", "'label' must be a string"}
+    invalid_manifest_t {"ChoiceLabelNotString", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[{"value":"a","label":1}]}]})", "'label' must be a string"},
+    invalid_manifest_t {"ChoiceGroupNotString", R"({"id":"p","options":[{"id":"o","type":"choice","choices":[{"value":"a","group":1}]}]})", "'group' must be a string"},
+    invalid_manifest_t {"ChoicesScriptNotString", R"({"id":"p","options":[{"id":"o","type":"choice","choices":["a"],"choices_script":1}]})", "'choices_script' must be a string"},
+    invalid_manifest_t {"ChoicesScriptMissing", R"({"id":"p","options":[{"id":"o","type":"choice","choices":["a"],"choices_script":"missing.ps1"}]})", "does not exist"},
+    invalid_manifest_t {"ChoicesScriptTraversal", R"({"id":"p","options":[{"id":"o","type":"choice","choices":["a"],"choices_script":"../exists.ps1"}]})", "must be a .ps1 file"},
+    invalid_manifest_t {"ChoicesScriptWithoutChoices", R"({"id":"p","options":[{"id":"o","type":"choice","choices_script":"exists.ps1"}]})", "'choices' must be a non-empty array"},
+    invalid_manifest_t {"ChoicesScriptOnString", R"({"id":"p","options":[{"id":"o","type":"string","choices_script":"exists.ps1"}]})", "only a choice option can have a 'choices_script'"},
+    invalid_manifest_t {"ChoicesScriptDefaultControl", "{\"id\":\"p\",\"options\":[{\"id\":\"o\",\"type\":\"choice\",\"choices\":[\"a\"],\"choices_script\":\"exists.ps1\",\"default\":\"x\\ny\"}]}", "invalid default"}
   ),
   [](const testing::TestParamInfo<invalid_manifest_t> &info) {
     return std::string(info.param.name);
@@ -605,6 +626,285 @@ TEST_F(PluginsTest, ListDescribesPlugins) {
   EXPECT_FALSE(options[2].contains("min"));
   EXPECT_EQ(options[3]["type"], "choice");
   EXPECT_EQ(options[3]["choices"][1]["label"], "On");
+  EXPECT_FALSE(options[3]["choices"][1].contains("group"));
+  EXPECT_EQ(options[3]["dynamic"], false);
+}
+
+TEST_F(PluginsTest, ChoicesScriptOptionsAcceptValuesTheScriptCouldList) {
+  const auto dir = write_plugin(builtin_dir, "p", choices_manifest("p"));
+  write_text(dir / "choices.ps1", "exit 0\n");
+  std::string error;
+  const auto manifest = plugins::parse_manifest(choices_manifest("p"), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  const auto &option = manifest->options[3];
+  EXPECT_EQ(option.choices_script, "choices.ps1");
+  EXPECT_EQ(option.choices[1].group, "Fixed");
+  EXPECT_TRUE(option.choices[0].group.empty());
+
+  // Values the manifest doesn't list are kept, since the script's list can change
+  auto options = plugins::normalize_options(*manifest, {{"mode", "HDR Calibrated.icc"}}, true, error);
+  ASSERT_TRUE(options) << error;
+  EXPECT_EQ((*options)["mode"], "HDR Calibrated.icc");
+  const auto overrides = plugins::normalize_overrides(*manifest, {{"mode", "HDR Calibrated.icc"}}, true, error);
+  ASSERT_TRUE(overrides) << error;
+  EXPECT_EQ((*overrides)["mode"], "HDR Calibrated.icc");
+
+  // ...unless the script could never list them
+  for (const auto &bad : {json(""), json("a\tb"), json(std::string(plugins::MAX_CHOICE_VALUE_LENGTH + 1, 'x')), json(1)}) {
+    EXPECT_FALSE(plugins::normalize_options(*manifest, {{"mode", bad}}, true, error)) << bad;
+  }
+
+  plugins::load(paths());
+  const auto listed = find_plugin(plugins::list(), "p")["options"][3];
+  EXPECT_EQ(listed["dynamic"], true);
+  EXPECT_EQ(listed["choices"][1]["group"], "Fixed");
+}
+
+TEST(PluginsChoicesTest, ScriptChoiceValues) {
+  EXPECT_TRUE(plugins::is_valid_script_choice("HDR Calibrated Profile 6-7-2026.icc"));
+  EXPECT_TRUE(plugins::is_valid_script_choice("\xC3\xA9t\xC3\xA9"));
+  EXPECT_TRUE(plugins::is_valid_script_choice(std::string(plugins::MAX_CHOICE_VALUE_LENGTH, 'x')));
+  EXPECT_FALSE(plugins::is_valid_script_choice(""));
+  EXPECT_FALSE(plugins::is_valid_script_choice(std::string(plugins::MAX_CHOICE_VALUE_LENGTH + 1, 'x')));
+  EXPECT_FALSE(plugins::is_valid_script_choice("a\nb"));
+  EXPECT_FALSE(plugins::is_valid_script_choice("a\x7f"));
+}
+
+TEST(PluginsChoicesTest, ParseScriptChoicesReadsEntries) {
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  ASSERT_TRUE(plugins::parse_script_choices(json::parse(R"(["a",{"value":"b","label":"B","group":"G"},{"value":"c"}])"), choices, error)) << error;
+  ASSERT_EQ(choices.size(), 3);
+  EXPECT_EQ(choices[0].value, "a");
+  EXPECT_EQ(choices[0].label, "a");
+  EXPECT_EQ(choices[1].label, "B");
+  EXPECT_EQ(choices[1].group, "G");
+  EXPECT_EQ(choices[2].label, "c");
+  EXPECT_TRUE(choices[2].group.empty());
+
+  choices.clear();
+  EXPECT_TRUE(plugins::parse_script_choices(json::array(), choices, error));
+  EXPECT_TRUE(choices.empty());
+
+  const auto json_out = plugins::choices_json({{"a", "A", ""}, {"b", "B", "G"}});
+  EXPECT_EQ(json_out, json::parse(R"([{"value":"a","label":"A"},{"value":"b","label":"B","group":"G"}])"));
+}
+
+/**
+ * @brief A list a choices script wrote that should be rejected, and the error it should produce.
+ */
+struct invalid_choices_t {
+  const char *name;  ///< Stable parameter name.
+  json list;  ///< The list.
+  const char *expected_error;  ///< Text expected in the error.
+};
+
+/**
+ * @brief Parameterized fixture for rejected choices script lists.
+ */
+class InvalidScriptChoicesTest: public testing::TestWithParam<invalid_choices_t> {};
+
+TEST_P(InvalidScriptChoicesTest, IsRejected) {
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  EXPECT_FALSE(plugins::parse_script_choices(GetParam().list, choices, error));
+  EXPECT_TRUE(error.contains(GetParam().expected_error)) << error;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Lists,
+  InvalidScriptChoicesTest,
+  testing::Values(
+    invalid_choices_t {"NotArray", json::object(), "must be an array"},
+    invalid_choices_t {"TooMany", json(std::vector<std::string>(plugins::MAX_SCRIPT_CHOICES + 1, "a")), "more than 1000 choices"},
+    invalid_choices_t {"EntryNotString", json::array({1}), "each choice must be"},
+    invalid_choices_t {"LabelNotString", json::parse(R"([{"value":"a","label":1}])"), "'label' must be a string"},
+    invalid_choices_t {"GroupNotString", json::parse(R"([{"value":"a","group":1}])"), "'group' must be a string"},
+    invalid_choices_t {"EmptyValue", json::array({""}), "without control characters"},
+    invalid_choices_t {"ControlCharacter", json::array({"a\nb"}), "without control characters"}
+  ),
+  [](const testing::TestParamInfo<invalid_choices_t> &info) {
+    return std::string(info.param.name);
+  }
+);
+
+/**
+ * @brief Fixture with an installed plugin whose `mode` option has a choices script.
+ */
+class PluginsChoicesScriptTest: public PluginsTest {
+protected:
+  void SetUp() override {
+    PluginsTest::SetUp();
+    plugin_dir = write_plugin(builtin_dir, "p", choices_manifest("p"));
+    write_text(plugin_dir / "choices.ps1", "exit 0\n");
+    plugins::load(paths());
+    std::string error;
+    ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+    plugins::wait_for_task();
+    calls.clear();
+  }
+
+  /**
+   * @brief Make the script runner write a list to the choices file, then exit.
+   *
+   * @param content Text written to the file, or `std::nullopt` to write nothing.
+   * @param exit_code Exit code the script returns.
+   */
+  void script_writes(std::optional<std::string> content, int exit_code = 0) {
+    plugins::set_script_runner_for_testing([this, content, exit_code](const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const fs::path &working_dir, const fs::path &log_file, std::stop_token) {
+      {
+        std::scoped_lock lock {calls_mutex};
+        calls.push_back({command, elevated, env, working_dir, log_file});
+      }
+      if (content) {
+        write_text(fs::path(env.at("SUNSHINE_PLUGIN_CHOICES_FILE")), *content);
+      }
+      return exit_code;
+    });
+  }
+
+  /**
+   * @brief List the choices of the `mode` option.
+   *
+   * @param choices Receives the choices.
+   * @param error Receives the reason when listing fails.
+   * @return Outcome of `plugins::list_choices()`.
+   */
+  static plugins::result_e list_mode(std::vector<plugins::choice_t> &choices, std::string &error) {
+    return plugins::list_choices("p", "mode", choices, error);
+  }
+
+  fs::path plugin_dir;  ///< Directory of the plugin.
+};
+
+TEST_F(PluginsChoicesScriptTest, ListsTheManifestChoicesThenTheScriptChoices) {
+  script_writes("\xEF\xBB\xBF" R"([{"value":"on","label":"Repeated"},{"value":"x.icc","label":"X","group":"Installed"},"y.icc"])");
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  ASSERT_EQ(list_mode(choices, error), plugins::result_e::ok) << error;
+
+  ASSERT_EQ(choices.size(), 4);
+  EXPECT_EQ(choices[0].value, "off");
+  EXPECT_EQ(choices[1].value, "on");
+  EXPECT_EQ(choices[1].label, "On");
+  EXPECT_EQ(choices[2].value, "x.icc");
+  EXPECT_EQ(choices[2].group, "Installed");
+  EXPECT_EQ(choices[3].value, "y.icc");
+
+  ASSERT_EQ(calls.size(), 1);
+  const auto &call = calls[0];
+  EXPECT_EQ(call.command, plugins::script_command(plugin_dir / "choices.ps1"));
+  EXPECT_FALSE(call.elevated);
+  EXPECT_EQ(call.working_dir, data_dir / "p");
+  EXPECT_EQ(call.log_file, data_dir / "p" / ".choices.log");
+  EXPECT_EQ(call.env.at("SUNSHINE_PLUGIN_ID"), "p");
+  EXPECT_EQ(call.env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "2");
+  EXPECT_EQ(call.env.at("SUNSHINE_PLUGIN_CHOICE_OPTION"), "mode");
+  const auto file = fs::path(call.env.at("SUNSHINE_PLUGIN_CHOICES_FILE"));
+  EXPECT_EQ(file.parent_path(), data_dir / "p");
+  EXPECT_FALSE(fs::exists(file));
+  EXPECT_TRUE(read_text(call.log_file).contains("Listing choices for option 'mode'"));
+
+  // Each run writes to its own file
+  ASSERT_EQ(list_mode(choices, error), plugins::result_e::ok) << error;
+  ASSERT_EQ(calls.size(), 2);
+  EXPECT_NE(calls[1].env.at("SUNSHINE_PLUGIN_CHOICES_FILE"), calls[0].env.at("SUNSHINE_PLUGIN_CHOICES_FILE"));
+}
+
+TEST_F(PluginsChoicesScriptTest, RejectsRequestsItCannotRun) {
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  EXPECT_EQ(plugins::list_choices("missing", "mode", choices, error), plugins::result_e::not_found);
+  EXPECT_EQ(plugins::list_choices("p", "unknown", choices, error), plugins::result_e::invalid);
+  EXPECT_EQ(plugins::list_choices("p", "name", choices, error), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no option 'name' with a choices script")) << error;
+
+  plugins::set_session_check_for_testing([] {
+    return false;
+  },
+                                         10ms);
+  EXPECT_EQ(list_mode(choices, error), plugins::result_e::unavailable);
+  EXPECT_TRUE(error.contains("signed in")) << error;
+  plugins::reset_session_check_for_testing();
+
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::uninstall, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  calls.clear();
+  EXPECT_EQ(list_mode(choices, error), plugins::result_e::not_installed);
+  EXPECT_TRUE(calls.empty());
+  EXPECT_TRUE(choices.empty());
+}
+
+/**
+ * @brief A choices script run that fails, and the error it should produce.
+ */
+struct failed_choices_run_t {
+  const char *name;  ///< Stable parameter name.
+  std::optional<std::string> content;  ///< What the script writes to the choices file, if anything.
+  int exit_code;  ///< Exit code of the script.
+  const char *expected_error;  ///< Text expected in the error.
+};
+
+/**
+ * @brief Parameterized fixture for failed choices script runs.
+ */
+class FailedChoicesRunTest: public PluginsChoicesScriptTest, public testing::WithParamInterface<failed_choices_run_t> {};
+
+TEST_P(FailedChoicesRunTest, IsReported) {
+  const auto &param = GetParam();
+  script_writes(param.content, param.exit_code);
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  EXPECT_EQ(list_mode(choices, error), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains(param.expected_error)) << error;
+  EXPECT_TRUE(choices.empty());
+  ASSERT_EQ(calls.size(), 1);
+  EXPECT_FALSE(fs::exists(fs::path(calls[0].env.at("SUNSHINE_PLUGIN_CHOICES_FILE"))));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Runs,
+  FailedChoicesRunTest,
+  testing::Values(
+    failed_choices_run_t {"ExitCode", R"(["a"])", 3, "failed with exit code 3"},
+    failed_choices_run_t {"NoFile", std::nullopt, 0, "wrote no list"},
+    failed_choices_run_t {"InvalidJson", "[", 0, "wrote invalid JSON"},
+    failed_choices_run_t {"BadList", R"({"a":1})", 0, "wrote a bad list: the list must be an array"},
+    failed_choices_run_t {"TooLarge", std::string(plugins::MAX_CHOICES_FILE_SIZE + 1, ' '), 0, "wrote more than"}
+  ),
+  [](const testing::TestParamInfo<failed_choices_run_t> &info) {
+    return std::string(info.param.name);
+  }
+);
+
+TEST_F(PluginsChoicesScriptTest, StopsAScriptThatRunsTooLong) {
+  plugins::set_choices_timeout_for_testing(50ms);
+  std::atomic<bool> stopped {false};
+  plugins::set_script_runner_for_testing([&stopped](const std::string &, bool, const std::map<std::string, std::string> &env, const fs::path &, const fs::path &, std::stop_token stop) {
+    write_text(fs::path(env.at("SUNSHINE_PLUGIN_CHOICES_FILE")), R"(["a"])");
+    while (!stop.stop_requested()) {
+      std::this_thread::sleep_for(5ms);
+    }
+    stopped = true;
+    return -1;
+  });
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  EXPECT_EQ(list_mode(choices, error), plugins::result_e::invalid);
+  EXPECT_TRUE(stopped);
+  EXPECT_TRUE(error.contains("did not finish within 1 seconds")) << error;
+  EXPECT_TRUE(choices.empty());
+}
+
+TEST_F(PluginsChoicesScriptTest, DoesNotStopAScriptThatFinishesInTime) {
+  plugins::set_choices_timeout_for_testing(10s);
+  script_writes(R"(["a"])");
+  std::vector<plugins::choice_t> choices;
+  std::string error;
+  const auto start = std::chrono::steady_clock::now();
+  ASSERT_EQ(list_mode(choices, error), plugins::result_e::ok) << error;
+  EXPECT_LT(std::chrono::steady_clock::now() - start, 5s);
+  EXPECT_EQ(choices.size(), 3);
 }
 
 TEST_F(PluginsTest, ConfigureValidatesRequests) {

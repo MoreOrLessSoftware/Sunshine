@@ -48,7 +48,28 @@ namespace plugins {
   struct choice_t {
     std::string value;  ///< Value passed to the scripts.
     std::string label;  ///< Text shown in the web UI.
+    std::string group;  ///< Heading the web UI lists the choice under, or empty for none.
   };
+
+  /**
+   * @brief Longest value, in bytes, a choices script may offer for a choice option.
+   */
+  constexpr std::size_t MAX_CHOICE_VALUE_LENGTH = 512;
+
+  /**
+   * @brief Most values a choices script may offer for a choice option.
+   */
+  constexpr std::size_t MAX_SCRIPT_CHOICES = 1000;
+
+  /**
+   * @brief Largest file, in bytes, a choices script may write.
+   */
+  constexpr std::size_t MAX_CHOICES_FILE_SIZE = 256 * 1024;
+
+  /**
+   * @brief How long a choices script may run before it is stopped.
+   */
+  constexpr std::chrono::milliseconds DEFAULT_CHOICES_TIMEOUT = std::chrono::seconds(15);
 
   /**
    * @brief A configuration option declared by a plugin manifest.
@@ -62,7 +83,8 @@ namespace plugins {
     std::optional<double> min;  ///< Smallest accepted value of a number option.
     std::optional<double> max;  ///< Largest accepted value of a number option.
     std::optional<double> step;  ///< Increment suggested to the web UI for a number option.
-    std::vector<choice_t> choices;  ///< Accepted values of a choice option.
+    std::vector<choice_t> choices;  ///< Accepted values of a choice option, or the values listed first when `choices_script` is set.
+    std::string choices_script;  ///< Script listing more values of a choice option when the web UI asks, relative to the plugin directory, or empty for none.
     bool apply = false;  ///< Whether saving a new value runs the plugin's `apply` script.
     bool host = false;  ///< Whether the option is set for the whole host only, from `"scope": "host"`, so applications and clients can't override it.
   };
@@ -653,6 +675,57 @@ namespace plugins {
    * @return Outcome of the request.
    */
   result_e start_task(const std::string &id, action_e action, std::string &error, bool activate = false, const std::string &action_id = {});
+
+  /**
+   * @brief Check whether a choices script may offer a value.
+   *
+   * @param value Candidate value.
+   * @return `true` for 1 to `MAX_CHOICE_VALUE_LENGTH` bytes without control characters.
+   */
+  bool is_valid_script_choice(std::string_view value);
+
+  /**
+   * @brief Parse the list a choices script wrote.
+   *
+   * @param node Array of strings, or of objects with a string `value` and optional `label` and `group`.
+   * @param out Receives the parsed choices.
+   * @param error Receives the reason when the list is rejected.
+   * @return `false` when the list is not an array, has more than `MAX_SCRIPT_CHOICES` entries, or has an invalid
+   *         entry or value (see `is_valid_script_choice()`).
+   */
+  bool parse_script_choices(const nlohmann::json &node, std::vector<choice_t> &out, std::string &error);
+
+  /**
+   * @brief Describe a list of choices for the web UI.
+   *
+   * @param choices Choices to describe.
+   * @return Array of objects with `value`, `label`, and `group` when the choice has one.
+   */
+  nlohmann::json choices_json(const std::vector<choice_t> &choices);
+
+  /**
+   * @brief List the values a choice option accepts, running its choices script.
+   *
+   * The script runs without elevation, as the signed-in user, in the plugin's data directory with the plugin's
+   * environment and two more variables: `SUNSHINE_PLUGIN_CHOICE_OPTION` names the option and
+   * `SUNSHINE_PLUGIN_CHOICES_FILE` names the file the script writes its list to, as JSON (see
+   * `parse_script_choices()`). Its output goes to `.choices.log` in the data directory.
+   *
+   * @param id Plugin ID.
+   * @param option_id ID of a choice option with a `choices_script`.
+   * @param out Receives the manifest's choices followed by the script's, without repeating a value.
+   * @param error Receives the reason when the list could not be made.
+   * @return `ok`, `not_found` (no such plugin), `invalid` (no such option, or it has no choices script, or the
+   *         script failed or wrote a bad list), `not_installed`, or `unavailable` (no user is signed in).
+   */
+  result_e list_choices(const std::string &id, const std::string &option_id, std::vector<choice_t> &out, std::string &error);
+
+  /**
+   * @brief Replace how long `list_choices()` lets a choices script run.
+   *
+   * @param timeout Longest run time.
+   */
+  void set_choices_timeout_for_testing(std::chrono::milliseconds timeout);
 
   /**
    * @brief Return the HTML file of a plugin's panel.
