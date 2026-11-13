@@ -1106,6 +1106,11 @@ namespace confighttp {
    *   "exclude-plugins": [
    *     "plugin-id"
    *   ],
+   *   "plugin-options": {
+   *     "plugin-id": {
+   *       "option-id": "value"
+   *     }
+   *   },
    *   "elevated": false,
    *   "auto-detach": true,
    *   "wait-all": true,
@@ -1164,6 +1169,20 @@ namespace confighttp {
         input_tree.erase("exclude-plugins");
       }
 
+      if (input_tree.contains("plugin-options")) {
+        std::string error;
+        auto plugin_options = plugins::normalize_app_overrides(input_tree["plugin-options"], error);
+        if (!plugin_options) {
+          bad_request(response, request, error);
+          return;
+        }
+        if (plugin_options->empty()) {
+          input_tree.erase("plugin-options");
+        } else {
+          input_tree["plugin-options"] = std::move(*plugin_options);
+        }
+      }
+
       auto &apps_node = file_tree["apps"];
       int index = input_tree["index"].get<int>();  // this will intentionally cause an exception if the provided value is the wrong type
 
@@ -1200,10 +1219,12 @@ namespace confighttp {
   }
 
   /**
-   * @brief Set which plugins several applications opt out of, in one write of the applications file.
+   * @brief Set which plugins several applications opt out of, and the plugin options they override, in one write of
+   * the applications file.
    * Each entry names an application by its current index and name; the request fails without changing
    * anything when an index is out of range or the name no longer matches, such as after another edit.
-   * Applications that are not listed are left as they are.
+   * Applications that are not listed are left as they are. A missing `exclude-plugins` clears the exclusions,
+   * while a missing `plugin-options` keeps the overrides.
    * The body for the post request should be JSON serialized in the following format:
    * @code{.json}
    * {
@@ -1213,7 +1234,12 @@ namespace confighttp {
    *       "name": "Desktop",
    *       "exclude-plugins": [
    *         "plugin-id"
-   *       ]
+   *       ],
+   *       "plugin-options": {
+   *         "other-plugin-id": {
+   *           "option-id": "value"
+   *         }
+   *       }
    *     }
    *   ]
    * }
@@ -1251,6 +1277,8 @@ namespace confighttp {
       nlohmann::json file_tree = nlohmann::json::parse(file_handler::read_file(config::stream.file_apps.c_str()));
       auto &apps_node = file_tree["apps"];
 
+      // Each entry is checked before any is applied, so a bad one changes nothing
+      std::vector<std::optional<nlohmann::json>> plugin_options;
       for (const auto &entry : input_tree["apps"]) {
         if (!entry.is_object() || !entry.contains("index") || !entry["index"].is_number_integer() || !entry.contains("name") || !entry["name"].is_string()) {
           bad_request(response, request, "each app needs an integer 'index' and a string 'name'");
@@ -1270,11 +1298,32 @@ namespace confighttp {
           return;
         }
 
-        auto &app = apps_node[index];
-        if (exclusions.empty()) {
+        auto &options = plugin_options.emplace_back();
+        if (entry.contains("plugin-options")) {
+          std::string error;
+          options = plugins::normalize_app_overrides(entry["plugin-options"], error);
+          if (!options) {
+            bad_request(response, request, error);
+            return;
+          }
+        }
+      }
+
+      for (std::size_t i = 0; i < input_tree["apps"].size(); ++i) {
+        const auto &entry = input_tree["apps"][i];
+        auto &app = apps_node[entry["index"].get<std::size_t>()];
+        if (const auto exclusions = entry.value("exclude-plugins", nlohmann::json::array()); exclusions.empty()) {
           app.erase("exclude-plugins");
         } else {
           app["exclude-plugins"] = exclusions;
+        }
+        if (!plugin_options[i]) {
+          continue;
+        }
+        if (plugin_options[i]->empty()) {
+          app.erase("plugin-options");
+        } else {
+          app["plugin-options"] = std::move(*plugin_options[i]);
         }
       }
 
@@ -1661,6 +1710,9 @@ namespace confighttp {
       const std::string uuid = input_tree.value("uuid", "");
       const bool removed = nvhttp::unpair_client(uuid);
       output_tree["status"] = removed;
+      if (removed) {
+        plugins::forget_client(uuid);
+      }
 
       if (removed && nvhttp::get_all_clients().empty()) {
         proc::proc.terminate();
@@ -1693,6 +1745,7 @@ namespace confighttp {
     print_req(request);
 
     nvhttp::erase_all_clients();
+    plugins::forget_client({});
     proc::proc.terminate();
 
     nlohmann::json output_tree;
@@ -2835,6 +2888,112 @@ namespace confighttp {
   }
 
   /**
+   * @brief List the plugin options and plugins each client overrides.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * The response is JSON in the following format, where `active` and `options` are each optional:
+   * @code{.json}
+   * {
+   *   "status": true,
+   *   "clients": {
+   *     "<uuid>": {
+   *       "plugin-id": {
+   *         "active": false,
+   *         "options": {
+   *           "option-id": "value"
+   *         }
+   *       }
+   *     }
+   *   }
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/clients/plugin-options| GET| null}
+   */
+  void getClientPluginOptions(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["clients"] = plugins::client_overrides();
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Replace the plugin options and plugins a client overrides.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * The body for the post request should be JSON serialized in the following format, where `active` and `options`
+   * are each optional. `"active": false` turns the plugin off for the client's streams. Plugins left out lose the
+   * client's overrides.
+   * @code{.json}
+   * {
+   *   "uuid": "<uuid>",
+   *   "plugins": {
+   *     "plugin-id": {
+   *       "active": false,
+   *       "options": {
+   *         "option-id": "value"
+   *       }
+   *     }
+   *   }
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/clients/plugin-options| POST| {"uuid":"<uuid>","plugins":{"stadia-controller":{"options":{"audio":"system"}}}}}
+   */
+  void saveClientPluginOptions(const resp_https_t &response, const req_https_t &request) {
+    if (!check_content_type(response, request, "application/json")) {
+      return;
+    }
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    std::string client_id = get_client_id(request);
+    if (!validate_csrf_token(response, request, client_id)) {
+      return;
+    }
+
+    print_req(request);
+
+    std::stringstream ss;
+    ss << request->content.rdbuf();
+    nlohmann::json body;
+    try {
+      body = nlohmann::json::parse(ss);
+    } catch (const nlohmann::json::exception &e) {
+      bad_request(response, request, e.what());
+      return;
+    }
+    if (!body.is_object() || !body.contains("uuid") || !body["uuid"].is_string() || body["uuid"].get<std::string>().empty()) {
+      bad_request(response, request, "'uuid' is required");
+      return;
+    }
+    const auto uuid = body["uuid"].get<std::string>();
+    if (nvhttp::get_cert_by_uuid(uuid).empty()) {
+      not_found(response, request, "client not found");
+      return;
+    }
+
+    std::string error;
+    if (const auto result = plugins::set_client_overrides(uuid, body.value("plugins", nlohmann::json::object()), error); result != plugins::result_e::ok) {
+      send_plugin_error(response, request, result, error);
+      return;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Start installing or uninstalling a plugin.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -3458,6 +3617,8 @@ namespace confighttp {
     server.resource["^/api/clients/unpair$"]["POST"] = unpair;
     server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
     server.resource["^/api/clients/update$"]["POST"] = updateClient;
+    server.resource["^/api/clients/plugin-options$"]["GET"] = getClientPluginOptions;
+    server.resource["^/api/clients/plugin-options$"]["POST"] = saveClientPluginOptions;
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;

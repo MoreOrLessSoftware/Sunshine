@@ -151,6 +151,38 @@ namespace confighttp {
   void savePluginConfig(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief List the plugin options and plugins each client overrides.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getClientPluginOptions(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Replace the plugin options and plugins a client overrides.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void saveClientPluginOptions(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Unpair a client and remove its plugin overrides.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void unpair(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Unpair every client and remove their plugin overrides.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void unpairAll(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Start installing a plugin, optionally activating it once the install succeeds.
    *
    * @param response HTTP response object to populate.

@@ -8,6 +8,7 @@
  */
 
 // test includes
+#include "../certificate_test_utils.h"
 #include "../tests_common.h"
 #include "../zip_test_utils.h"
 
@@ -2700,6 +2701,165 @@ TEST_F(SaveAppPluginsTest, RejectsMalformedRequests) {
 TEST_F(SaveAppPluginsTest, RejectsInvalidJson) {
   const auto response = send("POST", "/app-plugins-test", "{");
   EXPECT_EQ(response->status_code, "400 Bad Request");
+}
+
+
+/**
+ * @brief Runs the client plugin option endpoints with one paired client and isolated client state.
+ */
+class ClientPluginOptionsTest: public PluginsConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::string saved_state_file;  ///< The client state file to restore after the test.
+  bool saved_fresh_state = false;  ///< The fresh-state flag to restore after the test.
+  std::string uuid;  ///< UUID of the paired client.
+
+  void SetUp() override {
+    PluginsConfigHttpTest::SetUp();
+    saved_state_file = config::nvhttp.file_state;
+    saved_fresh_state = config::sunshine.flags[config::flag::FRESH_STATE];
+    config::nvhttp.file_state = (plugins_root / "sunshine_state.json").string();
+    config::sunshine.flags[config::flag::FRESH_STATE] = false;
+    nvhttp::test_support::reset_client_state();
+    uuid = nvhttp::test_support::add_client("TV", test_utils::certificates::generate_ca_credentials().x509, true);
+    ASSERT_FALSE(uuid.empty());
+
+    server->resource["^/client-plugin-options-test$"]["GET"] = confighttp::getClientPluginOptions;
+    server->resource["^/client-plugin-options-test$"]["POST"] = confighttp::saveClientPluginOptions;
+    server->resource["^/unpair-test$"]["POST"] = confighttp::unpair;
+    server->resource["^/unpair-all-test$"]["POST"] = confighttp::unpairAll;
+  }
+
+  void TearDown() override {
+    nvhttp::test_support::reset_client_state();
+    config::nvhttp.file_state = saved_state_file;
+    config::sunshine.flags[config::flag::FRESH_STATE] = saved_fresh_state;
+    PluginsConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Read every client's overrides through the endpoint.
+   *
+   * @return The `clients` object.
+   */
+  nlohmann::json get_overrides() {
+    const auto response = send("GET", "/client-plugin-options-test");
+    EXPECT_EQ(response->status_code, "200 OK");
+    return nlohmann::json::parse(response->content.string()).at("clients");
+  }
+
+  /**
+   * @brief Post a body and expect it to be rejected.
+   *
+   * @param body Request body.
+   * @param status Expected status line.
+   * @param error Expected error message.
+   */
+  void expect_rejected(const std::string &body, const std::string &status, const std::string &error) {
+    const auto response = send("POST", "/client-plugin-options-test", body);
+    EXPECT_EQ(response->status_code, status) << body;
+    EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("error"), error) << body;
+  }
+};
+
+TEST_F(ClientPluginOptionsTest, SavesAndListsAClientsOverrides) {
+  EXPECT_EQ(get_overrides(), nlohmann::json::object());
+
+  const auto response = send("POST", "/client-plugin-options-test", nlohmann::json {{"uuid", uuid}, {"plugins", {{"p", {{"active", false}, {"options", {{"level", 4}}}}}}}}.dump());
+  ASSERT_EQ(response->status_code, "200 OK") << response->content.string();
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("status"), true);
+  EXPECT_EQ(get_overrides(), (nlohmann::json {{uuid, {{"p", {{"active", false}, {"options", {{"level", 4}}}}}}}}));
+
+  // Without plugins, the client's overrides are cleared
+  ASSERT_EQ(send("POST", "/client-plugin-options-test", nlohmann::json {{"uuid", uuid}}.dump())->status_code, "200 OK");
+  EXPECT_EQ(get_overrides(), nlohmann::json::object());
+}
+
+TEST_F(ClientPluginOptionsTest, RejectsBadRequests) {
+  expect_rejected("{", "400 Bad Request", "[json.exception.parse_error.101] parse error at line 1, column 2: syntax error while parsing object key - unexpected end of input; expected string literal");
+  expect_rejected("[]", "400 Bad Request", "'uuid' is required");
+  expect_rejected(R"({"uuid":""})", "400 Bad Request", "'uuid' is required");
+  expect_rejected(R"({"uuid":1})", "400 Bad Request", "'uuid' is required");
+  expect_rejected(R"({"uuid":"unknown"})", "404 Not Found", "client not found");
+  expect_rejected(nlohmann::json {{"uuid", uuid}, {"plugins", {{"missing", nlohmann::json::object()}}}}.dump(), "404 Not Found", "plugin 'missing' not found");
+  expect_rejected(nlohmann::json {{"uuid", uuid}, {"plugins", {{"p", {{"options", {{"level", 99}}}}}}}}.dump(), "400 Bad Request", "invalid value for option 'level'");
+  EXPECT_EQ(get_overrides(), nlohmann::json::object());
+}
+
+TEST_F(ClientPluginOptionsTest, ChangesNeedAuthenticationAndASameOriginRequest) {
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  headers.emplace("Content-Type", "application/json");
+  EXPECT_EQ(client->request("GET", "/client-plugin-options-test", "", headers)->status_code, "401 Unauthorized");
+  EXPECT_EQ(client->request("POST", "/client-plugin-options-test", "{}", headers)->status_code, "401 Unauthorized");
+
+  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+  headers.emplace("Origin", "https://example.invalid");
+  const auto response = client->request("POST", "/client-plugin-options-test", "{}", headers);
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("Missing CSRF token"));
+
+  SimpleWeb::CaseInsensitiveMultimap text;
+  text.emplace("Authorization", create_auth_header("testuser", "testpass"));
+  text.emplace("Origin", std::format("https://localhost:{}", port));
+  text.emplace("Content-Type", "text/plain");
+  EXPECT_EQ(client->request("POST", "/client-plugin-options-test", "{}", text)->status_code, "400 Bad Request");
+}
+
+TEST_F(ClientPluginOptionsTest, UnpairingAClientRemovesItsOverrides) {
+  const auto other = nvhttp::test_support::add_client("Phone", test_utils::certificates::generate_ca_credentials().x509, true);
+  for (const auto &client_uuid : {uuid, other}) {
+    ASSERT_EQ(send("POST", "/client-plugin-options-test", nlohmann::json {{"uuid", client_uuid}, {"plugins", {{"p", {{"active", false}}}}}}.dump())->status_code, "200 OK");
+  }
+
+  // A client that isn't paired removes nothing
+  ASSERT_EQ(send("POST", "/unpair-test", R"({"uuid":"unknown"})")->status_code, "200 OK");
+  EXPECT_EQ(get_overrides().size(), 2);
+
+  ASSERT_EQ(send("POST", "/unpair-test", nlohmann::json {{"uuid", uuid}}.dump())->status_code, "200 OK");
+  EXPECT_EQ(get_overrides(), (nlohmann::json {{other, {{"p", {{"active", false}}}}}}));
+
+  ASSERT_EQ(send("POST", "/unpair-all-test")->status_code, "200 OK");
+  EXPECT_EQ(get_overrides(), nlohmann::json::object());
+}
+
+TEST_F(PluginsConfigHttpTest, SaveAppKeepsValidPluginOptions) {
+  const auto saved_file_apps = config::stream.file_apps;
+  config::stream.file_apps = (plugins_root / "apps.json").string();
+  std::ofstream(config::stream.file_apps) << R"({"env":{},"apps":[]})";
+  server->resource["^/apps-save-test$"]["POST"] = confighttp::saveApp;
+
+  EXPECT_EQ(send("POST", "/apps-save-test", R"({"name":"A","index":-1,"plugin-options":{"p":{}}})")->status_code, "200 OK");
+  EXPECT_EQ(send("POST", "/apps-save-test", R"({"name":"B","index":-1,"plugin-options":{"p":{"level":3}}})")->status_code, "200 OK");
+  const auto rejected = send("POST", "/apps-save-test", R"({"name":"C","index":-1,"plugin-options":{"p":{"level":99}}})");
+  EXPECT_EQ(rejected->status_code, "400 Bad Request");
+  EXPECT_EQ(nlohmann::json::parse(rejected->content.string()).at("error"), "invalid value for option 'level'");
+
+  std::ifstream in(config::stream.file_apps);
+  const auto apps = nlohmann::json::parse(in).at("apps");
+  config::stream.file_apps = saved_file_apps;
+
+  ASSERT_EQ(apps.size(), 2);
+  EXPECT_FALSE(apps[0].contains("plugin-options"));
+  EXPECT_EQ(apps[1]["plugin-options"], nlohmann::json::parse(R"({"p":{"level":3}})"));
+}
+
+TEST_F(SaveAppPluginsTest, SetsAndClearsPluginOptionsOnlyWhenGiven) {
+  ASSERT_EQ(send("POST", "/app-plugins-test", R"({"apps":[{"index":0,"name":"A","plugin-options":{"p":{"level":2}}}]})")->status_code, "200 OK");
+  EXPECT_EQ(read_apps()[0]["plugin-options"], nlohmann::json::parse(R"({"p":{"level":2}})"));
+
+  // Changing only the exclusions keeps the options
+  ASSERT_EQ(send("POST", "/app-plugins-test", R"({"apps":[{"index":0,"name":"A","exclude-plugins":["p"]}]})")->status_code, "200 OK");
+  EXPECT_EQ(read_apps()[0]["plugin-options"], nlohmann::json::parse(R"({"p":{"level":2}})"));
+  EXPECT_EQ(read_apps()[0]["exclude-plugins"], nlohmann::json::array({"p"}));
+
+  ASSERT_EQ(send("POST", "/app-plugins-test", R"({"apps":[{"index":0,"name":"A","plugin-options":{}}]})")->status_code, "200 OK");
+  EXPECT_FALSE(read_apps()[0].contains("plugin-options"));
+}
+
+TEST_F(SaveAppPluginsTest, RejectsBadPluginOptions) {
+  // A valid change listed first must not be written when a later entry is rejected
+  expect_rejected(R"({"apps":[{"index":0,"name":"A","plugin-options":{"p":{"level":2}}},{"index":1,"name":"B","plugin-options":{"p":{"level":99}}}]})", "invalid value for option 'level'");
+  expect_rejected(R"({"apps":[{"index":0,"name":"A","plugin-options":[]}]})", "'plugin-options' must be an object");
+  expect_rejected(R"({"apps":[{"index":0,"name":"A","plugin-options":{"missing":{}}}]})", "plugin 'missing' not found");
 }
 
 

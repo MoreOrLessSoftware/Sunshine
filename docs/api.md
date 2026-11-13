@@ -58,6 +58,12 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## GET /api/clients/list
 @copydoc confighttp::getClients()
 
+## GET /api/clients/plugin-options
+@copydoc confighttp::getClientPluginOptions()
+
+## POST /api/clients/plugin-options
+@copydoc confighttp::saveClientPluginOptions()
+
 ## POST /api/clients/unpair
 @copydoc confighttp::unpair()
 
