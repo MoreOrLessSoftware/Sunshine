@@ -326,12 +326,10 @@
                       <input class="form-check-input" type="checkbox" role="switch"
                              :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]">
                       <label class="form-check-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
-                      <span v-if="isOverridden(plugin, option)" class="plugin-overridden ms-1" :title="$t('plugins.overridden_option')">*</span>
                     </div>
                   </template>
                   <template v-else>
                     <label class="form-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
-                    <span v-if="isOverridden(plugin, option)" class="plugin-overridden ms-1" :title="$t('plugins.overridden_option')">*</span>
                     <plugin-choice-select v-if="option.type === 'choice'" :plugin="plugin" :option="option"
                                           :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]"></plugin-choice-select>
                     <input v-else-if="option.type === 'number'" type="number" class="form-control"
@@ -343,6 +341,10 @@
                            :placeholder="defaultText(option)">
                   </template>
                   <div class="form-text" v-if="hintText(option)">{{ hintText(option) }}</div>
+                  <div class="form-text plugin-overridden" v-if="overriders(plugin, option).length">
+                    <layers :size="14" class="icon"></layers>
+                    {{ $t('plugins.overridden_option', {names: overriders(plugin, option).join(', ')}) }}
+                  </div>
                 </div>
               </div>
               <div class="d-flex align-items-center gap-2 mt-3">
@@ -377,7 +379,7 @@
   import PluginChoiceSelect from './PluginChoiceSelect.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
-  import { BookOpen, CloudDownload, Download, FileText, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
+  import { BookOpen, CloudDownload, Download, FileText, Layers, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
   import { Marked } from 'marked'
 
   // The view showing the guide. Plugin IDs can't contain a colon, so it can't be mistaken for a plugin.
@@ -465,6 +467,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       CopyBlock,
       Download,
       FileText,
+      Layers,
       LayoutGrid,
       Play,
       RefreshCw,
@@ -477,6 +480,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
     data() {
       return {
         plugins: [],
+        clientNames: {},
         clientOverrides: {},
         loading: true,
         loadError: null,
@@ -1064,15 +1068,20 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
 
       /**
-       * Fetch the plugin settings each client overrides.
+       * Fetch the plugin settings each client overrides, and the clients' names.
        */
       async loadClientOverrides() {
         try {
-          const response = await apiFetch('./api/clients/plugin-options', {method: 'GET'});
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+          const [overrides, list] = await Promise.all([
+            apiFetch('./api/clients/plugin-options', {method: 'GET'}),
+            apiFetch('./api/clients/list', {method: 'GET'}),
+          ]);
+          if (!overrides.ok || !list.ok) {
+            throw new Error(`HTTP ${overrides.ok ? list.status : overrides.status}`);
           }
-          this.clientOverrides = (await response.json()).clients || {};
+          this.clientOverrides = (await overrides.json()).clients || {};
+          const clients = (await list.json()).named_certs || [];
+          this.clientNames = Object.fromEntries(clients.map((client) => [client.uuid, client.name]));
         } catch (error) {
           console.error('Failed to load the plugin settings of clients', error);
         }
@@ -1106,11 +1115,15 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
 
       /**
-       * Whether an application or a client overrides an option.
+       * The names of the applications, then the clients, that override an option.
        */
-      isOverridden(plugin, option) {
-        const {apps, clients} = this.overridesOf(plugin);
-        return [...apps, ...clients].some((ids) => ids.includes(option.id));
+      overriders(plugin, option) {
+        const overrides = (options) => Object.hasOwn(options || {}, option.id);
+        const apps = this.matrix.apps.filter((app) => overrides(app.pluginOptions[plugin.id])).map((app) => app.name);
+        const clients = Object.entries(this.clientOverrides)
+          .filter(([, entry]) => overrides(entry[plugin.id]?.options))
+          .map(([uuid]) => this.clientNames[uuid] || this.i18n.t('troubleshooting.unpair_single_unknown'));
+        return [...apps, ...clients];
       },
 
       isEnabled(app, plugin) {

@@ -764,7 +764,7 @@
     "overridden_apps": "no applications | 1 application | {count} applications",
     "overridden_by": "Overridden for {apps} and {clients}",
     "overridden_clients": "no clients | 1 client | {count} clients",
-    "overridden_option": "Overridden by an application or client",
+    "overridden_option": "Overridden for {names}",
     "panel_title": "{name} panel",
     "reinstall": "Reinstall",
     "reinstall_failed": "Reinstall failed",

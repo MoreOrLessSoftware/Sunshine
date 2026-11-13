@@ -1510,11 +1510,9 @@ p {
     border-color: var(--color-info);
 }
 
-/* Marks an option an application or client overrides; its title says so. */
+/* Names the applications and clients that override an option. */
 .plugin-overridden {
     color: var(--color-info);
-    font-weight: 600;
-    cursor: help;
 }
 
 /* On the highlighted row, outline the dot so it stays visible against the primary background. */
