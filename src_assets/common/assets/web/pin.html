@@ -66,17 +66,14 @@
           </button>
         </div>
         <p>{{ $t('troubleshooting.unpair_desc') }}</p>
-        <!-- Sort and search, as on the Applications page -->
+        <!-- Sort and search -->
         <div class="d-flex flex-wrap justify-content-end align-items-center gap-2" v-if="clients.length > 0">
-          <button class="btn btn-outline-secondary text-nowrap" type="button" @click="toggleSort"
-                  :class="{ active: sortMode !== 'default' }"
-                  :aria-pressed="sortMode !== 'default'"
-                  :title="$t('apps.sort_by_name') + ': ' + sortModeLabel">
-            <arrow-up-down v-if="sortMode === 'default'" :size="16" class="icon me-1"></arrow-up-down>
-            <arrow-up v-else-if="sortMode === 'asc'" :size="16" class="icon me-1"></arrow-up>
-            <arrow-down v-else :size="16" class="icon me-1"></arrow-down>
-            {{ $t('apps.sort_by_name') }}
-          </button>
+          <select class="form-select w-auto" v-model="sortMode" :aria-label="$t('pin.sort_label')">
+            <option value="default">{{ $t('pin.sort_paired') }}</option>
+            <option value="asc">{{ $t('pin.sort_name_asc') }}</option>
+            <option value="desc">{{ $t('pin.sort_name_desc') }}</option>
+            <option value="recent">{{ $t('pin.sort_recent') }}</option>
+          </select>
           <div class="input-group client-search">
             <input type="text" class="form-control" v-model="searchQuery" :placeholder="$t('pin.search_placeholder')" />
             <button v-if="searchQuery" class="btn btn-outline-secondary" type="button" @click="searchQuery = ''" :aria-label="$t('_common.close')">
@@ -106,6 +103,9 @@
           <div class="flex-grow-1 text-break">
             {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
             <span v-if="overrideCount(client.uuid)" class="badge text-bg-secondary ms-1">{{ $t('pin.plugin_settings_badge', {count: overrideCount(client.uuid)}, overrideCount(client.uuid)) }}</span>
+            <div class="small text-muted" :title="client.last_connected ? connectedDate(client) : null">
+              {{ client.last_connected ? $t('pin.last_connected', {time: connectedAgo(client)}) : $t('pin.never_connected') }}
+            </div>
           </div>
           <button class="btn btn-primary btn-sm ms-2" @click="editClient(client)">
             <edit :size="18" class="icon"></edit>
@@ -198,9 +198,6 @@
   import { Modal } from 'bootstrap/dist/js/bootstrap'
   import {
     AlertCircle,
-    ArrowDown,
-    ArrowUp,
-    ArrowUpDown,
     CheckCircle,
     Forward,
     Hash,
@@ -213,14 +210,15 @@
     X,
   } from '@lucide/vue'
 
+  // Where the chosen order of the device list is remembered, and the orders it can be
+  const SORT_KEY = 'pin.clientSort';
+  const SORT_MODES = ['default', 'asc', 'desc', 'recent'];
+
   let app = createApp({
     components: {
       Navbar,
       PluginOptionOverrides,
       AlertCircle,
-      ArrowDown,
-      ArrowUp,
-      ArrowUpDown,
       CheckCircle,
       Forward,
       Hash,
@@ -245,6 +243,7 @@
         saving: false,
         searchQuery: '',
         sortMode: 'default',
+        now: Date.now(),
         pendingPairings: [],
         pin: '',
         refreshTimer: null,
@@ -257,7 +256,7 @@
     },
     computed: {
       /**
-       * The devices matching the search, in pairing order or sorted by name.
+       * The devices matching the search, in pairing order, sorted by name, or most recently connected first.
        */
       displayedClients() {
         const unnamed = this.i18n.t('troubleshooting.unpair_single_unknown');
@@ -268,7 +267,10 @@
         if (query) {
           list = list.filter((client) => nameOf(client).toLowerCase().includes(query));
         }
-        if (this.sortMode !== 'default') {
+        if (this.sortMode === 'recent') {
+          // Devices that never connected go last, in pairing order
+          list.sort((a, b) => (b.last_connected || 0) - (a.last_connected || 0));
+        } else if (this.sortMode !== 'default') {
           list.sort((a, b) => {
             const result = nameOf(a).localeCompare(nameOf(b), undefined, {sensitivity: 'base'});
             return this.sortMode === 'asc' ? result : -result;
@@ -276,25 +278,37 @@
         }
         return list;
       },
-      sortModeLabel() {
-        switch (this.sortMode) {
-          case 'asc':
-            return this.$t('apps.sort_ascending');
-          case 'desc':
-            return this.$t('apps.sort_descending');
-          default:
-            return this.$t('apps.sort_default');
-        }
-      },
       clientCountLabel() {
         const total = this.clients.length;
         const shown = this.displayedClients.length;
         return shown === total ? `${total}` : `${shown} / ${total}`;
       },
     },
+    watch: {
+      sortMode(mode) {
+        try {
+          window.localStorage.setItem(SORT_KEY, mode);
+        } catch {
+          // The order just isn't remembered
+        }
+      },
+    },
+    created() {
+      try {
+        const saved = window.localStorage.getItem(SORT_KEY);
+        if (SORT_MODES.includes(saved)) {
+          this.sortMode = saved;
+        }
+      } catch {
+        // Pairing order without storage
+      }
+    },
     mounted() {
       this.loadPendingPairings();
-      this.refreshTimer = window.setInterval(() => this.loadPendingPairings(), 2000);
+      this.refreshTimer = window.setInterval(() => {
+        this.now = Date.now();
+        this.loadPendingPairings();
+      }, 2000);
       this.refreshClients();
       this.loadPluginSettings();
     },
@@ -380,10 +394,31 @@
       },
 
       /**
-       * Sort by name ascending, then descending, then back to pairing order.
+       * How long ago a device last connected, such as "3 hours ago".
+       *
+       * @param {object} client The device from the client list.
+       * @returns {string} The time, relative to now.
        */
-      toggleSort() {
-        this.sortMode = {default: 'asc', asc: 'desc'}[this.sortMode] || 'default';
+      connectedAgo(client) {
+        const seconds = Math.min(0, client.last_connected - this.now / 1000);
+        const units = [['year', 31536000], ['month', 2592000], ['day', 86400], ['hour', 3600], ['minute', 60]];
+        const format = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, {numeric: 'auto'});
+        for (const [unit, size] of units) {
+          if (-seconds >= size) {
+            return format.format(Math.round(seconds / size), unit);
+          }
+        }
+        return format.format(Math.round(seconds), 'second');
+      },
+
+      /**
+       * When a device last connected, as a full date and time.
+       *
+       * @param {object} client The device from the client list.
+       * @returns {string} The date and time.
+       */
+      connectedDate(client) {
+        return new Date(client.last_connected * 1000).toLocaleString(document.documentElement.lang || undefined);
       },
 
       /**

@@ -174,6 +174,7 @@ namespace nvhttp {
     std::string uuid;  ///< Persistent Moonlight client UUID associated with the certificate.
     std::string cert;  ///< Certificate PEM string or path.
     bool enabled = true;  ///< Whether this persisted client entry may connect.
+    std::int64_t last_connected = 0;  ///< When the client last started or resumed a stream, in seconds since the Unix epoch; 0 if never.
   };
 
   /**
@@ -281,6 +282,9 @@ namespace nvhttp {
       named_cert_node.put("cert"s, named_cert.cert);
       named_cert_node.put("uuid"s, named_cert.uuid);
       named_cert_node.put("enabled"s, named_cert.enabled);
+      if (named_cert.last_connected != 0) {
+        named_cert_node.put("last_connected"s, named_cert.last_connected);
+      }
       named_cert_nodes.push_back(std::make_pair(""s, named_cert_node));
     }
     root.add_child("root.named_devices"s, named_cert_nodes);
@@ -417,6 +421,7 @@ namespace nvhttp {
         named_cert.cert = el.get_child("cert").get_value<std::string>();
         named_cert.uuid = el.get_child("uuid").get_value<std::string>();
         named_cert.enabled = el.get<bool>("enabled", true);
+        named_cert.last_connected = el.get<std::int64_t>("last_connected", 0);
         client.named_devices.emplace_back(named_cert);
       }
     }
@@ -1327,6 +1332,7 @@ namespace nvhttp {
       named_cert_node["name"] = named_cert.name;
       named_cert_node["uuid"] = named_cert.uuid;
       named_cert_node["enabled"] = named_cert.enabled;
+      named_cert_node["last_connected"] = named_cert.last_connected;
       named_cert_nodes.push_back(named_cert_node);
     }
 
@@ -1480,6 +1486,7 @@ namespace nvhttp {
     tree.put("root.gamesession", 1);
 
     rtsp_stream::launch_session_raise(launch_session);
+    record_client_connection(launch_session->client_uuid);
 
     // Stream was started successfully, we will revert the config when the app or session terminates
     revert_display_configuration = false;
@@ -1586,6 +1593,7 @@ namespace nvhttp {
     tree.put("root.resume", 1);
 
     rtsp_stream::launch_session_raise(launch_session);
+    record_client_connection(launch_session->client_uuid);
   }
 
   /**
@@ -1937,6 +1945,19 @@ namespace nvhttp {
     for (auto &named_cert : client_root.named_devices) {
       if (named_cert.uuid == uuid) {
         named_cert.name = name;
+        save_state();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool record_client_connection(const std::string_view uuid) {
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    std::lock_guard lock {client_auth_mutex()};
+    for (auto &named_cert : client_root.named_devices) {
+      if (named_cert.uuid == uuid) {
+        named_cert.last_connected = now;
         save_state();
         return true;
       }

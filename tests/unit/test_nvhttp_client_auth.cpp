@@ -8,6 +8,7 @@
 
 // standard includes
 #include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <thread>
 #include <vector>
@@ -129,6 +130,38 @@ TEST_F(ClientAuthorizationTest, MultipleClientsPersistAndUnpairIndependently) {
   nvhttp::test_support::reload_client_state();
   EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(disabled_credentials.x509));
   EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(expired_credentials.x509));
+}
+
+TEST_F(ClientAuthorizationTest, RecordsWhenAClientLastConnected) {
+  const auto credentials = test_utils::certificates::generate_ca_credentials();
+  const auto uuid = nvhttp::test_support::add_client("connected", credentials.x509, true);
+  ASSERT_FALSE(uuid.empty());
+
+  const auto last_connected = [&uuid]() {
+    for (const auto &client : nvhttp::get_all_clients()) {
+      if (client["uuid"] == uuid) {
+        return client["last_connected"].get<std::int64_t>();
+      }
+    }
+    return std::int64_t {-1};
+  };
+  EXPECT_EQ(last_connected(), 0);
+
+  const auto seconds = [](auto time) {
+    return std::chrono::duration_cast<std::chrono::seconds>(time.time_since_epoch()).count();
+  };
+  const auto before = seconds(std::chrono::system_clock::now());
+  ASSERT_TRUE(nvhttp::record_client_connection(uuid));
+  const auto after = seconds(std::chrono::system_clock::now());
+  const auto recorded = last_connected();
+  EXPECT_GE(recorded, before);
+  EXPECT_LE(recorded, after);
+  EXPECT_FALSE(nvhttp::record_client_connection("not-a-client"));
+
+  // The time is saved with the client
+  nvhttp::test_support::reset_client_state();
+  nvhttp::test_support::reload_client_state();
+  EXPECT_EQ(last_connected(), recorded);
 }
 
 TEST_F(ClientAuthorizationTest, DuplicateCertificateIdentityFailsClosed) {

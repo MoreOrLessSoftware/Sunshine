@@ -345,6 +345,13 @@ namespace nvhttp {
    * @return true if the client was found and renamed.
    */
   bool set_client_name(std::string_view uuid, const std::string &name);
+
+  /**
+   * @brief Record that a client started or resumed a stream now.
+   * @param uuid The UUID of the client.
+   * @return true if the client was found.
+   */
+  bool record_client_connection(std::string_view uuid);
   /**
    * @brief Get cert by UUID.
    *

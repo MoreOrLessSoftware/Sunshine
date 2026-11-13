@@ -1600,6 +1600,9 @@ namespace confighttp {
    * @param response The HTTP response object.
    * @param request The HTTP request object.
    *
+   * Each client in `named_certs` has its `name`, `uuid` and `enabled` state, and `last_connected`: when it last
+   * started or resumed a stream, in seconds since the Unix epoch, or 0 if it never has.
+   *
    * @api_examples{/api/clients/list| GET| null}
    */
   void getClients(const resp_https_t &response, const req_https_t &request) {
