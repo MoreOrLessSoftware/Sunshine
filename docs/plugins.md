@@ -38,6 +38,22 @@ type: the connect script runs when a client resumes the running application, and
 the last client leaves it running. They see the frame rate and other `SUNSHINE_CLIENT_*` values of the client that
 is resuming.
 
+### Settings for one application or client
+A plugin's options can differ for an application or a client:
+
+* **For an application** — when editing the application, select *Settings* next to the plugin under *Plugins*.
+* **For a client** — on the **Clients + PIN** page, select *Plugin settings* next to the client. A client can also turn
+  a plugin off for its streams with *Runs for this client*.
+
+Turn on *Override* next to an option to give it a value of its own. The plugin's own value applies unless the
+application overrides it, and the client's value wins over both. The Plugins page marks the options that are overridden
+somewhere with `*` and says how many applications and clients override them. Some options can't be overridden, such as
+those that change a driver or only make sense for the whole host.
+
+The do and undo scripts use the settings of the client that started the application, even when another client resumes
+it later. The connect and disconnect scripts use the settings of the client resuming it. Unpairing a client removes its
+settings.
+
 ## Bundled plugins
 
 | Plugin           | What it does                                                                                                                                                                                                                                          |

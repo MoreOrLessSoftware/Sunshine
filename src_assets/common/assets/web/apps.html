@@ -122,6 +122,7 @@
                 <span v-if="app['prep-cmd'] && app['prep-cmd'].length" class="badge app-flag-badge">{{ $t('apps.badge_app_prep') }}</span>
                 <span v-if="app['exclude-global-prep-cmd']" class="badge app-flag-badge">{{ $t('apps.badge_no_global_prep') }}</span>
                 <span v-if="app['exclude-plugins'] && app['exclude-plugins'].length" class="badge app-flag-badge">{{ $t('apps.badge_plugins_excluded') }}</span>
+                <span v-if="hasPluginOptions(app)" class="badge app-flag-badge">{{ $t('apps.badge_plugin_options') }}</span>
                 <span v-if="app['auto-detach']" class="badge app-flag-badge">{{ $t('apps.badge_auto_detach') }}</span>
               </div>
             </div>
@@ -201,11 +202,30 @@
             <div class="mb-3" v-if="activePlugins.length > 0">
               <label class="form-label">{{ $t('apps.plugins_name') }}</label>
               <div class="form-text mb-2">{{ $t('apps.plugins_desc') }}</div>
-              <div class="form-check" v-for="plugin in activePlugins" :key="plugin.id">
-                <input class="form-check-input" type="checkbox" :id="'app-plugin-' + plugin.id"
-                       :checked="!editForm['exclude-plugins'].includes(plugin.id)"
-                       @change="setPluginExcluded(plugin.id, !$event.target.checked)">
-                <label class="form-check-label" :for="'app-plugin-' + plugin.id">{{ plugin.name }}</label>
+              <div class="mb-1" v-for="plugin in activePlugins" :key="plugin.id">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="form-check mb-0">
+                    <input class="form-check-input" type="checkbox" :id="'app-plugin-' + plugin.id"
+                           :checked="!editForm['exclude-plugins'].includes(plugin.id)"
+                           @change="setPluginExcluded(plugin.id, !$event.target.checked)">
+                    <label class="form-check-label" :for="'app-plugin-' + plugin.id">{{ plugin.name }}</label>
+                  </div>
+                  <a href="#" class="small" role="button"
+                     v-if="!editForm['exclude-plugins'].includes(plugin.id) && plugin.options.some(option => option.overridable)"
+                     :aria-expanded="!!pluginSettingsOpen[plugin.id]"
+                     @click.prevent="pluginSettingsOpen[plugin.id] = !pluginSettingsOpen[plugin.id]">
+                    {{ $t('apps.plugin_settings') }}<template v-if="pluginOptionCount(plugin.id)"> ({{ pluginOptionCount(plugin.id) }})</template>
+                  </a>
+                </div>
+                <div class="border rounded p-3 mt-2 mb-2"
+                     v-if="pluginSettingsOpen[plugin.id] && !editForm['exclude-plugins'].includes(plugin.id)">
+                  <div class="form-text mb-2">{{ $t('apps.plugin_settings_desc') }}</div>
+                  <plugin-option-overrides :plugin="plugin" :inherited="plugin.config"
+                                           inherited-key="plugin_overrides.inherited_plugin"
+                                           id-prefix="app-override"
+                                           :model-value="editForm['plugin-options'][plugin.id] || {}"
+                                           @update:model-value="setPluginOptions(plugin.id, $event)"></plugin-option-overrides>
+                </div>
               </div>
             </div>
             <div class="mb-3">
@@ -645,6 +665,7 @@
   import { initApp } from './init'
   import Navbar from './Navbar.vue'
   import Checkbox from './Checkbox.vue'
+  import PluginOptionOverrides from './PluginOptionOverrides.vue'
   import { apiFetch } from './fetch_utils'
   import SunshineVersion from './sunshine_version'
   import { Modal } from 'bootstrap/dist/js/bootstrap'
@@ -681,6 +702,7 @@
     components: {
       Navbar,
       Checkbox,
+      PluginOptionOverrides,
       ArrowDown,
       ArrowRight,
       ArrowUp,
@@ -708,6 +730,7 @@
     data() {
       return {
         activePlugins: [],
+        pluginSettingsOpen: {},
         apps: [],
         editForm: null,
         detachedCmd: "",
@@ -840,6 +863,7 @@
           index: -1,
           "exclude-global-prep-cmd": false,
           "exclude-plugins": [],
+          "plugin-options": {},
           elevated: false,
           "auto-detach": true,
           "wait-all": true,
@@ -848,6 +872,7 @@
           detached: [],
           "image-path": ""
         };
+        this.pluginSettingsOpen = {};
         this.openEditModal();
       },
       setPluginExcluded(pluginId, excluded) {
@@ -856,6 +881,30 @@
           list.push(pluginId);
         }
         this.editForm["exclude-plugins"] = list;
+      },
+      /**
+       * Replace the options the application overrides for a plugin, dropping the plugin when it overrides none.
+       */
+      setPluginOptions(pluginId, options) {
+        const all = {...this.editForm["plugin-options"]};
+        if (Object.keys(options).length > 0) {
+          all[pluginId] = options;
+        } else {
+          delete all[pluginId];
+        }
+        this.editForm["plugin-options"] = all;
+      },
+      /**
+       * How many options the application being edited overrides for a plugin.
+       */
+      pluginOptionCount(pluginId) {
+        return Object.keys(this.editForm["plugin-options"][pluginId] || {}).length;
+      },
+      /**
+       * Whether an application overrides any plugin option.
+       */
+      hasPluginOptions(app) {
+        return !!app['plugin-options'] && Object.values(app['plugin-options']).some(options => Object.keys(options).length > 0);
       },
       editApp(id) {
         this.editForm = JSON.parse(JSON.stringify(this.apps[id]));
@@ -872,6 +921,9 @@
           this.editForm["exclude-global-prep-cmd"] = false;
         if (this.editForm["exclude-plugins"] === undefined)
           this.editForm["exclude-plugins"] = [];
+        if (this.editForm["plugin-options"] === undefined)
+          this.editForm["plugin-options"] = {};
+        this.pluginSettingsOpen = {};
         if (this.editForm["elevated"] === undefined && this.platform === 'windows') {
           this.editForm["elevated"] = false;
         }
@@ -1112,8 +1164,14 @@
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(this.editForm),
-        }).then((r) => {
-          if (r.status === 200) document.location.reload();
+        }).then(async (r) => {
+          if (r.status === 200) {
+            document.location.reload();
+            return;
+          }
+          // Such as a plugin option the server refused
+          const body = await r.json().catch(() => ({}));
+          alert(body.error || r.statusText);
         });
       },
       /**
@@ -1137,6 +1195,7 @@
         if (app['prep-cmd'] && app['prep-cmd'].length) badges.push(this.$t('apps.badge_app_prep'));
         if (app['exclude-global-prep-cmd']) badges.push(this.$t('apps.badge_no_global_prep'));
         if (app['exclude-plugins'] && app['exclude-plugins'].length) badges.push(this.$t('apps.badge_plugins_excluded'));
+        if (this.hasPluginOptions(app)) badges.push(this.$t('apps.badge_plugin_options'));
         if (app['auto-detach']) badges.push(this.$t('apps.badge_auto_detach'));
         return badges;
       },

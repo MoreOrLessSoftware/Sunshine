@@ -318,6 +318,7 @@
             <!-- Options -->
             <div v-if="plugin.active && plugin.options.length > 0 && drafts[plugin.id]" class="border-top pt-3 mt-2">
               <h6>{{ $t('plugins.options') }}</h6>
+              <div class="form-text mb-2" v-if="overrideSummary(plugin)">{{ overrideSummary(plugin) }}</div>
               <div class="row g-3">
                 <div class="col-12 col-md-6" v-for="option in plugin.options" :key="option.id">
                   <template v-if="option.type === 'boolean'">
@@ -325,10 +326,12 @@
                       <input class="form-check-input" type="checkbox" role="switch"
                              :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]">
                       <label class="form-check-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
+                      <span v-if="isOverridden(plugin, option)" class="plugin-overridden ms-1" :title="$t('plugins.overridden_option')">*</span>
                     </div>
                   </template>
                   <template v-else>
                     <label class="form-label" :for="'opt-' + plugin.id + '-' + option.id">{{ option.label }}</label>
+                    <span v-if="isOverridden(plugin, option)" class="plugin-overridden ms-1" :title="$t('plugins.overridden_option')">*</span>
                     <select v-if="option.type === 'choice'" class="form-select"
                             :id="'opt-' + plugin.id + '-' + option.id" v-model="drafts[plugin.id][option.id]">
                       <option v-for="choice in option.choices" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
@@ -474,6 +477,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
     data() {
       return {
         plugins: [],
+        clientOverrides: {},
         loading: true,
         loadError: null,
         drafts: {},
@@ -543,6 +547,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       window.addEventListener('hashchange', this.onHashChange);
       this.loadPlugins();
       this.loadMatrixApps();
+      this.loadClientOverrides();
     },
     beforeUnmount() {
       window.clearTimeout(this.pollTimer);
@@ -1048,7 +1053,8 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
           const body = await response.json();
           this.matrix.apps = (body.apps || []).map((app, index) => {
             const saved = Array.isArray(app['exclude-plugins']) ? [...app['exclude-plugins']] : [];
-            return {index, name: app.name, saved, excluded: [...saved]};
+            const pluginOptions = app['plugin-options'] && typeof app['plugin-options'] === 'object' ? app['plugin-options'] : {};
+            return {index, name: app.name, saved, excluded: [...saved], pluginOptions};
           });
           this.matrix.loadError = null;
         } catch (error) {
@@ -1057,6 +1063,56 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         } finally {
           this.matrix.loading = false;
         }
+      },
+
+      /**
+       * Fetch the plugin settings each client overrides.
+       */
+      async loadClientOverrides() {
+        try {
+          const response = await apiFetch('./api/clients/plugin-options', {method: 'GET'});
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          this.clientOverrides = (await response.json()).clients || {};
+        } catch (error) {
+          console.error('Failed to load the plugin settings of clients', error);
+        }
+      },
+
+      /**
+       * The options of a plugin each application and client overrides, as lists of option IDs.
+       */
+      overridesOf(plugin) {
+        const apps = this.matrix.apps.map((app) => Object.keys(app.pluginOptions[plugin.id] || {})).filter((ids) => ids.length > 0);
+        const clients = Object.values(this.clientOverrides)
+          .map((entry) => entry[plugin.id])
+          .filter(Boolean)
+          .map((entry) => Object.keys(entry.options || {}));
+        return {apps, clients};
+      },
+
+      /**
+       * Describe how many applications and clients override a plugin's options, or return an empty string for none.
+       */
+      overrideSummary(plugin) {
+        const {apps, clients} = this.overridesOf(plugin);
+        const overridingClients = clients.filter((ids) => ids.length > 0);
+        if (apps.length === 0 && overridingClients.length === 0) {
+          return '';
+        }
+        return this.i18n.t('plugins.overridden_by', {
+          apps: this.i18n.t('plugins.overridden_apps', {count: apps.length}, apps.length),
+          clients: this.i18n.t('plugins.overridden_clients', {count: overridingClients.length}, overridingClients.length),
+        });
+      },
+
+      /**
+       * Whether an application or a client overrides an option.
+       */
+      isOverridden(plugin, option) {
+        const {apps, clients} = this.overridesOf(plugin);
+        return [...apps, ...clients].some((ids) => ids.includes(option.id));
       },
 
       isEnabled(app, plugin) {

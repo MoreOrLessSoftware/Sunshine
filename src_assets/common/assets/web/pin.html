@@ -81,10 +81,17 @@
         </div>
       </div>
       <ul class="list-group list-group-flush" v-if="clients.length > 0">
-        <li v-for="client in clients" :key="client.uuid" class="list-group-item d-flex align-items-center">
+        <li v-for="client in clients" :key="client.uuid" class="list-group-item">
+          <div class="d-flex align-items-center">
           <div class="flex-grow-1 text-break">
             {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
+            <span v-if="overrideCount(client.uuid)" class="badge text-bg-secondary ms-1">{{ $t('pin.plugin_settings_badge', {count: overrideCount(client.uuid)}, overrideCount(client.uuid)) }}</span>
           </div>
+          <button class="btn btn-outline-secondary btn-sm ms-2" v-if="activePlugins.length > 0"
+                  :aria-expanded="editingClient === client.uuid" @click="editPluginSettings(client.uuid)">
+            <puzzle :size="18" class="icon"></puzzle>
+            <span class="d-none d-sm-inline">{{ $t('pin.plugin_settings') }}</span>
+          </button>
           <div class="form-check form-switch ms-2 mb-0">
             <input class="form-check-input" type="checkbox" role="switch"
                    :id="'toggle-' + client.uuid"
@@ -95,6 +102,34 @@
           <button class="btn btn-danger btn-sm ms-2" @click="unpairSingle(client.uuid)">
             <trash-2 :size="18" class="icon"></trash-2>
           </button>
+          </div>
+          <!-- The plugin settings this client overrides -->
+          <div v-if="editingClient === client.uuid && draft" class="border rounded p-3 mt-3">
+            <div class="form-text mb-3">{{ $t('pin.plugin_settings_desc') }}</div>
+            <div v-for="plugin in activePlugins" :key="plugin.id" class="mb-3 pb-3 border-bottom">
+              <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
+                <h6 class="mb-0">{{ plugin.name }}</h6>
+                <div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" role="switch" :id="'client-plugin-' + plugin.id"
+                         :checked="draft[plugin.id].active" @change="draft[plugin.id].active = $event.target.checked">
+                  <label class="form-check-label small" :for="'client-plugin-' + plugin.id">{{ $t('pin.plugin_runs') }}</label>
+                </div>
+              </div>
+              <plugin-option-overrides v-if="draft[plugin.id].active" :plugin="plugin" :inherited="plugin.config"
+                                       inherited-key="plugin_overrides.inherited_app"
+                                       id-prefix="client-override"
+                                       v-model="draft[plugin.id].options"></plugin-option-overrides>
+              <div v-else class="form-text">{{ $t('pin.plugin_off_desc') }}</div>
+            </div>
+            <div class="d-flex align-items-center gap-2">
+              <button type="button" class="btn btn-success" :disabled="savingOverrides" @click="savePluginSettings(client.uuid)">
+                <save :size="18" class="icon"></save>
+                {{ $t('_common.save') }}
+              </button>
+              <button type="button" class="btn btn-outline-secondary" @click="editingClient = null">{{ $t('_common.cancel') }}</button>
+            </div>
+            <div v-if="overrideError" class="alert alert-danger py-2 mt-2 mb-0">{{ overrideError }}</div>
+          </div>
         </li>
       </ul>
       <ul v-else class="list-group list-group-flush">
@@ -110,6 +145,7 @@
   import { createApp } from 'vue'
   import { initApp } from './init'
   import Navbar from './Navbar.vue'
+  import PluginOptionOverrides from './PluginOptionOverrides.vue'
   import { apiFetch } from './fetch_utils'
   import {
     AlertCircle,
@@ -117,6 +153,8 @@
     Forward,
     Hash,
     Monitor,
+    Puzzle,
+    Save,
     Trash2,
     UserRoundSearch,
     X,
@@ -125,11 +163,14 @@
   let app = createApp({
     components: {
       Navbar,
+      PluginOptionOverrides,
       AlertCircle,
       CheckCircle,
       Forward,
       Hash,
       Monitor,
+      Puzzle,
+      Save,
       Trash2,
       UserRoundSearch,
       X,
@@ -137,8 +178,14 @@
     inject: ['i18n'],
     data() {
       return {
+        activePlugins: [],
         clients: [],
+        clientOverrides: {},
+        draft: null,
+        editingClient: null,
         name: '',
+        overrideError: '',
+        savingOverrides: false,
         pendingPairings: [],
         pin: '',
         refreshTimer: null,
@@ -153,6 +200,7 @@
       this.loadPendingPairings();
       this.refreshTimer = window.setInterval(() => this.loadPendingPairings(), 2000);
       this.refreshClients();
+      this.loadPluginSettings();
     },
     beforeUnmount() {
       window.clearInterval(this.refreshTimer);
@@ -252,6 +300,96 @@
       },
 
       /**
+       * Load the active plugins and the plugin settings each client overrides.
+       */
+      async loadPluginSettings() {
+        try {
+          const [plugins, overrides] = await Promise.all([
+            apiFetch('./api/plugins', {method: 'GET'}).then((r) => r.json()),
+            apiFetch('./api/clients/plugin-options', {method: 'GET'}).then((r) => r.json()),
+          ]);
+          this.activePlugins = (plugins.plugins || []).filter((plugin) => plugin.active);
+          this.clientOverrides = overrides.clients || {};
+        } catch (error) {
+          console.error('Failed to load the plugin settings of clients', error);
+        }
+      },
+
+      /**
+       * How many plugins a client turns off or overrides options of.
+       *
+       * @param {string} uuid The client's UUID.
+       */
+      overrideCount(uuid) {
+        return Object.keys(this.clientOverrides[uuid] || {}).length;
+      },
+
+      /**
+       * Show the plugin settings of a client, or hide them when they're showing.
+       *
+       * @param {string} uuid The client's UUID.
+       */
+      editPluginSettings(uuid) {
+        if (this.editingClient === uuid) {
+          this.editingClient = null;
+          return;
+        }
+        const saved = this.clientOverrides[uuid] || {};
+        this.draft = Object.fromEntries(this.activePlugins.map((plugin) => [plugin.id, {
+          active: saved[plugin.id]?.active !== false,
+          options: {...(saved[plugin.id]?.options || {})},
+        }]));
+        this.overrideError = '';
+        this.editingClient = uuid;
+      },
+
+      /**
+       * Save the plugin settings of a client. Overrides of plugins that aren't active now are kept.
+       *
+       * @param {string} uuid The client's UUID.
+       */
+      async savePluginSettings(uuid) {
+        const plugins = {...(this.clientOverrides[uuid] || {})};
+        for (const [id, entry] of Object.entries(this.draft)) {
+          const override = {};
+          if (!entry.active) {
+            override.active = false;
+          }
+          if (Object.keys(entry.options).length > 0) {
+            override.options = entry.options;
+          }
+          if (Object.keys(override).length > 0) {
+            plugins[id] = override;
+          } else {
+            delete plugins[id];
+          }
+        }
+
+        this.savingOverrides = true;
+        this.overrideError = '';
+        try {
+          const response = await apiFetch('./api/clients/plugin-options', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({uuid, plugins}),
+          });
+          const body = await response.json();
+          if (!response.ok) {
+            this.overrideError = body.error || response.statusText;
+            return;
+          }
+          this.editingClient = null;
+          await this.loadPluginSettings();
+        } catch (error) {
+          this.overrideError = String(error);
+        } finally {
+          this.savingOverrides = false;
+        }
+      },
+
+      /**
        * Unpair every client.
        */
       async unpairAll() {
@@ -265,6 +403,7 @@
           });
           const result = await response.json();
           this.unpairAllStatus = result.status;
+          this.clientOverrides = {};
         } catch (error) {
           console.error('Failed to unpair all clients', error);
           this.unpairAllStatus = false;
@@ -290,7 +429,11 @@
           body: JSON.stringify({uuid}),
         });
         this.showUnpairMessage = true;
+        if (this.editingClient === uuid) {
+          this.editingClient = null;
+        }
         await this.refreshClients();
+        await this.loadPluginSettings();
       },
 
       /**
