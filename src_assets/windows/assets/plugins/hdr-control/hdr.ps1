@@ -24,6 +24,12 @@ public static class HdrControl {
     const int GetTargetName = 2;
     const int GetAdvancedColorInfo = 9;
     const int GetAdvancedColorInfo2 = 15;
+    const int SetAdvancedColorState = 10;
+    const int SetHdrState = 16;
+    const uint AdvancedColorSupportedBit = 1u;
+    const uint AdvancedColorEnabledBit = 1u << 1;
+    const uint HdrSupportedBit = 1u << 4;
+    const uint HdrUserEnabledBit = 1u << 5;
     const int ProfileTypeIcc = 0;
     const int ProfileSubtypeHdr = 8;  // CPST_EXTENDED_DISPLAY_COLOR_MODE
     const int FileNotFound = unchecked((int)0x80070002);
@@ -87,6 +93,12 @@ public static class HdrControl {
         public int ActiveMode;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    struct SetState {
+        public Header Header;
+        public uint Value;
+    }
+
     [DllImport("user32.dll")]
     static extern int GetDisplayConfigBufferSizes(uint flags, out uint paths, out uint modes);
 
@@ -101,6 +113,9 @@ public static class HdrControl {
 
     [DllImport("user32.dll", EntryPoint = "DisplayConfigGetDeviceInfo")]
     static extern int GetInfo(ref ColorInfo2 info);
+
+    [DllImport("user32.dll", EntryPoint = "DisplayConfigSetDeviceInfo")]
+    static extern int SetInfo(ref SetState info);
 
     [DllImport("mscms.dll")]
     static extern int ColorProfileGetDisplayUserScope(Luid adapter, uint sourceId, out int scope);
@@ -200,6 +215,44 @@ public static class HdrControl {
         info.Header = MakeHeader<ColorInfo>(GetAdvancedColorInfo, display.TargetAdapter, display.TargetId);
         Check(GetInfo(ref info));
         return (info.Flags & 2) != 0 ? ModeHdr : ModeSdr;
+    }
+
+    // Returns whether the display supports HDR.
+    public static bool IsHdrSupported(Display display) {
+        ColorInfo2 info2 = new ColorInfo2();
+        info2.Header = MakeHeader<ColorInfo2>(GetAdvancedColorInfo2, display.TargetAdapter, display.TargetId);
+        if (GetInfo(ref info2) == 0) {
+            return (info2.Flags & HdrSupportedBit) != 0;
+        }
+        ColorInfo info = new ColorInfo();
+        info.Header = MakeHeader<ColorInfo>(GetAdvancedColorInfo, display.TargetAdapter, display.TargetId);
+        Check(GetInfo(ref info));
+        return (info.Flags & AdvancedColorSupportedBit) != 0;
+    }
+
+    // Returns whether HDR is turned on for the display, as the Use HDR switch in Settings shows it.
+    public static bool IsHdrOn(Display display) {
+        ColorInfo2 info2 = new ColorInfo2();
+        info2.Header = MakeHeader<ColorInfo2>(GetAdvancedColorInfo2, display.TargetAdapter, display.TargetId);
+        if (GetInfo(ref info2) == 0) {
+            return (info2.Flags & HdrUserEnabledBit) != 0;
+        }
+        ColorInfo info = new ColorInfo();
+        info.Header = MakeHeader<ColorInfo>(GetAdvancedColorInfo, display.TargetAdapter, display.TargetId);
+        Check(GetInfo(ref info));
+        return (info.Flags & AdvancedColorEnabledBit) != 0;
+    }
+
+    // Turns HDR on or off for the display, as Sunshine's display device configuration does.
+    public static void SetHdr(Display display, bool on) {
+        ColorInfo2 probe = new ColorInfo2();
+        probe.Header = MakeHeader<ColorInfo2>(GetAdvancedColorInfo2, display.TargetAdapter, display.TargetId);
+        // Windows 11 24H2 has a switch for HDR alone; before it, HDR is advanced color.
+        int type = GetInfo(ref probe) == 0 ? SetHdrState : SetAdvancedColorState;
+        SetState state = new SetState();
+        state.Header = MakeHeader<SetState>(type, display.TargetAdapter, display.TargetId);
+        state.Value = on ? 1u : 0u;
+        Check(SetInfo(ref state));
     }
 
     // Returns whether the display's profiles are the signed-in user's own or shared by every user.
@@ -347,7 +400,9 @@ function Get-InstalledHdrProfiles {
     $profiles
 }
 
-# Reads what the plugin changed this session: an array of { device, previous, added } per display.
+# Reads what the plugin changed this session: an array with an entry per display, holding its device path, its HDR
+# profile before the plugin changed it (`previous`, valid once `profile_saved`), the profiles the plugin linked to it
+# (`added`), and whether HDR was on before the plugin changed it (`hdr_was`, null when it didn't).
 function Read-HdrState {
     if (-not (Test-Path -LiteralPath $stateFile)) {
         return @()
@@ -355,41 +410,87 @@ function Read-HdrState {
     try {
         # Windows PowerShell's ConvertFrom-Json passes an array on as one object, so assign it before wrapping it.
         $parsed = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-        @($parsed)
+        $entries = @($parsed)
     }
     catch {
         Write-Output "Warning: ignoring an unreadable $stateFile"
-        @()
+        return @()
     }
+    foreach ($entry in $entries) {
+        # Version 1.0 always saved the previous profile and never changed HDR.
+        if ($entry.PSObject.Properties.Name -notcontains 'profile_saved') {
+            $entry | Add-Member -NotePropertyName profile_saved -NotePropertyValue $true
+        }
+        if ($entry.PSObject.Properties.Name -notcontains 'hdr_was') {
+            $entry | Add-Member -NotePropertyName hdr_was -NotePropertyValue $null
+        }
+    }
+    $entries
 }
 
 function Write-HdrState($entries) {
     ConvertTo-Json -InputObject @($entries) -Depth 4 | Set-Content -LiteralPath $stateFile -Encoding UTF8
 }
 
-# Makes the profile chosen for the stream the primary display's HDR profile, once the display is in HDR mode.
-# Records the profile it replaces the first time, so the undo script can put it back. Problems only log a warning,
-# since the stream still works with the display's current profile.
-function Set-StreamHdrProfile {
-    $profileName = $env:SUNSHINE_PLUGIN_OPT_PROFILE
-    if (-not $profileName) {
-        Write-Output 'No HDR profile chosen; leaving the display as it is'
-        return
+# Returns whether the stream wants HDR on ($true) or off ($false), or $null to leave it as it is.
+function Get-WantedHdr {
+    switch ($env:SUNSHINE_PLUGIN_OPT_HDR) {
+        'on' { return $true }
+        'off' { return $false }
+        'client' { return $env:SUNSHINE_CLIENT_HDR -eq 'true' }
     }
-    if ($env:SUNSHINE_CLIENT_HDR -ne 'true') {
-        Write-Output "$env:SUNSHINE_CLIENT_NAME isn't streaming in HDR; leaving the display as it is"
-        return
-    }
+    $null
+}
 
+# Turns HDR on or off for the primary display as the stream wants, then makes the profile chosen for the stream its
+# HDR profile once it is in HDR mode. Records what it changes the first time, so the undo script can put it back.
+# Problems only log a warning, since the stream still works with the display as it is.
+function Set-StreamHdr {
     try {
-        if (-not (Test-Path -LiteralPath (Join-Path $colorDir $profileName))) {
-            Write-Output "Warning: the HDR profile $profileName isn't installed; leaving the display as it is"
-            return
-        }
-
         $display = Get-PrimaryDisplay
         if (-not $display) {
             Write-Output 'Warning: there is no primary display; leaving the display as it is'
+            return
+        }
+
+        $entries = @(Read-HdrState)
+        $entry = $entries | Where-Object { $_.device -eq $display.DevicePath } | Select-Object -First 1
+        if (-not $entry) {
+            $entry = [pscustomobject]@{ device = $display.DevicePath; profile_saved = $false; previous = $null; added = @(); hdr_was = $null }
+            $entries += $entry
+        }
+
+        $wantHdr = Get-WantedHdr
+        if ($null -ne $wantHdr) {
+            $state = if ($wantHdr) { 'on' } else { 'off' }
+            if (-not [HdrControl]::IsHdrSupported($display)) {
+                Write-Output "Warning: $($display.FriendlyName) doesn't support HDR; leaving it as it is"
+            }
+            elseif ([HdrControl]::IsHdrOn($display) -eq $wantHdr) {
+                Write-Output "HDR is already $state for $($display.FriendlyName)"
+            }
+            else {
+                if ($null -eq $entry.hdr_was) {
+                    $entry.hdr_was = -not $wantHdr
+                }
+                [HdrControl]::SetHdr($display, $wantHdr)
+                Write-HdrState $entries
+                Write-Output "Turned HDR $state for $($display.FriendlyName)"
+            }
+        }
+
+        $profileName = $env:SUNSHINE_PLUGIN_OPT_PROFILE
+        if (-not $profileName) {
+            Write-Output 'No HDR profile chosen; leaving the HDR profile as it is'
+            return
+        }
+        $streamHdr = if ($null -ne $wantHdr) { $wantHdr } else { $env:SUNSHINE_CLIENT_HDR -eq 'true' }
+        if (-not $streamHdr) {
+            Write-Output "The stream for $env:SUNSHINE_CLIENT_NAME isn't in HDR; leaving the HDR profile as it is"
+            return
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $colorDir $profileName))) {
+            Write-Output "Warning: the HDR profile $profileName isn't installed; leaving the HDR profile as it is"
             return
         }
 
@@ -401,7 +502,7 @@ function Set-StreamHdrProfile {
                 return
             }
             Start-Sleep -Milliseconds 250
-            $display = Get-DisplayByPath $display.DevicePath
+            $display = Get-DisplayByPath $entry.device
             if (-not $display) {
                 Write-Output 'Warning: the primary display went away; leaving the display as it is'
                 return
@@ -415,34 +516,30 @@ function Set-StreamHdrProfile {
         }
 
         $current = [HdrControl]::GetHdrProfile($display, $scope)
-        $linked = Get-LinkedHdrProfiles $display $scope
-
-        $entries = @(Read-HdrState)
-        $entry = $entries | Where-Object { $_.device -eq $display.DevicePath } | Select-Object -First 1
-        if (-not $entry) {
-            $entry = [pscustomobject]@{ device = $display.DevicePath; previous = $current; added = @() }
-            $entries += $entry
-        }
-
         if ($current -eq $profileName) {
             Write-Output "$profileName is already the HDR profile of $($display.FriendlyName)"
+            return
         }
-        else {
-            [HdrControl]::UseHdrProfile($display, $scope, $profileName)
-            if ($linked -notcontains $profileName -and @($entry.added) -notcontains $profileName) {
-                $entry.added = @($entry.added) + $profileName
-            }
-            Write-Output "Made $profileName the HDR profile of $($display.FriendlyName) (was $(if ($current) { $current } else { 'none' }))"
+
+        $linked = Get-LinkedHdrProfiles $display $scope
+        if (-not $entry.profile_saved) {
+            $entry.previous = $current
+            $entry.profile_saved = $true
+        }
+        [HdrControl]::UseHdrProfile($display, $scope, $profileName)
+        if ($linked -notcontains $profileName -and @($entry.added) -notcontains $profileName) {
+            $entry.added = @($entry.added) + $profileName
         }
         Write-HdrState $entries
+        Write-Output "Made $profileName the HDR profile of $($display.FriendlyName) (was $(if ($current) { $current } else { 'none' }))"
     }
     catch {
-        Write-Output "Warning: could not change the HDR profile: $_"
+        Write-Output "Warning: could not set up HDR for the stream: $_"
     }
 }
 
-# Puts back the HDR profiles the plugin replaced and unlinks the ones it linked, then forgets them.
-function Restore-HdrProfiles {
+# Puts back the HDR profiles and HDR modes the plugin changed, and unlinks the profiles it linked, then forgets them.
+function Restore-StreamHdr {
     $entries = @(Read-HdrState)
     if ($entries.Count -eq 0) {
         return
@@ -452,28 +549,34 @@ function Restore-HdrProfiles {
             try {
                 $display = Get-DisplayByPath $entry.device
                 if (-not $display) {
-                    Write-Output "Warning: $($entry.device) isn't active, so its HDR profile wasn't put back"
+                    Write-Output "Warning: $($entry.device) isn't active, so its HDR settings weren't put back"
                     continue
                 }
-                $scope = [HdrControl]::GetScope($display)
-                if ($entry.previous) {
-                    [HdrControl]::SetHdrProfile($display, $scope, $entry.previous)
-                    Write-Output "Put back $($entry.previous) as the HDR profile of $($display.FriendlyName)"
-                }
-                foreach ($added in @($entry.added)) {
-                    if ($added -and $added -ne $entry.previous) {
-                        [HdrControl]::UnlinkHdrProfile($display, $scope, $added)
-                        Write-Output "Unlinked $added from $($display.FriendlyName)"
+                if ($entry.profile_saved) {
+                    $scope = [HdrControl]::GetScope($display)
+                    if ($entry.previous) {
+                        [HdrControl]::SetHdrProfile($display, $scope, $entry.previous)
+                        Write-Output "Put back $($entry.previous) as the HDR profile of $($display.FriendlyName)"
                     }
+                    foreach ($added in @($entry.added)) {
+                        if ($added -and $added -ne $entry.previous) {
+                            [HdrControl]::UnlinkHdrProfile($display, $scope, $added)
+                            Write-Output "Unlinked $added from $($display.FriendlyName)"
+                        }
+                    }
+                }
+                if ($null -ne $entry.hdr_was -and [HdrControl]::IsHdrOn($display) -ne [bool]$entry.hdr_was) {
+                    [HdrControl]::SetHdr($display, [bool]$entry.hdr_was)
+                    Write-Output "Turned HDR back $(if ($entry.hdr_was) { 'on' } else { 'off' }) for $($display.FriendlyName)"
                 }
             }
             catch {
-                Write-Output "Warning: could not put back the HDR profile of $($entry.device): $_"
+                Write-Output "Warning: could not put back the HDR settings of $($entry.device): $_"
             }
         }
     }
     else {
-        Write-Output 'Keeping the HDR profile chosen for the stream'
+        Write-Output "Keeping the stream's HDR settings"
     }
     Remove-Item -LiteralPath $stateFile -Force -ErrorAction SilentlyContinue
 }

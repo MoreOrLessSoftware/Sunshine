@@ -1,8 +1,8 @@
 {
   "id": "hdr-control",
   "name": "HDR Control",
-  "version": "1.0.0",
-  "description": "Makes a chosen color profile the primary display's HDR profile while a client streams in HDR, then puts back the previous profile when the application quits. Pick a profile made with the Windows HDR Calibration app, or any other installed HDR profile.",
+  "version": "1.1.0",
+  "description": "Turns HDR on or off for the primary display and makes a chosen color profile its HDR profile while a client streams, then puts back the previous settings when the application quits. Pick a profile made with the Windows HDR Calibration app, or any other installed HDR profile.",
   "author": "Sunshine",
   "homepage": "https://apps.microsoft.com/detail/9N7F2SM5D1LR",
   "order": 150,
@@ -14,6 +14,19 @@
     "connect": "connect.ps1"
   },
   "options": [
+    {
+      "id": "hdr",
+      "type": "choice",
+      "label": "HDR",
+      "description": "HDR mode of the primary display during the stream. Leave this as it is when the Virtual Display plugin sets the HDR mode, or when Sunshine's display device configuration turns HDR on.",
+      "default": "unchanged",
+      "choices": [
+        {"value": "unchanged", "label": "Leave as it is"},
+        {"value": "client", "label": "Match the client"},
+        {"value": "on", "label": "Always on"},
+        {"value": "off", "label": "Always off"}
+      ]
+    },
     {
       "id": "profile",
       "type": "choice",
@@ -38,8 +51,8 @@
     {
       "id": "restore",
       "type": "boolean",
-      "label": "Put back the previous profile",
-      "description": "When the application quits, make the display's previous HDR profile its HDR profile again and unlink any profile the plugin linked. Turn this off to keep the stream's profile.",
+      "label": "Put back the previous settings",
+      "description": "When the application quits, turn HDR back on or off as it was, make the display's previous HDR profile its HDR profile again, and unlink any profile the plugin linked. Turn this off to keep the stream's settings.",
       "default": true
     }
   ]

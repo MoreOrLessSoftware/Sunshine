@@ -2549,8 +2549,16 @@ TEST(PluginsBundledTest, HdrControlManifestIsValid) {
   EXPECT_EQ(manifest->id, "hdr-control");
   EXPECT_FALSE(manifest->elevated);  // Color profile settings belong to the signed-in user
   EXPECT_FALSE(manifest->scripts.connect_script.empty());
-  ASSERT_EQ(manifest->options.size(), 3);
-  const auto &profile = manifest->options[0];
+  ASSERT_EQ(manifest->options.size(), 4);
+  const auto &hdr = manifest->options[0];
+  EXPECT_EQ(hdr.id, "hdr");
+  EXPECT_EQ(hdr.default_value, "unchanged");  // The display device configuration or Virtual Display may set it
+  ASSERT_EQ(hdr.choices.size(), 4);
+  EXPECT_EQ(hdr.choices[1].value, "client");  // The same choices as Virtual Display's HDR option
+  EXPECT_EQ(hdr.choices[2].value, "on");
+  EXPECT_EQ(hdr.choices[3].value, "off");
+  EXPECT_TRUE(plugins::is_overridable(hdr));
+  const auto &profile = manifest->options[1];
   EXPECT_EQ(profile.choices_script, "choices.ps1");
   EXPECT_EQ(profile.default_value, "");
   EXPECT_TRUE(plugins::is_overridable(profile));
