@@ -59,13 +59,34 @@
     <div class="card my-4">
       <div class="card-body">
         <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-          <h2 id="unpair" class="mb-0">{{ $t('troubleshooting.unpair_title') }}</h2>
+          <h2 id="unpair" class="mb-0">{{ $t('troubleshooting.unpair_title') }}<span v-if="clients.length"> ({{ clientCountLabel }})</span></h2>
           <button class="btn btn-danger" :disabled="unpairAllPressed || clients.length === 0" @click="unpairAll">
             <trash-2 :size="18" class="icon"></trash-2>
             {{ $t('troubleshooting.unpair_all') }}
           </button>
         </div>
         <p>{{ $t('troubleshooting.unpair_desc') }}</p>
+        <!-- Sort and search, as on the Applications page -->
+        <div class="d-flex flex-wrap justify-content-end align-items-center gap-2" v-if="clients.length > 0">
+          <button class="btn btn-outline-secondary text-nowrap" type="button" @click="toggleSort"
+                  :class="{ active: sortMode !== 'default' }"
+                  :aria-pressed="sortMode !== 'default'"
+                  :title="$t('apps.sort_by_name') + ': ' + sortModeLabel">
+            <arrow-up-down v-if="sortMode === 'default'" :size="16" class="icon me-1"></arrow-up-down>
+            <arrow-up v-else-if="sortMode === 'asc'" :size="16" class="icon me-1"></arrow-up>
+            <arrow-down v-else :size="16" class="icon me-1"></arrow-down>
+            {{ $t('apps.sort_by_name') }}
+          </button>
+          <div class="input-group client-search">
+            <input type="text" class="form-control" v-model="searchQuery" :placeholder="$t('pin.search_placeholder')" />
+            <button v-if="searchQuery" class="btn btn-outline-secondary" type="button" @click="searchQuery = ''" :aria-label="$t('_common.close')">
+              <x :size="16" class="icon"></x>
+            </button>
+            <span v-else class="input-group-text">
+              <search :size="16" class="icon"></search>
+            </span>
+          </div>
+        </div>
         <div class="alert alert-success d-flex align-items-center" v-if="showUnpairMessage">
           <check-circle :size="18" class="icon"></check-circle>
           <div><b>{{ $t('_common.success') }}</b> {{ $t('pin.unpair_single_success') }}</div>
@@ -80,17 +101,15 @@
           {{ $t('troubleshooting.unpair_all_error') }}
         </div>
       </div>
-      <ul class="list-group list-group-flush" v-if="clients.length > 0">
-        <li v-for="client in clients" :key="client.uuid" class="list-group-item">
-          <div class="d-flex align-items-center">
+      <ul class="list-group list-group-flush" v-if="displayedClients.length > 0">
+        <li v-for="client in displayedClients" :key="client.uuid" class="list-group-item d-flex align-items-center">
           <div class="flex-grow-1 text-break">
             {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
             <span v-if="overrideCount(client.uuid)" class="badge text-bg-secondary ms-1">{{ $t('pin.plugin_settings_badge', {count: overrideCount(client.uuid)}, overrideCount(client.uuid)) }}</span>
           </div>
-          <button class="btn btn-outline-secondary btn-sm ms-2" v-if="activePlugins.length > 0"
-                  :aria-expanded="editingClient === client.uuid" @click="editPluginSettings(client.uuid)">
-            <puzzle :size="18" class="icon"></puzzle>
-            <span class="d-none d-sm-inline">{{ $t('pin.plugin_settings') }}</span>
+          <button class="btn btn-primary btn-sm ms-2" @click="editClient(client)">
+            <edit :size="18" class="icon"></edit>
+            <span class="d-none d-sm-inline">{{ $t('apps.edit') }}</span>
           </button>
           <div class="form-check form-switch ms-2 mb-0">
             <input class="form-check-input" type="checkbox" role="switch"
@@ -102,41 +121,70 @@
           <button class="btn btn-danger btn-sm ms-2" @click="unpairSingle(client.uuid)">
             <trash-2 :size="18" class="icon"></trash-2>
           </button>
-          </div>
-          <!-- The plugin settings this client overrides -->
-          <div v-if="editingClient === client.uuid && draft" class="border rounded p-3 mt-3">
-            <div class="form-text mb-3">{{ $t('pin.plugin_settings_desc') }}</div>
-            <div v-for="plugin in activePlugins" :key="plugin.id" class="mb-3 pb-3 border-bottom">
-              <div class="d-flex align-items-center justify-content-between gap-2 mb-2">
-                <h6 class="mb-0">{{ plugin.name }}</h6>
-                <div class="form-check form-switch mb-0">
-                  <input class="form-check-input" type="checkbox" role="switch" :id="'client-plugin-' + plugin.id"
-                         :checked="draft[plugin.id].active" @change="draft[plugin.id].active = $event.target.checked">
-                  <label class="form-check-label small" :for="'client-plugin-' + plugin.id">{{ $t('pin.plugin_runs') }}</label>
-                </div>
-              </div>
-              <plugin-option-overrides v-if="draft[plugin.id].active" :plugin="plugin" :inherited="plugin.config"
-                                       inherited-key="plugin_overrides.inherited_app"
-                                       id-prefix="client-override"
-                                       v-model="draft[plugin.id].options"></plugin-option-overrides>
-              <div v-else class="form-text">{{ $t('pin.plugin_off_desc') }}</div>
-            </div>
-            <div class="d-flex align-items-center gap-2">
-              <button type="button" class="btn btn-success" :disabled="savingOverrides" @click="savePluginSettings(client.uuid)">
-                <save :size="18" class="icon"></save>
-                {{ $t('_common.save') }}
-              </button>
-              <button type="button" class="btn btn-outline-secondary" @click="editingClient = null">{{ $t('_common.cancel') }}</button>
-            </div>
-            <div v-if="overrideError" class="alert alert-danger py-2 mt-2 mb-0">{{ overrideError }}</div>
-          </div>
         </li>
       </ul>
       <ul v-else class="list-group list-group-flush">
         <li class="list-group-item p-3 text-center">
-          <em>{{ $t('troubleshooting.unpair_single_no_devices') }}</em>
+          <em>{{ clients.length > 0 ? $t('pin.no_search_results') : $t('troubleshooting.unpair_single_no_devices') }}</em>
         </li>
       </ul>
+    </div>
+
+    <!-- Edit a paired device: its name, and which plugins run for it and with what settings -->
+    <div class="modal fade" ref="editModal" tabindex="-1" aria-labelledby="clientEditModalLabel"
+         aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+      <div class="modal-dialog modal-xl modal-dialog-scrollable modal-fullscreen-lg-down">
+        <div class="modal-content" v-if="editForm">
+          <div class="modal-header">
+            <h5 class="modal-title" id="clientEditModalLabel">{{ $t('pin.edit_title', {name: editForm.originalName || $t('troubleshooting.unpair_single_unknown')}) }}</h5>
+            <button type="button" class="btn-close" @click="closeEditModal" :aria-label="$t('_common.close')"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label for="clientName" class="form-label">{{ $t('pin.device_name') }}</label>
+              <input type="text" class="form-control" id="clientName" v-model="editForm.name" />
+            </div>
+            <!-- plugins -->
+            <div class="mb-3" v-if="activePlugins.length > 0">
+              <label class="form-label">{{ $t('apps.plugins_name') }}</label>
+              <div class="form-text mb-2">{{ $t('pin.plugins_desc') }}</div>
+              <div class="mb-1" v-for="plugin in activePlugins" :key="plugin.id">
+                <div class="d-flex align-items-center gap-2">
+                  <div class="form-check mb-0">
+                    <input class="form-check-input" type="checkbox" :id="'client-plugin-' + plugin.id"
+                           v-model="editForm.plugins[plugin.id].active">
+                    <label class="form-check-label" :for="'client-plugin-' + plugin.id">{{ plugin.name }}</label>
+                  </div>
+                  <a href="#" class="small" role="button"
+                     v-if="editForm.plugins[plugin.id].active && plugin.options.some(option => option.overridable)"
+                     :aria-expanded="!!pluginSettingsOpen[plugin.id]"
+                     @click.prevent="pluginSettingsOpen[plugin.id] = !pluginSettingsOpen[plugin.id]">
+                    {{ $t('apps.plugin_settings') }}<template v-if="Object.keys(editForm.plugins[plugin.id].options).length"> ({{ Object.keys(editForm.plugins[plugin.id].options).length }})</template>
+                  </a>
+                </div>
+                <div class="border rounded p-3 mt-2 mb-2" v-if="pluginSettingsOpen[plugin.id] && editForm.plugins[plugin.id].active">
+                  <div class="form-text mb-2">{{ $t('pin.plugin_settings_desc') }}</div>
+                  <plugin-option-overrides :plugin="plugin" :inherited="plugin.config"
+                                           inherited-key="plugin_overrides.inherited_app"
+                                           id-prefix="client-override"
+                                           v-model="editForm.plugins[plugin.id].options"></plugin-option-overrides>
+                </div>
+              </div>
+            </div>
+            <div v-if="editError" class="alert alert-danger py-2 mb-0">{{ editError }}</div>
+          </div>
+          <div class="modal-footer">
+            <button @click="closeEditModal" class="btn btn-secondary">
+              <x :size="18" class="icon"></x>
+              {{ $t('_common.cancel') }}
+            </button>
+            <button class="btn btn-primary" :disabled="saving" @click="saveClient">
+              <save :size="18" class="icon"></save>
+              {{ $t('_common.save') }}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </body>
@@ -147,14 +195,19 @@
   import Navbar from './Navbar.vue'
   import PluginOptionOverrides from './PluginOptionOverrides.vue'
   import { apiFetch } from './fetch_utils'
+  import { Modal } from 'bootstrap/dist/js/bootstrap'
   import {
     AlertCircle,
+    ArrowDown,
+    ArrowUp,
+    ArrowUpDown,
     CheckCircle,
     Forward,
     Hash,
+    Edit,
     Monitor,
-    Puzzle,
     Save,
+    Search,
     Trash2,
     UserRoundSearch,
     X,
@@ -165,12 +218,16 @@
       Navbar,
       PluginOptionOverrides,
       AlertCircle,
+      ArrowDown,
+      ArrowUp,
+      ArrowUpDown,
       CheckCircle,
       Forward,
       Hash,
+      Edit,
       Monitor,
-      Puzzle,
       Save,
+      Search,
       Trash2,
       UserRoundSearch,
       X,
@@ -181,11 +238,13 @@
         activePlugins: [],
         clients: [],
         clientOverrides: {},
-        draft: null,
-        editingClient: null,
+        editError: '',
+        editForm: null,
         name: '',
-        overrideError: '',
-        savingOverrides: false,
+        pluginSettingsOpen: {},
+        saving: false,
+        searchQuery: '',
+        sortMode: 'default',
         pendingPairings: [],
         pin: '',
         refreshTimer: null,
@@ -195,6 +254,43 @@
         unpairAllPressed: false,
         unpairAllStatus: null,
       };
+    },
+    computed: {
+      /**
+       * The devices matching the search, in pairing order or sorted by name.
+       */
+      displayedClients() {
+        const unnamed = this.i18n.t('troubleshooting.unpair_single_unknown');
+        const nameOf = (client) => client.name || unnamed;
+        let list = [...this.clients];
+
+        const query = this.searchQuery.trim().toLowerCase();
+        if (query) {
+          list = list.filter((client) => nameOf(client).toLowerCase().includes(query));
+        }
+        if (this.sortMode !== 'default') {
+          list.sort((a, b) => {
+            const result = nameOf(a).localeCompare(nameOf(b), undefined, {sensitivity: 'base'});
+            return this.sortMode === 'asc' ? result : -result;
+          });
+        }
+        return list;
+      },
+      sortModeLabel() {
+        switch (this.sortMode) {
+          case 'asc':
+            return this.$t('apps.sort_ascending');
+          case 'desc':
+            return this.$t('apps.sort_descending');
+          default:
+            return this.$t('apps.sort_default');
+        }
+      },
+      clientCountLabel() {
+        const total = this.clients.length;
+        const shown = this.displayedClients.length;
+        return shown === total ? `${total}` : `${shown} / ${total}`;
+      },
     },
     mounted() {
       this.loadPendingPairings();
@@ -284,15 +380,20 @@
       },
 
       /**
-       * Load the paired clients, sorted by name with unnamed ones last.
+       * Sort by name ascending, then descending, then back to pairing order.
+       */
+      toggleSort() {
+        this.sortMode = {default: 'asc', asc: 'desc'}[this.sortMode] || 'default';
+      },
+
+      /**
+       * Load the paired clients, in the order they were paired.
        */
       async refreshClients() {
         try {
           const response = await apiFetch('./api/clients/list', {method: 'GET'});
           const body = await response.json();
-          this.clients = body.status === true && body.named_certs
-            ? body.named_certs.sort((a, b) => (a.name.toLowerCase() > b.name.toLowerCase() || a.name === '' ? 1 : -1))
-            : [];
+          this.clients = body.status === true && body.named_certs ? body.named_certs : [];
         } catch (error) {
           console.error('Failed to load paired clients', error);
           this.clients = [];
@@ -325,37 +426,65 @@
       },
 
       /**
-       * Show the plugin settings of a client, or hide them when they're showing.
+       * Open the edit dialog for a paired device, starting from its name and saved plugin settings.
        *
-       * @param {string} uuid The client's UUID.
+       * @param {object} client The device from the client list.
        */
-      editPluginSettings(uuid) {
-        if (this.editingClient === uuid) {
-          this.editingClient = null;
-          return;
-        }
-        const saved = this.clientOverrides[uuid] || {};
-        this.draft = Object.fromEntries(this.activePlugins.map((plugin) => [plugin.id, {
-          active: saved[plugin.id]?.active !== false,
-          options: {...(saved[plugin.id]?.options || {})},
-        }]));
-        this.overrideError = '';
-        this.editingClient = uuid;
+      editClient(client) {
+        const saved = this.clientOverrides[client.uuid] || {};
+        this.editForm = {
+          uuid: client.uuid,
+          name: client.name,
+          originalName: client.name,
+          plugins: Object.fromEntries(this.activePlugins.map((plugin) => [plugin.id, {
+            active: saved[plugin.id]?.active !== false,
+            options: {...(saved[plugin.id]?.options || {})},
+          }])),
+        };
+        this.pluginSettingsOpen = {};
+        this.editError = '';
+        // Created on the next tick, once the dialog's content exists
+        this.$nextTick(() => Modal.getOrCreateInstance(this.$refs.editModal).show());
+      },
+
+      closeEditModal() {
+        const modal = Modal.getInstance(this.$refs.editModal);
+        if (modal) modal.hide();
       },
 
       /**
-       * Save the plugin settings of a client. Overrides of plugins that aren't active now are kept.
+       * Read an API response, turning a refusal into an error with the server's reason.
        *
-       * @param {string} uuid The client's UUID.
+       * @param {Response} response The response.
+       * @returns {Promise<object>} The response body.
        */
-      async savePluginSettings(uuid) {
-        const plugins = {...(this.clientOverrides[uuid] || {})};
-        for (const [id, entry] of Object.entries(this.draft)) {
+      async readResponse(response) {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(body.error || response.statusText);
+        }
+        return body;
+      },
+
+      /**
+       * Save the device being edited: its name when it changed, then its plugin settings. Settings of plugins that
+       * aren't active now are kept.
+       */
+      async saveClient() {
+        const form = this.editForm;
+        const name = form.name.trim();
+        if (name === '') {
+          this.editError = this.i18n.t('pin.name_required');
+          return;
+        }
+
+        const plugins = {...(this.clientOverrides[form.uuid] || {})};
+        for (const [id, entry] of Object.entries(form.plugins)) {
           const override = {};
           if (!entry.active) {
             override.active = false;
           }
-          if (Object.keys(entry.options).length > 0) {
+          if (entry.active && Object.keys(entry.options).length > 0) {
             override.options = entry.options;
           }
           if (Object.keys(override).length > 0) {
@@ -365,27 +494,25 @@
           }
         }
 
-        this.savingOverrides = true;
-        this.overrideError = '';
+        const post = (url, body) => apiFetch(url, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(body),
+        }).then(this.readResponse);
+
+        this.saving = true;
+        this.editError = '';
         try {
-          const response = await apiFetch('./api/clients/plugin-options', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({uuid, plugins}),
-          });
-          const body = await response.json();
-          if (!response.ok) {
-            this.overrideError = body.error || response.statusText;
-            return;
+          if (name !== form.originalName) {
+            await post('./api/clients/update', {uuid: form.uuid, name});
           }
-          this.editingClient = null;
-          await this.loadPluginSettings();
+          await post('./api/clients/plugin-options', {uuid: form.uuid, plugins});
+          this.closeEditModal();
         } catch (error) {
-          this.overrideError = String(error);
+          this.editError = error.message;
         } finally {
-          this.savingOverrides = false;
+          this.saving = false;
+          await Promise.all([this.refreshClients(), this.loadPluginSettings()]);
         }
       },
 
@@ -429,9 +556,6 @@
           body: JSON.stringify({uuid}),
         });
         this.showUnpairMessage = true;
-        if (this.editingClient === uuid) {
-          this.editingClient = null;
-        }
         await this.refreshClients();
         await this.loadPluginSettings();
       },

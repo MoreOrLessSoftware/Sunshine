@@ -1545,7 +1545,8 @@ p {
     padding: var(--spacing-md);
 }
 
-.apps-toolbar .input-group {
+.apps-toolbar .input-group,
+.client-search {
     width: 14rem;
 }
 

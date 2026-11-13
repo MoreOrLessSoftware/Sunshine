@@ -42,8 +42,8 @@ is resuming.
 A plugin's options can differ for an application or a client:
 
 * **For an application** — when editing the application, select *Settings* next to the plugin under *Plugins*.
-* **For a client** — on the **Clients + PIN** page, select *Plugin settings* next to the client. A client can also turn
-  a plugin off for its streams with *Runs for this client*.
+* **For a client** — on the **Clients + PIN** page, select *Edit* next to the device, then *Settings* next to the
+  plugin. Uncheck a plugin there to turn it off for the device's streams.
 
 Turn on *Override* next to an option to give it a value of its own. The plugin's own value applies unless the
 application overrides it, and the client's value wins over both. The Plugins page marks the options that are overridden
