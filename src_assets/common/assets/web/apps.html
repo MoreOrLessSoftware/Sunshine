@@ -24,7 +24,7 @@
         </button>
       </div>
       <!-- Right side actions -->
-      <div class="d-flex align-items-center gap-2" v-if="apps && apps.length > 0">
+      <div class="d-flex flex-wrap align-items-center gap-2" v-if="apps && apps.length > 0">
         <!-- Card or list view -->
         <div class="btn-group" role="group" :aria-label="$t('apps.view')">
           <button class="btn btn-outline-secondary" type="button" @click="setView('cards')"

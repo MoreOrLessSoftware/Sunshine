@@ -2314,6 +2314,20 @@ p {
 }
 
 /* Environment Table */
+/* Long variable names and the example command wrap rather than widening a phone screen. */
+.env-table {
+    width: 100%;
+}
+
+.env-table td:first-child,
+.env-hint pre {
+    overflow-wrap: anywhere;
+}
+
+.env-hint pre {
+    white-space: pre-wrap;
+}
+
 .env-table td {
     padding: var(--spacing-sm);
     border-bottom: 1px solid var(--color-border);
