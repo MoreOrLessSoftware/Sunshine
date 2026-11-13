@@ -2314,12 +2314,16 @@ p {
 }
 
 /* Environment Table */
-/* Long variable names and the example command wrap rather than widening a phone screen. */
+/* Variable names stay on one line beside their descriptions. The example command wraps rather than widening a phone
+   screen. */
 .env-table {
     width: 100%;
 }
 
-.env-table td:first-child,
+.env-table td:first-child {
+    white-space: nowrap;
+}
+
 .env-hint pre {
     overflow-wrap: anywhere;
 }
@@ -2341,9 +2345,12 @@ p {
         display: block;
     }
 
+    /* A name too long for the screen on its own line may still break. */
     .env-table td:first-child {
         padding-bottom: 0;
         border-bottom: none;
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 }
 
