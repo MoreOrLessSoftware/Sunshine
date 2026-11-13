@@ -1,8 +1,8 @@
 {
   "id": "hdr-control",
   "name": "HDR Control",
-  "version": "1.1.0",
-  "description": "Turns HDR on or off for the primary display and makes a chosen color profile its HDR profile while a client streams, then puts back the previous settings when the application quits. Pick a profile made with the Windows HDR Calibration app, or any other installed HDR profile.",
+  "version": "1.2.0",
+  "description": "Turns HDR on or off for the primary display and makes a chosen color profile its HDR profile while a client streams, then puts back the previous settings when the application quits. Clients can also toggle HDR from their in-stream menu. Pick a profile made with the Windows HDR Calibration app, or any other installed HDR profile.",
   "author": "Sunshine",
   "homepage": "https://apps.microsoft.com/detail/9N7F2SM5D1LR",
   "order": 150,
@@ -13,6 +13,15 @@
     "undo": "undo.ps1",
     "connect": "connect.ps1"
   },
+  "client_commands": [
+    {
+      "id": "toggle_hdr",
+      "label": "Toggle HDR",
+      "icon": "material:hdr_on",
+      "top_level": true,
+      "script": "toggle.ps1"
+    }
+  ],
   "options": [
     {
       "id": "hdr",
@@ -31,7 +40,7 @@
       "id": "profile",
       "type": "choice",
       "label": "HDR profile",
-      "description": "Color profile the primary display uses in HDR mode during the stream. Profiles already linked to the display are listed first. Override it for an application or a client to give each its own.",
+      "description": "Color profile the primary display uses in HDR mode during the stream. Its current HDR profile is listed first. Override it for an application or a client to give each its own.",
       "default": "",
       "choices": [
         {"value": "", "label": "Don't change"}

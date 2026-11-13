@@ -2563,6 +2563,13 @@ TEST(PluginsBundledTest, HdrControlManifestIsValid) {
   EXPECT_EQ(profile.default_value, "");
   EXPECT_TRUE(plugins::is_overridable(profile));
   EXPECT_TRUE(fs::is_regular_file(dir / "hdr.ps1"));
+  ASSERT_EQ(manifest->client_commands.size(), 1);
+  const auto &toggle = manifest->client_commands[0];
+  EXPECT_EQ(toggle.id, "toggle_hdr");
+  EXPECT_EQ(toggle.label, "Toggle HDR");
+  EXPECT_TRUE(toggle.top_level);
+  EXPECT_FALSE(toggle.elevated);  // HDR mode and color profiles belong to the signed-in user's session
+  EXPECT_EQ(toggle.script, "toggle.ps1");
 }
 
 TEST(PluginsBundledTest, DisplayManagerManifestIsValid) {

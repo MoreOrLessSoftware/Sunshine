@@ -442,6 +442,72 @@ function Get-WantedHdr {
     $null
 }
 
+# Returns what the plugin changed this session followed by the entry for a display, adding an empty one when the
+# display has none yet.
+function Get-HdrStateEntry($display) {
+    $entries = @(Read-HdrState)
+    $entry = $entries | Where-Object { $_.device -eq $display.DevicePath } | Select-Object -First 1
+    if (-not $entry) {
+        $entry = [pscustomobject]@{ device = $display.DevicePath; profile_saved = $false; previous = $null; added = @(); hdr_was = $null }
+        $entries += $entry
+    }
+    , $entries
+    $entry
+}
+
+# Makes the profile chosen for the stream the display's HDR profile once it is in HDR mode, recording the previous one
+# the first time in the display's entry of what the plugin changed.
+function Set-StreamProfile($display, $entries, $entry) {
+    $profileName = $env:SUNSHINE_PLUGIN_OPT_PROFILE
+    if (-not $profileName) {
+        Write-Output 'No HDR profile chosen; leaving the HDR profile as it is'
+        return
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $colorDir $profileName))) {
+        Write-Output "Warning: the HDR profile $profileName isn't installed; leaving the HDR profile as it is"
+        return
+    }
+
+    # Windows may still be turning on HDR.
+    $deadline = [DateTime]::UtcNow.AddSeconds([double]$env:SUNSHINE_PLUGIN_OPT_WAIT_SECONDS)
+    while ([HdrControl]::GetMode($display) -ne [HdrControl]::ModeHdr) {
+        if ([DateTime]::UtcNow -ge $deadline) {
+            Write-Output "Warning: $($display.FriendlyName) isn't in HDR mode; leaving its HDR profile as it is"
+            return
+        }
+        Start-Sleep -Milliseconds 250
+        $display = Get-DisplayByPath $entry.device
+        if (-not $display) {
+            Write-Output 'Warning: the primary display went away; leaving the display as it is'
+            return
+        }
+    }
+
+    $scope = [HdrControl]::GetScope($display)
+    if ($scope -ne [HdrControl]::ScopeCurrentUser) {
+        Write-Output "Warning: $($display.FriendlyName) uses color profiles shared by every user, which only an administrator can change. Turn on 'Use my settings for this device' for it in Color Management to let the plugin change them."
+        return
+    }
+
+    $current = [HdrControl]::GetHdrProfile($display, $scope)
+    if ($current -eq $profileName) {
+        Write-Output "$profileName is already the HDR profile of $($display.FriendlyName)"
+        return
+    }
+
+    $linked = Get-LinkedHdrProfiles $display $scope
+    if (-not $entry.profile_saved) {
+        $entry.previous = $current
+        $entry.profile_saved = $true
+    }
+    [HdrControl]::UseHdrProfile($display, $scope, $profileName)
+    if ($linked -notcontains $profileName -and @($entry.added) -notcontains $profileName) {
+        $entry.added = @($entry.added) + $profileName
+    }
+    Write-HdrState $entries
+    Write-Output "Made $profileName the HDR profile of $($display.FriendlyName) (was $(if ($current) { $current } else { 'none' }))"
+}
+
 # Turns HDR on or off for the primary display as the stream wants, then makes the profile chosen for the stream its
 # HDR profile once it is in HDR mode. Records what it changes the first time, so the undo script can put it back.
 # Problems only log a warning, since the stream still works with the display as it is.
@@ -452,13 +518,7 @@ function Set-StreamHdr {
             Write-Output 'Warning: there is no primary display; leaving the display as it is'
             return
         }
-
-        $entries = @(Read-HdrState)
-        $entry = $entries | Where-Object { $_.device -eq $display.DevicePath } | Select-Object -First 1
-        if (-not $entry) {
-            $entry = [pscustomobject]@{ device = $display.DevicePath; profile_saved = $false; previous = $null; added = @(); hdr_was = $null }
-            $entries += $entry
-        }
+        $entries, $entry = Get-HdrStateEntry $display
 
         $wantHdr = Get-WantedHdr
         if ($null -ne $wantHdr) {
@@ -479,62 +539,48 @@ function Set-StreamHdr {
             }
         }
 
-        $profileName = $env:SUNSHINE_PLUGIN_OPT_PROFILE
-        if (-not $profileName) {
-            Write-Output 'No HDR profile chosen; leaving the HDR profile as it is'
-            return
-        }
         $streamHdr = if ($null -ne $wantHdr) { $wantHdr } else { $env:SUNSHINE_CLIENT_HDR -eq 'true' }
         if (-not $streamHdr) {
             Write-Output "The stream for $env:SUNSHINE_CLIENT_NAME isn't in HDR; leaving the HDR profile as it is"
             return
         }
-        if (-not (Test-Path -LiteralPath (Join-Path $colorDir $profileName))) {
-            Write-Output "Warning: the HDR profile $profileName isn't installed; leaving the HDR profile as it is"
-            return
-        }
-
-        # Windows may still be turning on HDR for the stream.
-        $deadline = [DateTime]::UtcNow.AddSeconds([double]$env:SUNSHINE_PLUGIN_OPT_WAIT_SECONDS)
-        while ([HdrControl]::GetMode($display) -ne [HdrControl]::ModeHdr) {
-            if ([DateTime]::UtcNow -ge $deadline) {
-                Write-Output "Warning: $($display.FriendlyName) isn't in HDR mode; leaving its HDR profile as it is"
-                return
-            }
-            Start-Sleep -Milliseconds 250
-            $display = Get-DisplayByPath $entry.device
-            if (-not $display) {
-                Write-Output 'Warning: the primary display went away; leaving the display as it is'
-                return
-            }
-        }
-
-        $scope = [HdrControl]::GetScope($display)
-        if ($scope -ne [HdrControl]::ScopeCurrentUser) {
-            Write-Output "Warning: $($display.FriendlyName) uses color profiles shared by every user, which only an administrator can change. Turn on 'Use my settings for this device' for it in Color Management to let the plugin change them."
-            return
-        }
-
-        $current = [HdrControl]::GetHdrProfile($display, $scope)
-        if ($current -eq $profileName) {
-            Write-Output "$profileName is already the HDR profile of $($display.FriendlyName)"
-            return
-        }
-
-        $linked = Get-LinkedHdrProfiles $display $scope
-        if (-not $entry.profile_saved) {
-            $entry.previous = $current
-            $entry.profile_saved = $true
-        }
-        [HdrControl]::UseHdrProfile($display, $scope, $profileName)
-        if ($linked -notcontains $profileName -and @($entry.added) -notcontains $profileName) {
-            $entry.added = @($entry.added) + $profileName
-        }
-        Write-HdrState $entries
-        Write-Output "Made $profileName the HDR profile of $($display.FriendlyName) (was $(if ($current) { $current } else { 'none' }))"
+        Set-StreamProfile $display $entries $entry
     }
     catch {
         Write-Output "Warning: could not set up HDR for the stream: $_"
+    }
+}
+
+# Turns HDR off for the primary display when it is on, or on when it is off, then makes the profile chosen for the
+# stream its HDR profile when HDR is now on. Records what it changes the first time, so the undo script can put it
+# back. Problems only log a warning.
+function Switch-StreamHdr {
+    try {
+        $display = Get-PrimaryDisplay
+        if (-not $display) {
+            Write-Output 'Warning: there is no primary display; leaving the display as it is'
+            return
+        }
+        if (-not [HdrControl]::IsHdrSupported($display)) {
+            Write-Output "Warning: $($display.FriendlyName) doesn't support HDR; leaving it as it is"
+            return
+        }
+        $entries, $entry = Get-HdrStateEntry $display
+
+        $wantHdr = -not [HdrControl]::IsHdrOn($display)
+        if ($null -eq $entry.hdr_was) {
+            $entry.hdr_was = -not $wantHdr
+        }
+        [HdrControl]::SetHdr($display, $wantHdr)
+        Write-HdrState $entries
+        Write-Output "Turned HDR $(if ($wantHdr) { 'on' } else { 'off' }) for $($display.FriendlyName)"
+
+        if ($wantHdr) {
+            Set-StreamProfile $display $entries $entry
+        }
+    }
+    catch {
+        Write-Output "Warning: could not toggle HDR: $_"
     }
 }
 
