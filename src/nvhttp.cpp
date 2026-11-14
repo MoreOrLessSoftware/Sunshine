@@ -475,13 +475,26 @@ namespace nvhttp {
    *
    * @param app_id Application being launched or resumed.
    * @param launch_session Launch session with the client's display settings.
+   * @return false when a plugin sets up the display instead, in its scripts, so the encoders should be probed after
+   *         they run rather than now.
    */
-  void prepare_display(const int app_id, const rtsp_stream::launch_session_t &launch_session) {
+  bool prepare_display(const int app_id, const rtsp_stream::launch_session_t &launch_session) {
     if (const auto plugin = proc::proc.get_display_plugin(app_id, launch_session.client_uuid); !plugin.empty()) {
       BOOST_LOG(info) << "Skipping display device configuration: the "sv << plugin << " plugin sets up the display for this application"sv;
-      return;
+      return false;
     }
     display_device::configure_display(config::video, launch_session);
+    return true;
+  }
+
+  /**
+   * @brief Answer a launch or resume with the error for encoders that couldn't be set up.
+   *
+   * @param tree Response being built.
+   */
+  void encoder_failure(pt::ptree &tree) {
+    tree.put("root.<xmlattr>.status_code", 503);
+    tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
   }
 
   /**
@@ -1429,6 +1442,8 @@ namespace nvhttp {
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
 
+    // A plugin that sets up the display does so in its do script, so the encoders are probed once that has run
+    bool probe_after_prep = false;
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
       revert_display_configuration = true;
@@ -1436,15 +1451,14 @@ namespace nvhttp {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      prepare_display((int) appid, *launch_session);
+      probe_after_prep = !prepare_display((int) appid, *launch_session) && appid > 0;
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
-      if (video::probe_encoders()) {
-        tree.put("root.<xmlattr>.status_code", 503);
-        tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
+      if (!probe_after_prep && video::probe_encoders()) {
+        encoder_failure(tree);
         tree.put("root.gamesession", 0);
 
         return;
@@ -1471,6 +1485,14 @@ namespace nvhttp {
 
         return;
       }
+    }
+
+    if (probe_after_prep && video::probe_encoders()) {
+      proc::proc.terminate();
+      encoder_failure(tree);
+      tree.put("root.gamesession", 0);
+
+      return;
     }
 
     tree.put("root.<xmlattr>.status_code", 200);
@@ -1545,20 +1567,21 @@ namespace nvhttp {
     }
     const auto launch_session = make_launch_session(host_audio, args);
 
+    // A plugin that sets up the display may do so in its connect script, so the encoders are probed once that has run
+    bool probe_after_connect = false;
     if (no_active_sessions) {
       // We want to prepare display only if there are no active sessions at
       // the moment. This should be done before probing encoders as it could
       // change the active displays.
-      prepare_display(current_appid, *launch_session);
+      probe_after_connect = !prepare_display(current_appid, *launch_session);
 
       // Probe encoders again before streaming to ensure our chosen
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
-      if (video::probe_encoders()) {
+      if (!probe_after_connect && video::probe_encoders()) {
         tree.put("root.resume", 0);
-        tree.put("root.<xmlattr>.status_code", 503);
-        tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
+        encoder_failure(tree);
 
         return;
       }
@@ -1578,6 +1601,14 @@ namespace nvhttp {
     if (no_active_sessions) {
       // A client is coming back to the app it left running
       proc::proc.connect(*launch_session);
+    }
+
+    if (probe_after_connect && video::probe_encoders()) {
+      proc::proc.disconnect();
+      tree.put("root.resume", 0);
+      encoder_failure(tree);
+
+      return;
     }
 
     tree.put("root.<xmlattr>.status_code", 200);
