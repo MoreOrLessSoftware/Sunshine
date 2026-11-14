@@ -2630,6 +2630,7 @@ namespace plugins {
         auto &cmd = cmds.emplace_back(std::move(do_cmd), std::move(undo_cmd), std::move(elevated), type);
         cmd.env = env;
         cmd.plugin = manifest.id;
+        cmd.log_file = path_to_utf8(plugin_log_file(reg.paths, manifest.id));
       };
       add(manifest.scripts.do_script, manifest.scripts.undo_script, config::prep_cmd_t::type_e::app);
       add(manifest.scripts.connect_script, manifest.scripts.disconnect_script, config::prep_cmd_t::type_e::connect);

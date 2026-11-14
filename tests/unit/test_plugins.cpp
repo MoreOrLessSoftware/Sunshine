@@ -1299,6 +1299,7 @@ TEST_F(PluginsTest, PrepCmdsIncludeActivePluginsInOrder) {
   EXPECT_TRUE(cmds[1].elevated);
   EXPECT_EQ(cmds[1].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "4");
   EXPECT_EQ(fs::path(cmds[1].env.at("SUNSHINE_PLUGIN_DATA_DIR")), fs::path(data_dir / "second").make_preferred());
+  EXPECT_EQ(fs::path(cmds[1].log_file), data_dir / "second.log");  // The output goes to the plugin's log
 
   EXPECT_EQ(plugins::prep_cmds({}).size(), 3);
 }
@@ -4010,6 +4011,45 @@ TEST_F(PluginsLaunchTest, OnlyTheFirstPluginThatSetsUpTheDisplayRuns) {
   ASSERT_EQ(0, process->execute(1, session("phone")));
   process->terminate();
   EXPECT_EQ(labels(), (std::vector<std::string> {"b-do", "p-do", "p-undo", "b-undo"}));
+}
+
+TEST_F(PluginsLaunchTest, PluginOutputGoesToThePluginLog) {
+  const auto log = root / "p.log";
+  proc::ctx_t ctx {};
+  ctx.name = "Desktop";
+  ctx.id = "1";
+  ctx.output = output_file.string();
+  auto &cmd = ctx.prep_cmds.emplace_back(echo_multiplier("do"), echo_multiplier("undo"), false);
+  cmd.plugin = "p";
+  cmd.log_file = log.string();
+  auto &other = ctx.prep_cmds.emplace_back(echo_multiplier("other"), false);
+  other.plugin = "p";
+  other.log_file = (root / "missing" / "p.log").string();  // Can't be opened, so the app's output gets it
+  ctx.exit_timeout = std::chrono::seconds {1};
+  std::vector<proc::ctx_t> apps;
+  apps.emplace_back(std::move(ctx));
+  process->terminate();
+  process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
+
+  // A log too big starts over
+  write_text(log, std::string(1024 * 1024 + 1, 'x'));
+  ASSERT_EQ(0, process->execute(1, session("tv")));
+  process->terminate();
+
+  const auto text = read_text(log);
+  EXPECT_EQ(text.find('x'), std::string::npos);
+  EXPECT_NE(text.find("Do Cmd for Desktop"), std::string::npos);
+  EXPECT_NE(text.find("do=7"), std::string::npos);
+  EXPECT_NE(text.find("Undo Cmd for Desktop"), std::string::npos);
+  EXPECT_NE(text.find("undo=7"), std::string::npos);
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"other=7"}));
+
+  // Otherwise it grows
+  ASSERT_EQ(0, process->execute(1, session("tv")));
+  process->terminate();
+  const auto again = read_text(log);
+  EXPECT_EQ(again.find(text), 0);
+  EXPECT_GT(again.size(), text.size());
 }
 
 TEST_F(PluginsLaunchTest, AClientThatTurnedThePluginOffDoesNotRunIt) {

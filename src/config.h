@@ -383,6 +383,7 @@ namespace config {
 
     std::map<std::string, std::string> env;  ///< Variables added to the environment of these commands only.
     std::string plugin;  ///< ID of the plugin whose scripts these are, or empty for other commands.
+    std::string log_file;  ///< File (UTF-8 path) the commands' output goes to instead of the application's output, or empty.
   };
 
   /**

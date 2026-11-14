@@ -281,10 +281,11 @@ A client command's script receives `SUNSHINE_CLIENT_COMMAND_ID`, `SUNSHINE_CLIEN
 `SUNSHINE_CLIENT_NAME`, `SUNSHINE_APP_ID` and `SUNSHINE_APP_NAME`.
 
 ## Logs
-The output of install, uninstall, action, apply and client command scripts goes to `<id>.log` in the `plugin-data`
-folder of the config directory, and *View log* on the plugin's page shows it. The output of a choices script goes to
-`.choices.log` in the plugin's data folder. The output of do, undo, connect and
-disconnect scripts isn't kept, so have them write to their own file if you need a record.
+The output of install, uninstall, action, apply, client command, do, undo, connect and disconnect scripts goes to
+`<id>.log` in the `plugin-data` folder of the config directory, and *View log* on the plugin's page shows it. Each run
+of a do, undo, connect or disconnect script starts with a line naming it, the application and the time, and the log
+starts over once it grows past 1 MB. Installing, uninstalling, applying options or running an action also starts it
+over. The output of a choices script goes to `.choices.log` in the plugin's data folder.
 
 ## Notes for coding agents
 If you are an AI coding agent writing a plugin, follow these as well as the reference above.

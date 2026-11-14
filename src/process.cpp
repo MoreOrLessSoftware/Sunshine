@@ -5,6 +5,8 @@
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
 
 // standard includes
+#include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -161,6 +163,59 @@ namespace proc {
     return env;
   }
 
+  namespace {
+    /**
+     * @brief Size above which a plugin's log starts over instead of growing.
+     */
+    constexpr std::uintmax_t max_plugin_log_size = 1024 * 1024;
+
+    /**
+     * @brief Open the log a command's output goes to, when it has its own, with a line naming the run.
+     *
+     * Plugin scripts write to their plugin's log, which the web UI shows, rather than to the application's output.
+     *
+     * @param cmd The command.
+     * @param label What runs, such as "Do Cmd".
+     * @param app_name Name of the application.
+     * @return The open log, or an empty handle when the command has none or it can't be opened.
+     */
+    file_t open_cmd_log(const cmd_t &cmd, std::string_view label, std::string_view app_name) {
+      file_t file;
+      if (cmd.log_file.empty()) {
+        return file;
+      }
+#ifdef _WIN32
+      const std::filesystem::path path {utf_utils::from_utf8(cmd.log_file)};
+#else
+      const std::filesystem::path path {cmd.log_file};
+#endif
+      std::error_code ec;
+      const bool start_over = std::filesystem::file_size(path, ec) > max_plugin_log_size && !ec;
+#ifdef _WIN32
+      file.reset(_wfsopen(path.c_str(), start_over ? L"w" : L"a", _SH_DENYNO));
+#else
+      file.reset(std::fopen(path.c_str(), start_over ? "w" : "a"));
+#endif
+      if (!file) {
+        BOOST_LOG(warning) << "Couldn't open the log ["sv << cmd.log_file << "], writing to the application's output instead"sv;
+        return file;
+      }
+
+      const auto now = std::time(nullptr);
+      std::tm local {};
+#ifdef _WIN32
+      localtime_s(&local, &now);
+#else
+      localtime_r(&now, &local);
+#endif
+      char time[32];
+      std::strftime(time, sizeof(time), "%Y-%m-%d %H:%M:%S", &local);
+      std::fputs(std::format("\n[{}] {} for {}\n", time, label, app_name).c_str(), file.get());
+      std::fflush(file.get());
+      return file;
+    }
+  }  // namespace
+
   std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid) {
     std::vector<cmd_t> resolved;
     resolved.reserve(cmds.size());
@@ -252,7 +307,8 @@ namespace proc {
                                               find_working_directory(cmd.do_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Do Cmd: ["sv << cmd.do_cmd << ']';
-      auto child = platf::run_command(cmd.elevated, true, cmd.do_cmd, working_dir, prep_cmd_env(_env, cmd), _pipe.get(), ec, nullptr);
+      auto log = open_cmd_log(cmd, "Do Cmd"sv, _app.name);
+      auto child = platf::run_command(cmd.elevated, true, cmd.do_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec, nullptr);
 
       if (ec) {
         BOOST_LOG(error) << "Couldn't run ["sv << cmd.do_cmd << "]: System: "sv << ec.message();
@@ -353,7 +409,8 @@ namespace proc {
                                             find_working_directory(cmd, _env) :
                                             boost::filesystem::path(_app.working_dir);
     BOOST_LOG(info) << "Executing "sv << label << ": ["sv << cmd << ']';
-    auto child = platf::run_command(prep_cmd.elevated, true, cmd, working_dir, prep_cmd_env(_env, prep_cmd), _pipe.get(), ec, nullptr);
+    auto log = open_cmd_log(prep_cmd, label, _app.name);
+    auto child = platf::run_command(prep_cmd.elevated, true, cmd, working_dir, prep_cmd_env(_env, prep_cmd), log ? log.get() : _pipe.get(), ec, nullptr);
     if (ec) {
       BOOST_LOG(error) << "Couldn't run ["sv << cmd << "]: System: "sv << ec.message();
       return false;
@@ -460,7 +517,8 @@ namespace proc {
                                               find_working_directory(cmd.undo_cmd, _env) :
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
-      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, prep_cmd_env(_env, cmd), _pipe.get(), ec, nullptr);
+      auto log = open_cmd_log(cmd, "Undo Cmd"sv, _app.name);
+      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec, nullptr);
 
       if (ec) {
         BOOST_LOG(warning) << "System: "sv << ec.message();
