@@ -257,6 +257,23 @@ namespace proc {
   boost::process::v1::environment prep_cmd_env(const boost::process::v1::environment &base, const cmd_t &cmd);
 
   /**
+   * @brief Run a preparation command and wait for it to exit.
+   *
+   * On Windows, a process started while the display configuration changes can fail to load its DLLs and exit with
+   * STATUS_DLL_INIT_FAILED before any of its code runs. The command is started again when that happens, up to
+   * three times in all.
+   *
+   * @param elevated Whether to run it elevated.
+   * @param cmd The command line.
+   * @param working_dir Directory it runs in.
+   * @param env Its environment.
+   * @param out Where its output goes, or `nullptr`.
+   * @param ec Set when it couldn't be started or waited for.
+   * @return Its exit code, or -1 when `ec` is set.
+   */
+  int run_cmd_and_wait(bool elevated, const std::string &cmd, boost::filesystem::path &working_dir, const boost::process::v1::environment &env, FILE *out, std::error_code &ec);
+
+  /**
    * @brief Determine the working directory to use for a command.
    *
    * @param cmd Command line to inspect.

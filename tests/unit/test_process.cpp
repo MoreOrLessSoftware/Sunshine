@@ -599,3 +599,83 @@ TEST(PrepCmdTypeTest, ParseSplitsAppAndConnectCommands) {
   EXPECT_EQ("", apps[1].connect_cmds[0].undo_cmd);
   EXPECT_EQ(proc::cmd_t::type_e::connect, apps[1].connect_cmds[0].type);
 }
+
+class RunCmdAndWaitTest: public BaseTest {
+protected:
+  void SetUp() override {
+    BaseTest::SetUp();
+    runs_file = fs::temp_directory_path() / "sunshine_process_run_cmd_test.log";  // NOSONAR(cpp:S5443): safe for tests
+    fs::remove(runs_file);
+  }
+
+  void TearDown() override {
+    fs::remove(runs_file);
+    BaseTest::TearDown();
+  }
+
+  /**
+   * @brief A command that records each run in `runs_file`, then exits with a code.
+   *
+   * @param code Exit code.
+   * @return The command line.
+   */
+  std::string counting_cmd(long long code) const {
+#ifdef _WIN32
+    return std::format("cmd /c echo run>>{}& exit /b {}", runs_file.string(), code);
+#else
+    return std::format("sh -c \"echo run >> '{}'; exit {}\"", runs_file.string(), code);
+#endif
+  }
+
+  /**
+   * @brief Count the runs recorded in `runs_file`.
+   *
+   * @return Number of runs.
+   */
+  int runs() const {
+    std::ifstream in(runs_file);
+    int count = 0;
+    for (std::string line; std::getline(in, line);) {
+      ++count;
+    }
+    return count;
+  }
+
+  /**
+   * @brief Run a command with run_cmd_and_wait().
+   *
+   * @param cmd The command line.
+   * @param ec Set when it couldn't run.
+   * @return Its exit code.
+   */
+  static int run(const std::string &cmd, std::error_code &ec) {
+    boost::filesystem::path working_dir = boost::filesystem::temp_directory_path();
+    const boost::process::v1::environment env = boost::this_process::environment();
+    return proc::run_cmd_and_wait(false, cmd, working_dir, env, nullptr, ec);
+  }
+
+  fs::path runs_file;  ///< File each run of the counting command appends a line to.
+};
+
+TEST_F(RunCmdAndWaitTest, ReturnsTheExitCodeAfterOneRun) {
+  std::error_code ec;
+  EXPECT_EQ(3, run(counting_cmd(3), ec));
+  EXPECT_FALSE(ec);
+  EXPECT_EQ(1, runs());
+}
+
+TEST_F(RunCmdAndWaitTest, ReportsACommandThatCannotStart) {
+  std::error_code ec;
+  EXPECT_EQ(-1, run("sunshine-test-command-that-does-not-exist", ec));
+  EXPECT_TRUE(ec);
+}
+
+#ifdef _WIN32
+TEST_F(RunCmdAndWaitTest, StartsACommandAgainWhenItsDllsFailedToLoad) {
+  constexpr auto dll_init_failed = static_cast<int>(0xC0000142);
+  std::error_code ec;
+  EXPECT_EQ(dll_init_failed, run(counting_cmd(dll_init_failed), ec));
+  EXPECT_FALSE(ec);
+  EXPECT_EQ(3, runs());
+}
+#endif

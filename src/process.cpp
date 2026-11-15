@@ -216,6 +216,38 @@ namespace proc {
     }
   }  // namespace
 
+  int run_cmd_and_wait(bool elevated, const std::string &cmd, boost::filesystem::path &working_dir, const boost::process::v1::environment &env, FILE *out, std::error_code &ec) {
+#ifdef _WIN32
+    // STATUS_DLL_INIT_FAILED: the process ended before any of its code ran
+    constexpr int dll_init_failed = static_cast<int>(0xC0000142);
+    constexpr int attempts = 3;
+#else
+    constexpr int attempts = 1;
+#endif
+    for (int attempt = 1;; ++attempt) {
+      ec.clear();
+      auto child = platf::run_command(elevated, true, cmd, working_dir, env, out, ec, nullptr);
+      if (ec) {
+        BOOST_LOG(error) << "Couldn't run ["sv << cmd << "]: System: "sv << ec.message();
+        return -1;
+      }
+      child.wait(ec);
+      if (ec) {
+        BOOST_LOG(error) << '[' << cmd << "] wait failed with error code ["sv << ec << ']';
+        return -1;
+      }
+      const int ret = child.exit_code();
+#ifdef _WIN32
+      if (ret == dll_init_failed && attempt < attempts) {
+        BOOST_LOG(warning) << '[' << cmd << "] couldn't start because Windows couldn't load its DLLs, as can happen while the display changes; trying again"sv;
+        std::this_thread::sleep_for(500ms);
+        continue;
+      }
+#endif
+      return ret;
+    }
+  }
+
   std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid) {
     std::vector<cmd_t> resolved;
     resolved.reserve(cmds.size());
@@ -308,24 +340,17 @@ namespace proc {
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Do Cmd: ["sv << cmd.do_cmd << ']';
       auto log = open_cmd_log(cmd, "Do Cmd"sv, _app.name);
-      auto child = platf::run_command(cmd.elevated, true, cmd.do_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec, nullptr);
+      const auto ret = run_cmd_and_wait(cmd.elevated, cmd.do_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec);
 
       if (ec) {
-        BOOST_LOG(error) << "Couldn't run ["sv << cmd.do_cmd << "]: System: "sv << ec.message();
         // We don't want any prep commands failing launch of the desktop.
         // This is to prevent the issue where users reboot their PC and need to log in with Sunshine.
         // permission_denied is typically returned when the user impersonation fails, which can happen when user is not signed in yet.
-        if (!(_app.cmd.empty() && ec == std::errc::permission_denied)) {
-          return -1;
+        if (_app.cmd.empty() && ec == std::errc::permission_denied) {
+          continue;
         }
-      }
-
-      child.wait(ec);
-      if (ec) {
-        BOOST_LOG(error) << '[' << cmd.do_cmd << "] wait failed with error code ["sv << ec << ']';
         return -1;
       }
-      auto ret = child.exit_code();
       if (ret != 0) {
         BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
         return -1;
@@ -410,19 +435,12 @@ namespace proc {
                                             boost::filesystem::path(_app.working_dir);
     BOOST_LOG(info) << "Executing "sv << label << ": ["sv << cmd << ']';
     auto log = open_cmd_log(prep_cmd, label, _app.name);
-    auto child = platf::run_command(prep_cmd.elevated, true, cmd, working_dir, prep_cmd_env(_env, prep_cmd), log ? log.get() : _pipe.get(), ec, nullptr);
+    const auto ret = run_cmd_and_wait(prep_cmd.elevated, cmd, working_dir, prep_cmd_env(_env, prep_cmd), log ? log.get() : _pipe.get(), ec);
     if (ec) {
-      BOOST_LOG(error) << "Couldn't run ["sv << cmd << "]: System: "sv << ec.message();
       return false;
     }
 
-    child.wait(ec);
-    if (ec) {
-      BOOST_LOG(error) << '[' << cmd << "] wait failed with error code ["sv << ec << ']';
-      return false;
-    }
-
-    if (auto ret = child.exit_code(); ret != 0) {
+    if (ret != 0) {
       BOOST_LOG(error) << '[' << cmd << "] exited with code ["sv << ret << ']';
       return false;
     }
@@ -518,16 +536,9 @@ namespace proc {
                                               boost::filesystem::path(_app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
       auto log = open_cmd_log(cmd, "Undo Cmd"sv, _app.name);
-      auto child = platf::run_command(cmd.elevated, true, cmd.undo_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec, nullptr);
+      const auto ret = run_cmd_and_wait(cmd.elevated, cmd.undo_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec);
 
-      if (ec) {
-        BOOST_LOG(warning) << "System: "sv << ec.message();
-      }
-
-      child.wait();
-      auto ret = child.exit_code();
-
-      if (ret != 0) {
+      if (!ec && ret != 0) {
         BOOST_LOG(warning) << "Return code ["sv << ret << ']';
       }
     }
