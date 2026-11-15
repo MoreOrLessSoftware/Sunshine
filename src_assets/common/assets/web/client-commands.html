@@ -148,9 +148,8 @@
           <div class="config-nav-heading">{{ $t('client_commands.plugins') }}</div>
           <ul class="nav config-nav-list">
             <li class="nav-item" v-for="plugin in plugins" :key="plugin.id">
-              <a class="nav-link" :class="{'active': currentView === 'plugin-' + plugin.id, 'text-decoration-line-through': !pluginRuns(plugin)}"
-                 :href="'#plugin-' + plugin.id" :aria-current="currentView === 'plugin-' + plugin.id ? 'page' : null"
-                 :title="pluginRuns(plugin) ? '' : $t('client_commands.plugin_inactive')">
+              <a class="nav-link" :class="{'active': currentView === 'plugin-' + plugin.id}"
+                 :href="'#plugin-' + plugin.id" :aria-current="currentView === 'plugin-' + plugin.id ? 'page' : null">
                 <puzzle :size="18" class="icon"></puzzle>
                 <span class="text-truncate">{{ plugin.name }}</span>
                 <span class="badge rounded-pill text-bg-secondary command-count">{{ plugin.client_commands.length }}</span>
@@ -213,8 +212,8 @@
 
           <!-- A plugin's commands: what they do comes with the plugin, their label and icon can be customized -->
           <template v-if="currentPlugin">
-            <div class="alert py-2" :class="pluginRuns(currentPlugin) ? 'alert-secondary' : 'alert-warning'">
-              {{ pluginRuns(currentPlugin) ? $t('client_commands.plugin_note') : $t('client_commands.plugin_inactive') }}
+            <div class="alert alert-secondary py-2">
+              {{ $t('client_commands.plugin_note') }}
               <a :href="'./plugins#plugin-' + encodeURIComponent(currentPlugin.id)">{{ $t('client_commands.plugin_settings') }}</a>
             </div>
             <ul class="list-group mb-3">
@@ -821,7 +820,7 @@
           this.loading = false;
         }
       },
-      // The plugins that have client commands; none when they can't be listed
+      // The installed, active plugins that have client commands; none when they can't be listed
       async loadPlugins() {
         try {
           const response = await apiFetch('./api/plugins', {method: 'GET'});
@@ -829,7 +828,7 @@
             return [];
           }
           const body = await response.json();
-          return (body.plugins || []).filter((plugin) => (plugin.client_commands || []).length > 0);
+          return (body.plugins || []).filter((plugin) => this.pluginRuns(plugin) && (plugin.client_commands || []).length > 0);
         } catch (error) {
           console.error('Failed to load plugins', error);
           return [];
