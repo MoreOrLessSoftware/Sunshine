@@ -53,6 +53,7 @@
 #include "input.h"
 #include "logging.h"
 #include "network.h"
+#include "nvenc/nvenc_engines.h"
 #include "nvhttp.h"
 #include "platform/common.h"
 #include "plugins.h"
@@ -61,6 +62,7 @@
 #include "system_tray.h"
 #include "utility.h"
 #include "uuid.h"
+#include "video.h"
 
 using namespace std::literals;
 
@@ -308,6 +310,11 @@ namespace confighttp {
 #else
     output_tree["update_check"] = true;
 #endif
+  }
+
+  void add_encoder_info(nlohmann::json &output_tree, std::string_view encoder_name, int nvenc_engines) {
+    output_tree["active_encoder"] = std::string {encoder_name};
+    output_tree["nvenc_engines"] = nvenc_engines;
   }
 
   nlohmann::json build_driver_status(bool installed, const std::string &version, std::string_view minimum_version) {
@@ -1812,6 +1819,7 @@ namespace confighttp {
     for (auto &[name, value] : vars) {
       output_tree[name] = std::move(value);
     }
+    add_encoder_info(output_tree, video::probed_encoder_name(), nvenc::last_encoder_engine_count.load());
 
     send_response(response, output_tree);
   }

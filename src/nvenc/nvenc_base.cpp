@@ -19,6 +19,7 @@
 #include <vector>
 
 // local includes
+#include "nvenc_engines.h"
 #include "nvenc_utils.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -245,8 +246,13 @@ namespace NVENC_NAMESPACE {
     const ::nvenc::nvenc_config &config,
     const video::config_t &client_config
   ) const {
+    const auto engines = get_encoder_cap(init_params.encodeGUID, NV_ENC_CAPS_NUM_ENCODER_ENGINES);
+    if (client_config.videoFormat > 0) {
+      // Split-frame encoding is for HEVC and AV1, so their count is the one that matters
+      ::nvenc::last_encoder_engine_count = engines;
+    }
 #if NVENC_SDK_VERSION >= 1300
-    if (client_config.videoFormat <= 0 || get_encoder_cap(init_params.encodeGUID, NV_ENC_CAPS_NUM_ENCODER_ENGINES) <= 1) {
+    if (client_config.videoFormat <= 0 || engines <= 1) {
       return;
     }
 

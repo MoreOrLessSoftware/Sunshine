@@ -87,6 +87,7 @@ set(NVENC_PUBLIC_SOURCES
         "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_dynamic_factory_versions.h"
         "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_encoded_frame.h"
         "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_encoder.h"
+        "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_engines.h"
         "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_shared_dll.h"
         "${CMAKE_SOURCE_DIR}/src/nvenc/nvenc_version.h"
 )

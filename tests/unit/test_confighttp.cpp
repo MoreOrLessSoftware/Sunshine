@@ -36,9 +36,11 @@
 #include <src/display_version.h>
 #include <src/httpcommon.h>
 #include <src/network.h>
+#include <src/nvenc/nvenc_engines.h>
 #include <src/nvhttp.h>
 #include <src/plugins.h>
 #include <src/utility.h>
+#include <src/video.h>
 
 using namespace std::literals;
 
@@ -1609,6 +1611,22 @@ TEST(ConfigHttpVersionTest, AddVersionInfo_IncludesExpectedFields) {
 #else
   ASSERT_TRUE(output_tree["update_check"].get<bool>());
 #endif
+}
+
+// Test: the config response names the encoder the last probe chose and the GPU's NVENC units
+TEST(ConfigHttpEncoderTest, AddEncoderInfo_SetsActiveEncoder) {
+  nlohmann::json output_tree;
+  confighttp::add_encoder_info(output_tree, "nvenc", 2);
+  ASSERT_EQ(output_tree["active_encoder"].get<std::string>(), "nvenc");
+  ASSERT_EQ(output_tree["nvenc_engines"].get<int>(), 2);
+}
+
+// Test: the active encoder and NVENC unit count are unknown before an encoder has been created
+TEST(ConfigHttpEncoderTest, AddEncoderInfo_EmptyWithoutProbe) {
+  nlohmann::json output_tree;
+  confighttp::add_encoder_info(output_tree, video::probed_encoder_name(), nvenc::last_encoder_engine_count.load());
+  ASSERT_TRUE(output_tree["active_encoder"].get<std::string>().empty());
+  ASSERT_EQ(output_tree["nvenc_engines"].get<int>(), 0);
 }
 
 // Test: driver status JSON includes compatibility and supported version metadata

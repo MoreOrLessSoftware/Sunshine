@@ -1801,6 +1801,7 @@ namespace video {
   };
 
   static encoder_t *chosen_encoder;
+  static std::atomic<const encoder_t *> probed_encoder {nullptr};  ///< The encoder the last probe chose, for other threads.
   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
   int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
   int active_pyrowave_mode = 1;  ///< PyroWave mode found by the most recent encoder probe.
@@ -4050,6 +4051,11 @@ namespace video {
 #endif
   }
 
+  std::string_view probed_encoder_name() {
+    const auto *encoder = probed_encoder.load();
+    return encoder ? encoder->name : std::string_view {};
+  }
+
   int probe_encoders() {
     if (!allow_encoder_probing()) {
       // Error already logged
@@ -4201,6 +4207,7 @@ namespace video {
       });
     }
 
+    probed_encoder = chosen_encoder;
     if (chosen_encoder == nullptr) {
       const auto output_name {display_device::map_output_name(config::video.output_name)};
       BOOST_LOG(fatal) << "Unable to find display or encoder during startup."sv;

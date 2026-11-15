@@ -331,6 +331,19 @@ namespace confighttp {
   void add_version_info(nlohmann::json &output_tree);
 
   /**
+   * @brief Add the encoder Sunshine is using to a config response.
+   *
+   * Sets "active_encoder" to the encoder the last probe chose, such as `nvenc`, so the web UI can recommend
+   * settings for it. It's empty when no probe has found an encoder. Sets "nvenc_engines" to the NVENC units
+   * the GPU reported, or 0 when that isn't known.
+   *
+   * @param output_tree Response to add the fields to.
+   * @param encoder_name Name of the encoder the last probe chose.
+   * @param nvenc_engines NVENC units the GPU reported, or 0 when unknown.
+   */
+  void add_encoder_info(nlohmann::json &output_tree, std::string_view encoder_name, int nvenc_engines);
+
+  /**
    * @brief Convert a libvirtualhid license result into a Web UI response.
    *
    * @param result License operation result.

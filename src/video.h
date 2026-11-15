@@ -943,6 +943,15 @@ namespace video {
    */
   int probe_encoders();
 
+  /**
+   * @brief Get the name of the encoder the last encoder probe chose, such as `nvenc`, `amdvce` or `quicksync`.
+   *
+   * Safe to call from any thread.
+   *
+   * @return The encoder name, or an empty string when no probe has found an encoder.
+   */
+  std::string_view probed_encoder_name();
+
   // Several NTSC standard refresh rates are hardcoded here, because their
   // true rate requires a denominator of 1001. ffmpeg's av_d2q() would assume it could
   // reduce 29.97 to 2997/100 but this would be slightly wrong. We also include
