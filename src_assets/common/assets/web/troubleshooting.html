@@ -8,7 +8,10 @@
 <body id="app" v-cloak>
   <Navbar></Navbar>
   <div id="content" class="container">
-    <h1 class="my-4">{{ $t('troubleshooting.troubleshooting') }}</h1>
+    <div class="page-header my-4">
+      <h1>{{ $t('troubleshooting.troubleshooting') }}</h1>
+      <Version-Badge></Version-Badge>
+    </div>
     <!-- Virtual input driver and license -->
     <div class="card my-4 virtual-gamepad-card" v-if="platform === 'windows'">
       <div class="card-body">
@@ -452,6 +455,7 @@
     import { createApp } from 'vue'
     import { initApp } from './init'
     import Navbar from './Navbar.vue'
+    import VersionBadge from './VersionBadge.vue'
     import { apiFetch } from './fetch_utils'
     import {
       AlertCircle,
@@ -480,6 +484,7 @@
     const app = createApp({
       components: {
         Navbar,
+        VersionBadge,
         AlertCircle,
         AlertTriangle,
         Check,

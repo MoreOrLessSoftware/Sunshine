@@ -8,7 +8,10 @@
 <body id="app" v-cloak>
   <Navbar></Navbar>
   <div id="content" class="container">
-    <h1 class="my-4">{{ $t('index.welcome') }}</h1>
+    <div class="page-header my-4">
+      <h1>{{ $t('index.welcome') }}</h1>
+      <Version-Badge @version-info="installedVersionNotStable = $event.installedVersionNotStable"></Version-Badge>
+    </div>
     <p>{{ $t('index.description') }}</p>
 
     <!-- Fatal Errors Alert -->
@@ -49,74 +52,6 @@
       </div>
     </div>
 
-    <!-- Version -->
-    <div class="card my-4">
-      <div class="card-body" v-if="version">
-        <h2>Version {{displayVersion}}</h2>
-
-        <div v-if="loading && updateCheck" class="my-3">
-          {{ $t('index.loading_latest') }}
-        </div>
-
-        <div class="alert alert-success my-3" v-if="buildVersionIsDirty">
-          <package :size="18" class="icon"></package>
-          {{ $t('index.version_dirty') }} 🌇
-        </div>
-
-        <div class="alert alert-info my-3" v-if="installedVersionNotStable">
-          <info :size="18" class="icon"></info>
-          {{ $t('index.installed_version_not_stable') }}
-        </div>
-
-        <div v-else-if="updateCheck && (!preReleaseBuildAvailable || !notifyPreReleases) && !stableBuildAvailable && !buildVersionIsDirty">
-          <div class="alert alert-success my-3">
-            <check-circle :size="18" class="icon"></check-circle>
-            {{ $t('index.version_latest') }}
-          </div>
-        </div>
-
-        <div v-if="notifyPreReleases && preReleaseBuildAvailable">
-          <div class="alert alert-warning my-3">
-            <!-- header row -->
-            <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap mb-3">
-              <div class="d-flex align-items-center gap-3 flex-wrap">
-                <alert-circle :size="18" class="icon"></alert-circle>
-                <span>{{ $t('index.new_pre_release') }}</span>
-                <h5 class="mb-0">{{ preReleaseVersion.release.name }}</h5>
-              </div>
-              <a class="btn btn-success flex-shrink-0" :href="preReleaseVersion.release.html_url" target="_blank">
-                <download :size="18" class="icon"></download>
-                {{ $t('index.download') }}
-              </a>
-            </div>
-
-            <!-- body row (full width) -->
-            <div class="markdown-body release-notes" v-html="convertMarkdownToHtml(preReleaseVersion.release.body)"></div>
-          </div>
-        </div>
-
-        <div v-if="stableBuildAvailable">
-          <div class="alert alert-warning my-3">
-            <!-- header row -->
-            <div class="d-flex align-items-center justify-content-between gap-3 flex-wrap mb-3">
-              <div class="d-flex align-items-center gap-3 flex-wrap">
-                <alert-circle :size="18" class="icon"></alert-circle>
-                <span>{{ $t('index.new_stable') }}</span>
-                <h5 class="mb-0">{{ githubVersion.release.name }}</h5>
-              </div>
-              <a class="btn btn-success flex-shrink-0" :href="githubVersion.release.html_url" target="_blank">
-                <download :size="18" class="icon"></download>
-                {{ $t('index.download') }}
-              </a>
-            </div>
-
-            <!-- body row (full width) -->
-            <div class="markdown-body release-notes" v-html="convertMarkdownToHtml(githubVersion.release.body)"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Resources -->
     <div class="my-4">
       <Resource-Card :installed-version-not-stable="installedVersionNotStable"></Resource-Card>
@@ -126,56 +61,35 @@
 
 <script type="module">
   import { createApp } from 'vue'
-  import { marked } from 'marked'
   import { initApp } from './init'
   import Navbar from './Navbar.vue'
   import ResourceCard from './ResourceCard.vue'
-  import SunshineVersion from './sunshine_version'
+  import VersionBadge from './VersionBadge.vue'
   import {
     AlertCircle,
     AlertTriangle,
     FileText,
     Wrench,
-    Package,
     Info,
-    CheckCircle,
-    Download,
     Gamepad2
   } from '@lucide/vue'
-
-  // Configure marked to allow HTML
-  marked.setOptions({
-    breaks: true,
-    gfm: true,
-    headerIds: true,
-    mangle: false,
-    sanitize: false
-  });
 
   console.log("Hello, Sunshine!")
   let app = createApp({
     components: {
       Navbar,
       ResourceCard,
+      VersionBadge,
       AlertCircle,
       AlertTriangle,
       FileText,
       Wrench,
-      Package,
       Info,
-      CheckCircle,
-      Download,
       Gamepad2
     },
     data() {
       return {
-        version: null,
-        displayVersion: null,
-        updateCheck: true,
-        githubVersion: null,
-        notifyPreReleases: false,
-        preReleaseVersion: null,
-        loading: true,
+        installedVersionNotStable: false,
         logs: null,
         platform: "",
         controllerEnabled: false,
@@ -189,23 +103,9 @@
     async created() {
       try {
         let config = await fetch("./api/config").then((r) => r.json());
-        this.notifyPreReleases = config.notify_pre_releases;
         this.platform = config.platform;
         this.controllerEnabled = config.controller !== "disabled";
         this.gamepadDriver = config.gamepad_driver || '';
-        this.version = new SunshineVersion(null, config.version);
-        this.displayVersion = config.display_version || config.version;
-        console.log("Version: ", this.displayVersion, "(" + this.version.version + ")")
-
-        // Builds can leave out the check for newer releases, such as a custom fork's
-        this.updateCheck = config.update_check !== false;
-        if (this.updateCheck) {
-          this.githubVersion = new SunshineVersion(await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest").then((r) => r.json()), null);
-          console.log("GitHub Version: ", this.githubVersion.version)
-          this.preReleaseVersion = new SunshineVersion((await fetch("https://api.github.com/repos/LizardByte/Sunshine/releases").then((r) => r.json())).find(release => release.prerelease), null);
-          console.log("Pre-Release Version: ", this.preReleaseVersion.version)
-        }
-
         // The Virtual HID Driver also backs relative mouse input when controllers are disabled.
         if (this.platform === 'windows') {
           try {
@@ -230,7 +130,6 @@
       } catch (e) {
         console.error(e);
       }
-      this.loading = false;
     },
     computed: {
       /**
@@ -287,28 +186,6 @@
           'index.virtualhid_optional_title',
           [{ key: this.controllerEnabled ? 'index.virtualhid_optional_vigembus_desc' : 'index.virtualhid_optional_desc' }],
         );
-      },
-      installedVersionNotStable() {
-        if (!this.githubVersion || !this.version) {
-          return false;
-        }
-        return this.version.isGreater(this.githubVersion);
-      },
-      stableBuildAvailable() {
-        if (!this.githubVersion || !this.version) {
-          return false;
-        }
-        return this.githubVersion.isGreater(this.version);
-      },
-      preReleaseBuildAvailable() {
-        if (!this.preReleaseVersion || !this.githubVersion || !this.version) {
-          return false;
-        }
-        return this.preReleaseVersion.isGreater(this.version) && this.preReleaseVersion.isGreater(this.githubVersion);
-      },
-      buildVersionIsDirty() {
-        return this.version.version?.split(".").length === 5 &&
-          this.version.version.indexOf("dirty") !== -1
       },
       /** Parse the text errors, calculating the text, the timestamp and the level */
       fancyLogs() {
@@ -387,10 +264,6 @@
         }
         return null;
       },
-      convertMarkdownToHtml(markdown) {
-        if (!markdown) return '';
-        return marked.parse(markdown);
-      }
     }
   });
 

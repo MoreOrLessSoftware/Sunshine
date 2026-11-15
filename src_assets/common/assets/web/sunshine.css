@@ -3094,3 +3094,40 @@ p {
         bottom: var(--spacing-sm);
     }
 }
+
+
+/* ==========================================================================
+   Page Header
+   ========================================================================== */
+
+.page-header {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm) var(--spacing-lg);
+    justify-content: space-between;
+}
+
+.page-header h1 {
+    margin: 0;
+}
+
+.version-badge {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-left: auto;
+}
+
+.version-badge-text {
+    font-size: 1rem;
+    white-space: nowrap;
+}
+
+.version-update-badge {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.25rem;
+    text-decoration: none;
+}
