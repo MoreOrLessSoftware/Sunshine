@@ -46,7 +46,19 @@ namespace platf::virtualhid {
      */
     void refresh_mouse();
 
+    /**
+     * @brief Check the Virtual HID Driver license and remember it.
+     *
+     * Licenses are activated and deactivated in Virtual HID Control, outside Sunshine. Only asks the license service
+     * when the runtime needs an installed driver and found one, since the query waits about 8 seconds when the
+     * service is absent.
+     *
+     * @return true when the license changed since the last check, so the keyboard and mouse should be recreated.
+     */
+    bool update_license_state();
+
     std::unique_ptr<lvh::Runtime> runtime;  ///< libvirtualhid runtime.
+    std::optional<bool> licensed;  ///< License state at the last check, or empty when no check needed one.
     std::unique_ptr<lvh::Keyboard> keyboard;  ///< Shared virtual keyboard.
     std::unique_ptr<lvh::Mouse> mouse;  ///< Shared virtual mouse.
     std::vector<std::shared_ptr<struct gamepad_context_t>> gamepads {static_cast<std::size_t>(MAX_GAMEPADS)};  ///< Virtual gamepad slots.
@@ -77,6 +89,15 @@ namespace platf::virtualhid {
    * @return Shared libvirtualhid input context.
    */
   input_context_t &get_input_context(input_t &input);
+
+  /**
+   * @brief Remember a license state and report whether it changed.
+   *
+   * @param remembered License state seen last, or empty when there was none; receives `licensed`.
+   * @param licensed License state now.
+   * @return true when a state was remembered and it differs from `licensed`.
+   */
+  bool license_state_changed(std::optional<bool> &remembered, bool licensed);
 
   /**
    * @brief Return the per-client libvirtualhid context from a platform input backend.

@@ -282,6 +282,22 @@ TEST_F(InputGamepadSessionTest, ReusesGamepadsAcrossPauseAndDestroysThemOnTermin
   EXPECT_NE(replacement, resumed);
 }
 
+TEST_F(InputGamepadSessionTest, KeepsSharedVirtualInputWhenNoLicenseIsNeeded) {
+  ASSERT_NE(context().keyboard, nullptr);
+  const auto original_keyboard_id = context().keyboard->device_id();
+  const auto original_mouse_id = context().mouse->device_id();
+
+  // The fake backend needs no installed driver, so there's no license to check
+  EXPECT_FALSE(context().update_license_state());
+  EXPECT_FALSE(context().licensed.has_value());
+  input::refresh_virtual_input_if_license_changed();
+  input::alloc(std::make_shared<safe::mail_raw_t>(), "license-check");
+  input::terminate_gamepads("license-check");
+
+  EXPECT_EQ(context().keyboard->device_id(), original_keyboard_id);
+  EXPECT_EQ(context().mouse->device_id(), original_mouse_id);
+}
+
 TEST_F(InputGamepadSessionTest, RefreshesSharedVirtualInputAfterLicenseStateChanges) {
   ASSERT_NE(context().keyboard, nullptr);
   ASSERT_NE(context().mouse, nullptr);

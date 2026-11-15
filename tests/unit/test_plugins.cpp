@@ -2614,6 +2614,39 @@ TEST(PluginsBundledTest, LatencyTestManifestIsValid) {
   EXPECT_EQ(manifest->client_commands[1].programs, (std::vector<std::string> {"latency-test"}));
 }
 
+TEST(PluginsBundledTest, XgpadManifestIsValid) {
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "xgpad";
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->id, "xgpad");
+  EXPECT_TRUE(manifest->idle_only);  // A stream may be using the driver
+  EXPECT_EQ(manifest->scripts.install, "install.ps1");
+  EXPECT_EQ(manifest->scripts.uninstall, "uninstall.ps1");
+  EXPECT_TRUE(manifest->scripts.do_script.empty());  // It only installs the driver; nothing runs for streams
+  EXPECT_TRUE(fs::exists(dir / "xgpad-driver.ps1"));
+}
+
+TEST(PluginsBundledTest, VirtualHidManifestIsValid) {
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "virtual-hid";
+  std::string error;
+  auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_EQ(manifest->id, "virtual-hid");
+  EXPECT_TRUE(manifest->default_active);  // Its notices reach everyone who has the driver
+  EXPECT_EQ(manifest->scripts.status, "status.ps1");
+  EXPECT_EQ(manifest->scripts.install, "install.ps1");  // Lets the status script write to the data folder
+  EXPECT_FALSE(plugins::per_stream(*manifest));
+  ASSERT_TRUE(manifest->panel);
+  EXPECT_EQ(manifest->panel->port, 0);  // The panel only calls Sunshine's own API
+}
+
+TEST(PluginsBundledTest, VirtualHidStatusScriptUsesTheSupportedDriverVersion) {
+  const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "virtual-hid";
+  const auto script = read_text(dir / "status.ps1");
+  EXPECT_TRUE(script.contains(std::format("$minimumVersion = '{}'", LIBVIRTUALHID_MINIMUM_VERSION))) << "update $minimumVersion in status.ps1";
+}
+
 TEST(PluginsBundledTest, HdrControlManifestIsValid) {
   const fs::path dir = fs::path(SUNSHINE_SHADERS_DIR).parent_path().parent_path() / "plugins" / "hdr-control";
   std::string error;

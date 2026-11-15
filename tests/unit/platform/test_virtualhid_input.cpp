@@ -210,6 +210,17 @@ namespace {
 
 }  // namespace
 
+TEST(VirtualHidLicenseStateTest, OnlyAChangeFromAKnownStateCounts) {
+  std::optional<bool> remembered;
+  EXPECT_FALSE(platf::virtualhid::license_state_changed(remembered, false));  // The first check only records it
+  EXPECT_EQ(remembered, false);
+  EXPECT_FALSE(platf::virtualhid::license_state_changed(remembered, false));
+  EXPECT_TRUE(platf::virtualhid::license_state_changed(remembered, true));  // Activated in Virtual HID Control
+  EXPECT_EQ(remembered, true);
+  EXPECT_FALSE(platf::virtualhid::license_state_changed(remembered, true));
+  EXPECT_TRUE(platf::virtualhid::license_state_changed(remembered, false));  // Deactivated or expired
+}
+
 TEST_F(VirtualHidDeviceTest, CreatesEveryDeviceWithFakeRuntime) {
   EXPECT_EQ(context()->runtime->backend_kind(), lvh::BackendKind::fake);
   EXPECT_EQ(context()->runtime->capabilities().backend_name, "fake");

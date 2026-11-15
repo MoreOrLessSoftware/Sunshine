@@ -455,6 +455,25 @@ namespace platf::virtualhid {
 
     refresh_keyboard();
     refresh_mouse();
+    // Remember the license the devices were made with, so a later change can be noticed
+    update_license_state();
+  }
+
+  bool license_state_changed(std::optional<bool> &remembered, const bool licensed) {
+    const bool changed = remembered.has_value() && *remembered != licensed;
+    remembered = licensed;
+    return changed;
+  }
+
+  bool input_context_t::update_license_state() {
+    if (!runtime) {
+      return false;
+    }
+    const auto &capabilities = runtime->capabilities();
+    if (!capabilities.requires_installed_driver || !capabilities.supports_gamepad) {
+      return false;
+    }
+    return license_state_changed(licensed, lvh::get_license_status().license.licensed());
   }
 
   void input_context_t::refresh_keyboard() {

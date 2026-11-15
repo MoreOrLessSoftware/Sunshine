@@ -76,6 +76,14 @@ namespace input {
   void refresh_virtual_input();
 
   /**
+   * @brief Recreate the shared libvirtualhid keyboard and mouse when the Virtual HID Driver license changed.
+   *
+   * Licenses are activated and deactivated in Virtual HID Control, outside Sunshine, so each new stream checks.
+   * The work is serialized with streamed input, like `refresh_virtual_input()`.
+   */
+  void refresh_virtual_input_if_license_changed();
+
+  /**
    * @brief Allocate and initialize platform input state for a stream.
    *
    * @param mail Mailbox used to exchange messages with worker threads.

@@ -25,11 +25,6 @@
    * @brief Path to the system tray icon used for pairing requests.
    */
   #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
-  /**
-   * @def TRAY_ICON_VIRTUALHID
-   * @brief Path to the Virtual HID Driver notification icon.
-   */
-  #define TRAY_ICON_VIRTUALHID WEB_DIR "images/logo-libvirtualhid.svg"
 
   #if defined(_WIN32)
     /**
@@ -66,11 +61,6 @@
   #include <boost/filesystem.hpp>
   #include <boost/process/v1/environment.hpp>
   #include <tray.h>
-  #ifdef _WIN32
-    #include "platform/windows/xgpad.h"
-
-    #include <libvirtualhid/license.hpp>
-  #endif
 
   // local includes
   #include "config.h"
@@ -137,51 +127,7 @@ namespace system_tray {
       }
     };
 
-  #ifdef _WIN32
-    /**
-     * @brief Access storage for dynamic Virtual HID Driver license menu labels.
-     *
-     * @return Persistent string storage backing the tray menu label pointers.
-     */
-    std::array<std::string, 9> &virtualhid_license_menu_text_storage() {
-      static std::array<std::string, 9> menu_text;
-      return menu_text;
-    }
-
-    /**
-     * @brief Access storage for the Virtual HID Driver compatibility notification.
-     *
-     * @return Persistent string storage backing the tray notification pointer.
-     */
-    std::string &virtualhid_driver_notification_text_storage() {
-      static std::string notification_text;
-      return notification_text;
-    }
-
-    /**
-     * @brief Access persistent storage for the Virtual HID Driver benefits menu.
-     *
-     * The tray C API requires a mutable submenu pointer even though Sunshine
-     * treats these entries as immutable.
-     *
-     * @return Persistent Virtual HID Driver benefits menu storage.
-     */
-    std::array<struct tray_menu, 5> &virtualhid_benefits_menu_storage() {
-      static std::array<struct tray_menu, 5> benefits_menu {{
-        {.text = "Xbox One, Xbox Series, DualSense (DS5), Switch Pro, and Generic", .disabled = 1},
-        {.text = "Raw Input keyboard and mouse for physical-style input", .disabled = 1},
-        {.text = "Motion, touchpads, LEDs, and adaptive triggers where supported", .disabled = 1},
-        {.text = "Actively developed and supported by LizardByte", .disabled = 1},
-        {},
-      }};
-      return benefits_menu;
-    }
-  #endif
   }  // namespace
-
-  #ifdef _WIN32
-  constexpr auto LIBVIRTUALHID_RELEASES_URL = "https://github.com/LizardByte/libvirtualhid/releases/latest"sv;  ///< Latest Virtual HID Driver release.
-  #endif
 
   void tray_open_ui_cb([[maybe_unused]] struct tray_menu *item) {
     BOOST_LOG(info) << "Opening UI from system tray"sv;
@@ -200,17 +146,6 @@ namespace system_tray {
     platf::open_url("https://www.paypal.com/paypalme/ReenigneArcher");
   }
 
-  #ifdef _WIN32
-  void tray_virtualhid_license_cb([[maybe_unused]] struct tray_menu *item) {
-    BOOST_LOG(info) << "Opening Virtual HID Driver license settings from system tray"sv;
-    launch_ui(config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS ? "/config#gamepad_driver" : "/troubleshooting#virtualhid-license");
-  }
-
-  void tray_virtualhid_download_cb([[maybe_unused]] struct tray_menu *item) {
-    BOOST_LOG(info) << "Opening Virtual HID Driver download from system tray"sv;
-    platf::open_url(std::string {LIBVIRTUALHID_RELEASES_URL});
-  }
-  #endif
 
   /**
    * @brief Forwards Qt log messages to Sunshine's BOOST_LOG logger.
@@ -264,24 +199,6 @@ namespace system_tray {
     lifetime::exit_sunshine(0, true);
   }
 
-  #ifdef _WIN32
-  /**
-   * @brief Create the initial Virtual HID Driver license submenu.
-   *
-   * @return Menu storage with a checking state, benefits, license settings, and driver download.
-   */
-  std::array<struct tray_menu, 9> initial_virtualhid_license_menu() {
-    std::array<struct tray_menu, 9> menu {};
-    menu[0] = {.text = "Status: Checking", .disabled = 1};
-    menu[1] = {.text = "-"};
-    menu[2] = {.text = "Get/Manage License", .cb = tray_virtualhid_license_cb};
-    menu[3] = {.text = "Virtual HID Driver Benefits", .submenu = virtualhid_benefits_menu_storage().data()};
-    menu[4] = {.text = "Download Virtual HID Driver", .cb = tray_virtualhid_download_cb};
-    return menu;
-  }
-
-  static auto virtualhid_license_menu = initial_virtualhid_license_menu();  ///< Virtual HID Driver license submenu.
-  #endif
 
   // Tray menu
   static struct tray tray = {
@@ -292,10 +209,6 @@ namespace system_tray {
         // Tray menu labels currently use the project's English source strings.
         {.text = "Open Sunshine", .cb = tray_open_ui_cb},
         {.text = "-"},
-  #ifdef _WIN32
-        {.text = "Virtual HID Driver", .submenu = virtualhid_license_menu.data()},
-        {.text = "-"},
-  #endif
         {.text = "Donate",
          .submenu =
            (struct tray_menu[]) {
@@ -313,13 +226,8 @@ namespace system_tray {
         {.text = "Quit", .cb = tray_quit_cb},
         {.text = nullptr}
       },
-  #ifdef _WIN32
-    .iconPathCount = 5,
-    .allIconPaths = {TRAY_ICON, TRAY_ICON_LOCKED, TRAY_ICON_PLAYING, TRAY_ICON_PAUSING, TRAY_ICON_VIRTUALHID},
-  #else
     .iconPathCount = 4,
     .allIconPaths = {TRAY_ICON, TRAY_ICON_LOCKED, TRAY_ICON_PLAYING, TRAY_ICON_PAUSING},
-  #endif
   };
 
   #ifdef SUNSHINE_TESTS
@@ -339,136 +247,10 @@ namespace system_tray {
     tray.notification_text = nullptr;
     tray.notification_title = nullptr;
     tray.notification_cb = nullptr;
-    #ifdef _WIN32
-    virtualhid_license_menu_text_storage() = {};
-    virtualhid_driver_notification_text_storage().clear();
-    virtualhid_license_menu = initial_virtualhid_license_menu();
-    #endif
   }
   #endif
 
   #ifdef _WIN32
-  /**
-   * @brief Return the user-visible label for a Virtual HID Driver license state.
-   *
-   * @param state License state reported by libvirtualhid.
-   * @return Short state label suitable for a tray menu.
-   */
-  std::string_view virtualhid_license_state_label(lvh::LicenseState state) {
-    using enum lvh::LicenseState;
-
-    switch (state) {
-      case unlicensed:
-        return "Not Activated";
-      case licensed:
-        return "Licensed";
-      case expired:
-        return "Expired";
-      case disabled:
-        return "Disabled";
-      case invalid:
-        return "Invalid";
-      case unavailable:
-      default:
-        return "Unavailable";
-    }
-  }
-
-  /**
-   * @brief Return explanatory tray text for a non-active license state.
-   *
-   * @param state License state reported by libvirtualhid.
-   * @return Short explanation of the state.
-   */
-  std::string_view virtualhid_license_state_detail(lvh::LicenseState state) {
-    using enum lvh::LicenseState;
-
-    switch (state) {
-      case unlicensed:
-        return "No license is active on this machine";
-      case expired:
-        return "The license on this machine has expired";
-      case disabled:
-        return "The license on this machine is disabled";
-      case invalid:
-        return "The license on this machine is invalid";
-      case licensed:
-        return "This machine is activated";
-      case unavailable:
-      default:
-        return "The local license service is unavailable";
-    }
-  }
-
-  /**
-   * @brief Assign text and behavior to one Virtual HID Driver submenu item.
-   *
-   * @tparam Callback Callback type accepted by the tray library.
-   * @param index Submenu index to populate.
-   * @param text User-visible menu text.
-   * @param disabled Whether the item is informational rather than actionable.
-   * @param callback Callback invoked for actionable items.
-   */
-  template<typename Callback = std::nullptr_t>
-  void set_virtualhid_license_menu_item(
-    const std::size_t index,
-    std::string text,
-    const bool disabled,
-    Callback callback = nullptr
-  ) {
-    auto &menu_text = virtualhid_license_menu_text_storage();
-    menu_text[index] = std::move(text);
-    virtualhid_license_menu[index] = {
-      .text = menu_text[index].c_str(),
-      .disabled = disabled,
-      .cb = callback,
-    };
-  }
-
-  /**
-   * @brief Rebuild the Virtual HID Driver submenu for the latest license state.
-   *
-   * @param license Latest machine license details.
-   */
-  void rebuild_virtualhid_license_menu(const lvh::LicenseStatus &license) {
-    virtualhid_license_menu = {};
-    virtualhid_license_menu_text_storage() = {};
-
-    set_virtualhid_license_menu_item(0, std::format("Status: {}", virtualhid_license_state_label(license.state)), true);
-    if (license.licensed()) {
-      set_virtualhid_license_menu_item(
-        1,
-        license.plan_name.empty() ? std::string {virtualhid_license_state_detail(license.state)} : std::format("Plan: {}", license.plan_name),
-        true
-      );
-      set_virtualhid_license_menu_item(
-        2,
-        license.customer_email.empty() ? "Customer: Not reported" : std::format("Customer: {}", license.customer_email),
-        true
-      );
-      set_virtualhid_license_menu_item(
-        3,
-        license.activation_limit == 0 ?
-          "Machine activations: Not reported" :
-          std::format("Machine activations: {} / {}", license.activation_usage, license.activation_limit),
-        true
-      );
-    } else {
-      set_virtualhid_license_menu_item(1, std::string {virtualhid_license_state_detail(license.state)}, true);
-      set_virtualhid_license_menu_item(2, "Driver-backed keyboard, mouse, and gamepads are locked", true);
-      set_virtualhid_license_menu_item(
-        3,
-        license.service_available ? "License service: Available" : "License service: Unavailable",
-        true
-      );
-    }
-    virtualhid_license_menu[4] = {.text = "-"};
-    set_virtualhid_license_menu_item(5, "Get/Manage License", false, tray_virtualhid_license_cb);
-    set_virtualhid_license_menu_item(6, "Virtual HID Driver Benefits", false);
-    virtualhid_license_menu[6].submenu = virtualhid_benefits_menu_storage().data();
-    set_virtualhid_license_menu_item(7, "Download Virtual HID Driver", false, tray_virtualhid_download_cb);
-  }
-
   /**
    * @brief Clear notification fields before replacing the tray state.
    */
@@ -479,91 +261,22 @@ namespace system_tray {
     tray.notification_icon = nullptr;
   }
 
-  void update_tray_virtualhid_license(const lvh::LicenseStatus &license, const bool notify_if_unlicensed) {
-    const std::scoped_lock lock(tray_state_mutex());
-    clear_tray_notification();
-    rebuild_virtualhid_license_menu(license);
-
-    if (config::input.gamepad_driver.empty()) {
-      tray.notification_title = "Choose a Gamepad Driver";
-      tray.notification_text =
-        "Choose a driver in Input settings. Virtual HID Driver is a paid upgrade; ViGEmBus is limited and has reached end of life.";
-      tray.notification_icon = tray.allIconPaths[4];
-      tray.notification_cb = []() {
-        launch_ui("/config#gamepad_driver");
-      };
-    } else if (config::input.gamepad_driver != config::GAMEPAD_DRIVER_VIGEMBUS && config::input.gamepad_driver != config::GAMEPAD_DRIVER_XGPAD && notify_if_unlicensed && !license.licensed()) {
-      tray.notification_title = "Virtual HID Driver License";
-      tray.notification_text =
-        "Get or manage a license, or use the limited, end-of-life ViGEmBus driver.";
-      tray.notification_icon = tray.allIconPaths[4];
-      tray.notification_cb = []() {
-        launch_ui("/troubleshooting#virtualhid-license");
-      };
-    }
-
-    if (tray_initialized_state().load()) {
-      tray_update(&tray);
-    }
-  }
-
-  void prepare_tray_virtualhid_license() {
-    // When the xgpad driver provides gamepads and Virtual HID Driver is not installed, there is no license to
-    // report or nag about; skip the query, which waits ~8 s when the license service is absent.
-    const auto &driver = config::input.gamepad_driver;
-    const bool xgpad_policy = driver == config::GAMEPAD_DRIVER_XGPAD;
-    const bool all_policy = driver.empty() || driver == config::GAMEPAD_DRIVER_ALL;
-    if ((xgpad_policy || all_policy) && platf::xgpad::driver_installed() &&
-        !confighttp::get_virtualhid_driver_status().value("installed", false)) {
-      update_tray_virtualhid_license(lvh::LicenseStatus {}, false);
-      return;
-    }
-
-    const auto result = lvh::get_license_status();
-    update_tray_virtualhid_license(result.license, !result.license.licensed());
-  }
-
-  void update_tray_virtualhid_driver(
-    const bool installed,
-    const std::string_view version,
-    const bool version_compatible,
-    const std::string_view supported_versions
-  ) {
-    if (config::input.gamepad_driver.empty() || config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS || config::input.gamepad_driver == config::GAMEPAD_DRIVER_XGPAD || !installed || version_compatible) {
+  void prepare_tray_gamepad_driver_notice() {
+    if (!config::input.gamepad_driver.empty()) {
       return;
     }
 
     const std::scoped_lock lock(tray_state_mutex());
     clear_tray_notification();
-
-    const auto displayed_version = version.empty() ? "unknown" : std::format("v{}", version);
-    auto &notification_text = virtualhid_driver_notification_text_storage();
-    notification_text = std::format(
-      "Installed Virtual HID Driver {} is not supported by this version of Sunshine. Supported versions: {}. Restart Sunshine after updating. Click for instructions.",
-      displayed_version,
-      supported_versions
-    );
-    tray.notification_title = "Update Virtual HID Driver";
-    tray.notification_text = notification_text.c_str();
-    tray.notification_icon = tray.allIconPaths[4];
+    tray.notification_title = "Choose a Gamepad Driver";
+    tray.notification_text = "Choose which virtual gamepad drivers Sunshine may use in the Input settings.";
+    tray.notification_icon = tray.allIconPaths[0];
     tray.notification_cb = []() {
-      launch_ui("/troubleshooting#virtualhid");
+      launch_ui("/config#gamepad_driver");
     };
-
-    BOOST_LOG(warning) << notification_text;
     if (tray_initialized_state().load()) {
       tray_update(&tray);
     }
-  }
-
-  void prepare_tray_virtualhid_driver() {
-    const auto status = confighttp::get_virtualhid_driver_status();
-    update_tray_virtualhid_driver(
-      status.value("installed", false),
-      status.value("version", std::string {}),
-      status.value("version_compatible", false),
-      status.value("supported_versions", std::string {})
-    );
   }
   #endif
 

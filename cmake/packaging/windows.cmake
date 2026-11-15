@@ -47,15 +47,24 @@ install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/misc/firewall/"
         DESTINATION "scripts"
         COMPONENT firewall)
 
+# The xgpad plugin only installs the driver package, so leave it out when the driver isn't built
+set(XGPAD_PLUGIN_EXCLUDE)
+if(NOT SUNSHINE_BUILD_XGPAD_DRIVER)
+    set(XGPAD_PLUGIN_EXCLUDE REGEX "/plugins/xgpad($|/)" EXCLUDE)
+    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/assets/plugins/xgpad")
+endif()
+
 # Sunshine assets
 install(DIRECTORY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${SUNSHINE_ASSETS_DIR}"
-        COMPONENT assets)
+        COMPONENT assets
+        ${XGPAD_PLUGIN_EXCLUDE})
 
 # copy assets (excluding shaders) to build directory, for running without install
 file(COPY "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/"
         DESTINATION "${CMAKE_BINARY_DIR}/assets"
-        PATTERN "shaders" EXCLUDE)
+        PATTERN "shaders" EXCLUDE
+        ${XGPAD_PLUGIN_EXCLUDE})
 # use junction for shaders directory
 cmake_path(CONVERT "${SUNSHINE_SOURCE_ASSETS_DIR}/windows/assets/shaders"
         TO_NATIVE_PATH_LIST shaders_in_build_src_native)
@@ -103,7 +112,7 @@ set(CPACK_COMPONENT_FIREWALL_DISPLAY_NAME "Add Firewall Exclusions")
 set(CPACK_COMPONENT_FIREWALL_DESCRIPTION "Scripts to enable or disable firewall rules.")
 set(CPACK_COMPONENT_FIREWALL_GROUP "Scripts")
 
-# optional xgpad driver (virtual Xbox Series controllers)
+# xgpad driver (virtual Xbox Series controllers), installed by the xgpad plugin
 if(SUNSHINE_BUILD_XGPAD_DRIVER)
     find_program(XGPAD_POWERSHELL NAMES pwsh powershell REQUIRED)
 
@@ -130,33 +139,23 @@ if(SUNSHINE_BUILD_XGPAD_DRIVER)
                     "${XGPAD_DRIVER_DIR}/xgpad_shared.h"
             COMMENT "Building and signing the xgpad driver package"
             VERBATIM)
-    add_custom_target(xgpad_driver ALL DEPENDS ${XGPAD_PACKAGE_FILES})
+    # The package goes in the xgpad plugin's driver folder, whose install script installs it. Copy it into the
+    # build tree's assets too, for running without installing.
+    set(XGPAD_PLUGIN_DRIVER_DIR "${CMAKE_BINARY_DIR}/assets/plugins/xgpad/driver")
+    add_custom_target(xgpad_driver ALL
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${XGPAD_PLUGIN_DRIVER_DIR}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different ${XGPAD_PACKAGE_FILES} "${XGPAD_PLUGIN_DRIVER_DIR}"
+            DEPENDS ${XGPAD_PACKAGE_FILES}
+            VERBATIM)
 
-    # The package always ships so the web UI can install the driver later, and the uninstall script always
-    # ships so removing Sunshine also removes a driver installed that way. The component only decides
-    # whether setup installs the driver, because setup runs install-xgpad-driver.bat when it is present.
     install(FILES ${XGPAD_PACKAGE_FILES}
-            DESTINATION "drivers/xgpad"
-            COMPONENT application)
-    install(FILES
-            "${XGPAD_DRIVER_DIR}/scripts/xgpad-driver.ps1"
-            "${XGPAD_DRIVER_DIR}/scripts/uninstall-xgpad-driver.bat"
-            DESTINATION "scripts"
-            COMPONENT application)
-    install(FILES
-            "${XGPAD_DRIVER_DIR}/scripts/install-xgpad-driver.bat"
-            DESTINATION "scripts"
-            COMPONENT xgpad)
+            DESTINATION "${SUNSHINE_ASSETS_DIR}/plugins/xgpad/driver"
+            COMPONENT assets)
 
-    set(CPACK_COMPONENT_XGPAD_DISPLAY_NAME "Xbox Series Controller Driver")
-    set(CPACK_COMPONENT_XGPAD_DESCRIPTION
-            "Sunshine xgpad driver: virtual Xbox Series X|S controllers with Guide, Share and impulse triggers. \
-Trusts a self-signed certificate unique to this release (its private key was destroyed after signing). \
-Select 'Sunshine Xbox Series Driver (xgpad)' under Input in the web UI to use it. \
-You can also install or remove it later from the Troubleshooting page of the web UI.")
-    set(CPACK_COMPONENT_XGPAD_GROUP "Drivers")
-    set(CPACK_COMPONENT_XGPAD_DEPENDS application)
-    set(CPACK_COMPONENT_XGPAD_DISABLED true)  # optional, unchecked by default
+    # Removing Sunshine removes the driver too, whether or not the plugin installed it
+    install(FILES "${XGPAD_DRIVER_DIR}/scripts/uninstall-xgpad-driver.bat"
+            DESTINATION "scripts"
+            COMPONENT application)
 endif()
 
 # include specific packaging

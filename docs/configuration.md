@@ -365,7 +365,7 @@ supported on the current platform.
             request a choice while this option is not set. If Sunshine detects an active Virtual HID Driver license,
             it automatically sets this option to `all` when it is missing.
             @warning{ViGEmBus has limited gamepad features, supports only Xbox 360 and DualShock 4 emulation, and has
-            reached end of life. Selecting `vigembus` also suppresses Virtual HID Driver startup notifications.}
+            reached end of life.}
             @note{This option applies only to Windows.}
         </td>
     </tr>
@@ -382,9 +382,10 @@ supported on the current platform.
             @endcode</td>
     </tr>
     <tr>
-        <td rowspan="3">Choices</td>
+        <td rowspan="4">Choices</td>
         <td>all</td>
-        <td>Prefer Virtual HID Driver when it is available and licensed, with ViGEmBus as a limited fallback.</td>
+        <td>Prefer Virtual HID Driver when it is available and licensed. Otherwise use the Sunshine Xbox Series Driver
+            (xgpad) for Xbox controllers when it is installed, and ViGEmBus as a limited fallback.</td>
     </tr>
     <tr>
         <td>virtualhid</td>
@@ -392,7 +393,13 @@ supported on the current platform.
     </tr>
     <tr>
         <td>vigembus</td>
-        <td>Use only ViGEmBus for gamepads and hide Virtual HID Driver status and licensing details.</td>
+        <td>Use only ViGEmBus for gamepads.</td>
+    </tr>
+    <tr>
+        <td>xgpad</td>
+        <td>Emulate every controller as an Xbox Series X|S controller with the Sunshine Xbox Series Driver (xgpad),
+            falling back to the other drivers when it is not installed. Install it with the **Xbox Series Controller
+            Driver** plugin.</td>
     </tr>
 </table>
 

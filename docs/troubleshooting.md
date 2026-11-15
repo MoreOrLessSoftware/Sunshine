@@ -345,14 +345,14 @@ controller features such as motion, touchpads, LEDs, and adaptive triggers when 
 ViGEmBus project, Virtual HID Driver is actively developed and supported by the LizardByte team.
 
 An active paid Virtual HID Driver machine license is required before Sunshine can create driver-backed libvirtualhid
-devices, including gamepads and the Raw Input keyboard and mouse. Use the message on the Web UI home page, the startup
-tray notification, or **Get/Manage License** in the **Virtual HID Driver** tray submenu to open the license section on
-the Troubleshooting page. In **Configuration > Input**, select **All Available Drivers**, only **Virtual HID Driver**, or
-only **ViGEmBus**. Sunshine keeps prompting until this setting is saved, but automatically selects **All Available
-Drivers** when it detects an existing active Virtual HID Driver license. Whenever the Virtual HID Driver license is not
-valid, **All Available Drivers** falls back to a compatible ViGEmBus installation for Xbox 360 and DualShock 4 gamepads
-and to SendInput for keyboard and mouse. Selecting only **ViGEmBus** suppresses Virtual HID Driver startup notifications
-and hides its status and license details from the Troubleshooting page.
+devices, including gamepads and the Raw Input keyboard and mouse. Activate, check and move the license in **Virtual HID
+Control**, which the driver installs. The **Virtual HID Driver** plugin on the **Plugins** page shows the installed
+driver version and whether this version of Sunshine supports it. In **Configuration > Input**, select **All Available
+Drivers**, only **Virtual HID Driver**, only **ViGEmBus**, or the **Sunshine Xbox Series Driver (xgpad)**. Sunshine keeps
+prompting until this setting is saved, but automatically selects **All Available Drivers** when it detects an existing
+active Virtual HID Driver license. Whenever the Virtual HID Driver license is not valid, **All Available Drivers** falls
+back to xgpad for Xbox controllers when it is installed, to a compatible ViGEmBus installation for Xbox 360 and
+DualShock 4 gamepads, and to SendInput for keyboard and mouse.
 
 After installation, it is recommended to restart your computer.
 
@@ -362,9 +362,9 @@ keyboard so games using Raw Input can receive them. Unicode text input and keys 
 page continue to use Windows input injection. When the driver-backed keyboard cannot be created because the driver,
 broker, or license is unavailable, libvirtualhid falls back to SendInput.
 
-Check the Virtual HID Driver version and license sections on the Web UI Troubleshooting page. Sunshine recreates the
-shared keyboard and mouse after a successful license activation, validation, or deactivation, so you do not need to
-restart Sunshine merely to switch between the HID and SendInput paths.
+Check the driver version on the **Virtual HID Driver** plugin's card on the **Plugins** page, and the license in
+**Virtual HID Control**. Sunshine checks the license each time a stream starts and recreates the shared keyboard and
+mouse when it changed, so you do not need to restart Sunshine merely to switch between the HID and SendInput paths.
 
 ### Games do not detect mouse input
 With a compatible Virtual HID Driver and active license, Sunshine sends relative mouse movement, buttons, and scrolling
@@ -372,9 +372,9 @@ through a real HID device so games using Raw Input can receive them. Absolute po
 injection. When the driver-backed mouse cannot be created, libvirtualhid falls back to SendInput; the Windows cursor may
 still move even though a game that listens only for Raw Input receives nothing.
 
-Check the Virtual HID Driver version and license sections on the Web UI Troubleshooting page even when controller input
-is disabled. The same live refresh used by the keyboard path also switches the mouse between HID and SendInput without
-requiring a Sunshine restart.
+Check the driver version on the **Virtual HID Driver** plugin's card and the license in **Virtual HID Control**, even
+when controller input is disabled. The same check at the start of each stream also switches the mouse between HID and
+SendInput without requiring a Sunshine restart.
 
 ### Permission denied
 Since Sunshine runs as a service on Windows, it may not have the same level of access that your regular user account

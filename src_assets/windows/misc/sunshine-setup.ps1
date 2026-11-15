@@ -286,7 +286,7 @@ if ($Action -eq "install") {
         -Color "Yellow"
     Write-Information ""
 
-    $totalSteps = 7
+    $totalSteps = 6
     $currentStep = 0
 
     # Reset permissions on the install directory
@@ -396,21 +396,7 @@ if ($Action -eq "install") {
         -Emoji "🛡️"
     Write-Information ""
 
-    # 4. Install the optional xgpad driver (only present when the component was selected), before the
-    #    service starts so Sunshine finds it
-    $currentStep++
-    Write-Progress `
-        -Activity "Installing Sunshine" `
-        -Status "Installing Xbox Series controller driver" `
-        -PercentComplete (($currentStep / $totalSteps) * 100)
-    $installXgpadScript = Join-Path $RootDir "scripts\install-xgpad-driver.bat"
-    Invoke-ScriptIfExist `
-        -ScriptPath $installXgpadScript `
-        -Description "Installing Xbox Series controller driver (xgpad)" `
-        -Emoji "🎮"
-    Write-Information ""
-
-    # 5. Install service
+    # 4. Install service
     $currentStep++
     Write-Progress `
         -Activity "Installing Sunshine" `
@@ -423,7 +409,7 @@ if ($Action -eq "install") {
         -Emoji "⚡"
     Write-Information ""
 
-    # 6. Configure autostart
+    # 5. Configure autostart
     $currentStep++
     Write-Progress `
         -Activity "Installing Sunshine" `
@@ -491,7 +477,8 @@ if ($Action -eq "install") {
         -Emoji "⚡"
     Write-Information ""
 
-    # 3. Remove the optional xgpad driver (after the service is gone, so no virtual pad is in use)
+    # 3. Remove the xgpad driver the xgpad plugin may have installed (after the service is gone, so no virtual pad is
+    #    in use)
     $currentStep++
     Write-Progress `
         -Activity "Uninstalling Sunshine" `

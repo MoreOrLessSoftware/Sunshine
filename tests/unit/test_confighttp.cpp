@@ -120,14 +120,6 @@ protected:
   void SetUp() override {
     BaseTest::SetUp();
     nvhttp::expire_pair_sessions(std::chrono::steady_clock::time_point::max());
-    confighttp::set_virtual_input_license_status_provider_for_testing([]() {
-      lvh::LicenseStatus license;
-      license.service_available = true;
-      license.state = lvh::LicenseState::licensed;
-      license.active_devices = 2;
-      license.message = "Test license status";
-      return lvh::LicenseResult {lvh::OperationStatus::success(), std::move(license)};
-    });
 
     // Save current config
     saved_username = config::sunshine.username;
@@ -333,10 +325,6 @@ protected:
       confighttp::browseDirectory(response, request);
     };
 
-    server->resource["^/virtual-input-status-test$"]["GET"] = confighttp::getVirtualInputStatus;
-    server->resource["^/virtual-input-license-test$"]["GET"] = confighttp::getVirtualInputLicense;
-    server->resource["^/virtual-input-license-test$"]["POST"] = confighttp::updateVirtualInputLicense;
-    server->resource["^/virtual-input-xgpad-test$"]["POST"] = confighttp::updateXgpadDriver;
     server->resource["^/pairing-test$"]["DELETE"] = confighttp::cancelPairing;
     server->resource["^/pairing-test$"]["GET"] = confighttp::getPendingPairings;
     server->resource["^/pairing-test$"]["POST"] = confighttp::savePin;
@@ -389,7 +377,6 @@ protected:
     if (server_thread.joinable()) {
       server_thread.join();
     }
-    confighttp::reset_virtual_input_license_status_provider_for_testing();
     confighttp::reset_portal_token_path_provider_for_testing();
 
     config::sunshine.username = saved_username;
@@ -466,31 +453,12 @@ namespace {
   };
 
   /**
-   * @brief Invalid virtual-input license request and expected error.
-   */
-  struct invalid_license_request_t {
-    const char *name;  ///< Stable parameter name.
-    const char *body;  ///< Invalid request body.
-    const char *expected_error;  ///< Expected response error.
-  };
-
-  /**
    * @brief Return the stable name for an endpoint request parameter.
    *
    * @param param_info Parameter information supplied by GoogleTest.
    * @return Stable test suffix.
    */
   std::string endpoint_request_name(const testing::TestParamInfo<endpoint_request_t> &param_info) {
-    return param_info.param.name;
-  }
-
-  /**
-   * @brief Return the stable name for an invalid license request parameter.
-   *
-   * @param param_info Parameter information supplied by GoogleTest.
-   * @return Stable test suffix.
-   */
-  std::string invalid_license_request_name(const testing::TestParamInfo<invalid_license_request_t> &param_info) {
     return param_info.param.name;
   }
 }  // namespace
@@ -504,11 +472,6 @@ class AuthenticatedConfigHttpEndpointTest: public ConfigHttpTest, public testing
  * @brief Parameterized fixture for endpoints protected from cross-origin requests.
  */
 class CsrfProtectedConfigHttpEndpointTest: public ConfigHttpTest, public testing::WithParamInterface<endpoint_request_t> {};
-
-/**
- * @brief Parameterized fixture for invalid virtual-input license requests.
- */
-class InvalidVirtualInputLicenseRequestTest: public ConfigHttpTest, public testing::WithParamInterface<invalid_license_request_t> {};
 
 TEST_P(AuthenticatedConfigHttpEndpointTest, RejectsUnauthenticatedRequest) {
   const auto &request = GetParam();
@@ -526,10 +489,6 @@ INSTANTIATE_TEST_SUITE_P(
     endpoint_request_t {"BrowseDirectory", "GET", "/browse-test", ""},
     endpoint_request_t {"PairingList", "GET", "/pairing-test", ""},
     endpoint_request_t {"PortalTokenReset", "POST", "/portal-token-reset-test", ""},
-    endpoint_request_t {"VirtualInputStatus", "GET", "/virtual-input-status-test", ""},
-    endpoint_request_t {"VirtualInputLicense", "GET", "/virtual-input-license-test", ""},
-    endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
-    endpoint_request_t {"XgpadDriverUpdate", "POST", "/virtual-input-xgpad-test", R"({"action":"install"})"},
     endpoint_request_t {"Plugins", "GET", "/plugins-test", ""},
     endpoint_request_t {"PluginLog", "GET", "/plugins-log-test?id=p", ""},
     endpoint_request_t {"PluginGuide", "GET", "/plugins-guide-test", ""},
@@ -557,33 +516,9 @@ INSTANTIATE_TEST_SUITE_P(
   testing::Values(
     endpoint_request_t {"CsrfValidation", "POST", "/csrf-validate-test", ""},
     endpoint_request_t {"PortalTokenReset", "POST", "/portal-token-reset-test", ""},
-    endpoint_request_t {"VirtualInputLicenseUpdate", "POST", "/virtual-input-license-test", R"({"action":"validate"})"},
-    endpoint_request_t {"XgpadDriverUpdate", "POST", "/virtual-input-xgpad-test", R"({"action":"install"})"},
     endpoint_request_t {"PluginRescan", "POST", "/plugins-rescan-test", ""}
   ),
   endpoint_request_name
-);
-
-TEST_P(InvalidVirtualInputLicenseRequestTest, ReturnsExpectedError) {
-  const auto &request = GetParam();
-  SimpleWeb::CaseInsensitiveMultimap headers;
-  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
-  headers.emplace("Origin", std::format("https://localhost:{}", port));
-
-  const auto response = client->request("POST", "/virtual-input-license-test", request.body, headers);
-  ASSERT_EQ(response->status_code, "400 Bad Request");
-  EXPECT_TRUE(response->content.string().contains(request.expected_error));
-}
-
-INSTANTIATE_TEST_SUITE_P(
-  InvalidRequests,
-  InvalidVirtualInputLicenseRequestTest,
-  testing::Values(
-    invalid_license_request_t {"InvalidJson", "not-json", "Invalid license request"},
-    invalid_license_request_t {"UnknownAction", R"({"action":"unknown"})", "Unknown license action"},
-    invalid_license_request_t {"MissingActivationKey", R"({"action":"activate","license_key":""})", "License key is required"}
-  ),
-  invalid_license_request_name
 );
 
 TEST_F(ConfigHttpTest, PairingMutationsRejectUnauthenticatedRestRequests) {
@@ -1552,54 +1487,6 @@ TEST_F(BrowseDirectoryTest, BrowseUnixRootParentEqualsSelf) {
 }
 #endif
 
-// ============================================================
-// Direct unit tests for virtual input driver status helpers
-// ============================================================
-
-// Test: empty minimum driver versions accept any detected version
-TEST(ConfigHttpDriverStatusTest, IsDriverVersionSupported_EmptyMinimum_ReturnsTrue) {
-  ASSERT_TRUE(confighttp::is_driver_version_supported("", ""));
-  ASSERT_TRUE(confighttp::is_driver_version_supported("1.0.0.0", ""));
-}
-
-// Test: equal and newer numeric driver versions are supported
-TEST(ConfigHttpDriverStatusTest, IsDriverVersionSupported_EqualOrNewerVersion_ReturnsTrue) {
-  ASSERT_TRUE(confighttp::is_driver_version_supported("1.17.0.0", "1.17.0.0"));
-  ASSERT_TRUE(confighttp::is_driver_version_supported("1.18.0.0", "1.17.0.0"));
-  ASSERT_TRUE(confighttp::is_driver_version_supported("2.0", "1.17.0.0"));
-}
-
-// Test: older numeric driver versions are unsupported
-TEST(ConfigHttpDriverStatusTest, IsDriverVersionSupported_OlderVersion_ReturnsFalse) {
-  ASSERT_FALSE(confighttp::is_driver_version_supported("1.16.9.9", "1.17.0.0"));
-  ASSERT_FALSE(confighttp::is_driver_version_supported("1.16", "1.17.0.0"));
-}
-
-// Test: invalid driver versions are unsupported when a minimum is required
-TEST(ConfigHttpDriverStatusTest, IsDriverVersionSupported_InvalidVersion_ReturnsFalse) {
-  ASSERT_FALSE(confighttp::is_driver_version_supported("", "1.17.0.0"));
-  ASSERT_FALSE(confighttp::is_driver_version_supported("1.17.beta", "1.17.0.0"));
-  ASSERT_FALSE(confighttp::is_driver_version_supported("1.17.", "1.17.0.0"));
-}
-
-// Test: numeric 0.0.x development versions are identified consistently
-TEST(ConfigHttpDriverStatusTest, IsDriverVersionDevelopment_RecognizesZeroMajorAndMinor) {
-  ASSERT_TRUE(confighttp::is_driver_version_development("0.0.0"));
-  ASSERT_TRUE(confighttp::is_driver_version_development("0.0.0.42"));
-  ASSERT_TRUE(confighttp::is_driver_version_development("0.0.1.0"));
-  ASSERT_FALSE(confighttp::is_driver_version_development("0.0"));
-  ASSERT_FALSE(confighttp::is_driver_version_development("0.1.0"));
-  ASSERT_FALSE(confighttp::is_driver_version_development("development"));
-}
-
-// Test: numeric development versions always bypass the production minimum
-TEST(ConfigHttpDriverStatusTest, IsDriverVersionSupported_DevelopmentVersionBypassesMinimum) {
-  ASSERT_TRUE(confighttp::is_driver_version_supported("0.0.0", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
-  ASSERT_TRUE(confighttp::is_driver_version_supported("0.0.0.42", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
-  ASSERT_TRUE(confighttp::is_driver_version_supported("0.0.1.0", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
-  ASSERT_FALSE(confighttp::is_driver_version_supported("0.0", "2026.823.352.3"));  // NOSONAR(cpp:S1313): not IP addresses
-}
-
 // Test: the config response carries the numeric version, the display version and the update check
 TEST(ConfigHttpVersionTest, AddVersionInfo_IncludesExpectedFields) {
   nlohmann::json output_tree;
@@ -1629,285 +1516,6 @@ TEST(ConfigHttpEncoderTest, AddEncoderInfo_EmptyWithoutProbe) {
   confighttp::add_encoder_info(output_tree, video::probed_encoder_name(), nvenc::last_encoder_engine_count.load());
   ASSERT_TRUE(output_tree["active_encoder"].get<std::string>().empty());
   ASSERT_EQ(output_tree["nvenc_engines"].get<int>(), 0);
-}
-
-// Test: driver status JSON includes compatibility and supported version metadata
-TEST(ConfigHttpDriverStatusTest, BuildDriverStatus_IncludesExpectedFields) {
-  const auto status = confighttp::build_driver_status(true, "1.17.0.0", "1.17.0.0");  // NOSONAR(cpp:S1313): not an IP address
-
-  ASSERT_TRUE(status["installed"].get<bool>());
-  ASSERT_EQ(status["version"].get<std::string>(), "1.17.0.0");
-  ASSERT_EQ(status["minimum_version"].get<std::string>(), "1.17.0.0");
-  ASSERT_EQ(status["supported_versions"].get<std::string>(), ">= 1.17.0.0");
-  ASSERT_FALSE(status["development_version"].get<bool>());
-  ASSERT_TRUE(status["version_compatible"].get<bool>());
-}
-
-// Test: missing drivers are not compatible even when any version would be accepted
-TEST(ConfigHttpDriverStatusTest, BuildDriverStatus_NotInstalledIsNotCompatible) {
-  const auto status = confighttp::build_driver_status(false, "", "");
-
-  ASSERT_FALSE(status["installed"].get<bool>());
-  ASSERT_EQ(status["supported_versions"].get<std::string>(), "Any");
-  ASSERT_FALSE(status["development_version"].get<bool>());
-  ASSERT_FALSE(status["version_compatible"].get<bool>());
-}
-
-// Test: detected drivers remain installed when their version is too old
-TEST(ConfigHttpDriverStatusTest, BuildDriverStatus_OlderDetectedDriverIsInstalledButIncompatible) {
-  const auto status = confighttp::build_driver_status(true, "2026.820.1844.57", "2026.823.352.3");  // NOSONAR(cpp:S1313): not IP addresses
-
-  ASSERT_TRUE(status["installed"].get<bool>());
-  ASSERT_FALSE(status["development_version"].get<bool>());
-  ASSERT_FALSE(status["version_compatible"].get<bool>());
-}
-
-// Test: development status remains compatible while retaining the production floor metadata
-TEST(ConfigHttpDriverStatusTest, BuildDriverStatus_DevelopmentVersionIsCompatible) {
-  const auto status = confighttp::build_driver_status(true, "0.0.0.42", "2026.823.352.3");  // NOSONAR(cpp:S1313): not IP addresses
-
-  ASSERT_EQ(status["minimum_version"].get<std::string>(), "2026.823.352.3");  // NOSONAR(cpp:S1313): not an IP address
-  ASSERT_EQ(status["supported_versions"].get<std::string>(), ">= 2026.823.352.3");  // NOSONAR(cpp:S1313): not an IP address
-  ASSERT_TRUE(status["development_version"].get<bool>());
-  ASSERT_TRUE(status["version_compatible"].get<bool>());
-}
-
-TEST(ConfigHttpDriverStatusTest, BuildsLiveVirtualInputDriverStatus) {
-  const auto virtualhid = confighttp::get_virtualhid_driver_status();
-  EXPECT_TRUE(virtualhid.contains("installed"));
-  EXPECT_TRUE(virtualhid.contains("version"));
-  EXPECT_TRUE(virtualhid.contains("version_compatible"));
-  EXPECT_TRUE(virtualhid.contains("development_version"));
-  EXPECT_TRUE(virtualhid.contains("backend_name"));
-  EXPECT_TRUE(virtualhid.contains("requires_installed_driver"));
-  EXPECT_EQ(virtualhid["minimum_version"].get<std::string>(), LIBVIRTUALHID_MINIMUM_VERSION);
-  EXPECT_EQ(virtualhid["supported_versions"].get<std::string>(), std::format(">= {}", LIBVIRTUALHID_MINIMUM_VERSION));
-
-  const auto vigembus = confighttp::get_vigembus_driver_status();
-  EXPECT_TRUE(vigembus.contains("installed"));
-  EXPECT_TRUE(vigembus.contains("version"));
-  EXPECT_TRUE(vigembus.contains("minimum_version"));
-  EXPECT_TRUE(vigembus.contains("version_compatible"));
-
-  const auto xgpad = confighttp::get_xgpad_driver_status();
-  ASSERT_TRUE(xgpad.contains("installed"));
-  EXPECT_TRUE(xgpad["installed"].is_boolean());
-  EXPECT_TRUE(xgpad.contains("version"));
-  EXPECT_TRUE(xgpad.contains("version_compatible"));
-  EXPECT_TRUE(xgpad["package_available"].is_boolean());
-}
-
-/**
- * @brief Build an xgpad driver request whose script counts its runs.
- *
- * @param install Whether the request installs the driver.
- * @param exit_code Exit code reported by the script.
- * @param installed_after Driver state reported after the script ran.
- * @param runs Incremented every time the script runs.
- * @return Request with no stream active and the package available.
- */
-static confighttp::xgpad_driver_request_t make_xgpad_request(const bool install, const int exit_code, const bool installed_after, int &runs) {
-  return {
-    install,
-    false,
-    true,
-    [exit_code, &runs]() {
-      ++runs;
-      return exit_code;
-    },
-    [installed_after]() {
-      return installed_after;
-    },
-  };
-}
-
-TEST(ConfigHttpXgpadDriverTest, InstallSucceedsWhenScriptAndDriverStoreAgree) {
-  int runs = 0;
-  const auto result = confighttp::apply_xgpad_driver_action(make_xgpad_request(true, 0, true, runs));
-  EXPECT_EQ(runs, 1);
-  EXPECT_TRUE(result["status"].get<bool>());
-  EXPECT_TRUE(result["installed"].get<bool>());
-  EXPECT_FALSE(result.contains("error"));
-}
-
-TEST(ConfigHttpXgpadDriverTest, UninstallDoesNotNeedThePackage) {
-  int runs = 0;
-  auto request = make_xgpad_request(false, 0, false, runs);
-  request.package_available = false;
-  const auto result = confighttp::apply_xgpad_driver_action(request);
-  EXPECT_EQ(runs, 1);
-  EXPECT_TRUE(result["status"].get<bool>());
-  EXPECT_FALSE(result["installed"].get<bool>());
-}
-
-TEST(ConfigHttpXgpadDriverTest, ActiveStreamBlocksTheScript) {
-  int runs = 0;
-  auto request = make_xgpad_request(false, 0, false, runs);
-  request.stream_active = true;
-  const auto result = confighttp::apply_xgpad_driver_action(request);
-  EXPECT_EQ(runs, 0);
-  EXPECT_FALSE(result["status"].get<bool>());
-  EXPECT_EQ(result["error"].get<std::string>(), "stream_active");
-}
-
-TEST(ConfigHttpXgpadDriverTest, InstallRequiresThePackage) {
-  int runs = 0;
-  auto request = make_xgpad_request(true, 0, true, runs);
-  request.package_available = false;
-  const auto result = confighttp::apply_xgpad_driver_action(request);
-  EXPECT_EQ(runs, 0);
-  EXPECT_FALSE(result["status"].get<bool>());
-  EXPECT_EQ(result["error"].get<std::string>(), "package_missing");
-}
-
-TEST(ConfigHttpXgpadDriverTest, NonZeroExitCodeFails) {
-  int runs = 0;
-  const auto result = confighttp::apply_xgpad_driver_action(make_xgpad_request(true, 1, true, runs));
-  EXPECT_EQ(runs, 1);
-  EXPECT_FALSE(result["status"].get<bool>());
-  EXPECT_EQ(result["error"].get<std::string>(), "script_failed");
-}
-
-// The script exits 0 when pnputil cannot delete the package, as happens without administrator rights.
-TEST(ConfigHttpXgpadDriverTest, DriverStoreMismatchFailsDespiteCleanExit) {
-  int runs = 0;
-  const auto result = confighttp::apply_xgpad_driver_action(make_xgpad_request(false, 0, true, runs));
-  EXPECT_FALSE(result["status"].get<bool>());
-  EXPECT_TRUE(result["installed"].get<bool>());
-  EXPECT_EQ(result["error"].get<std::string>(), "script_failed");
-}
-
-TEST_F(ConfigHttpTest, XgpadDriverUpdateRejectsInvalidRequests) {
-  SimpleWeb::CaseInsensitiveMultimap headers;
-  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
-  headers.emplace("Origin", std::format("https://localhost:{}", port));
-
-  const auto invalid_json = client->request("POST", "/virtual-input-xgpad-test", "not-json", headers);
-  ASSERT_EQ(invalid_json->status_code, "400 Bad Request");
-  EXPECT_TRUE(invalid_json->content.string().contains("Invalid driver request"));
-
-  const auto unknown_action = client->request("POST", "/virtual-input-xgpad-test", R"({"action":"reboot"})", headers);
-  ASSERT_EQ(unknown_action->status_code, "400 Bad Request");
-  EXPECT_TRUE(unknown_action->content.string().contains("Unknown driver action"));
-}
-
-// The test executable's folder has no driver package, so this never touches the driver store.
-TEST_F(ConfigHttpTest, XgpadDriverInstallReportsMissingPackage) {
-  SimpleWeb::CaseInsensitiveMultimap headers;
-  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
-  headers.emplace("Origin", std::format("https://localhost:{}", port));
-
-  const auto response = client->request("POST", "/virtual-input-xgpad-test", R"({"action":"install"})", headers);
-#ifdef _WIN32
-  ASSERT_EQ(response->status_code, "200 OK");
-  const auto body = nlohmann::json::parse(response->content.string());
-  EXPECT_FALSE(body.at("status").get<bool>());
-  EXPECT_EQ(body.at("error").get<std::string>(), "package_missing");
-#else
-  ASSERT_EQ(response->status_code, "400 Bad Request");
-  EXPECT_TRUE(response->content.string().contains("only available on Windows"));
-#endif
-}
-
-TEST(ConfigHttpLicenseStatusTest, ClearsSensitiveRequestString) {
-  std::string sensitive_value = "license-key";
-  confighttp::clear_sensitive_string_for_testing(sensitive_value);
-  EXPECT_TRUE(sensitive_value.empty());
-}
-
-TEST_F(ConfigHttpTest, VirtualInputStatusReturnsBothBackends) {
-  SimpleWeb::CaseInsensitiveMultimap headers;
-  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
-
-  const auto response = client->request("GET", "/virtual-input-status-test", "", headers);
-  ASSERT_EQ(response->status_code, "200 OK");
-  const auto body = nlohmann::json::parse(response->content.string());
-  ASSERT_TRUE(body.contains("virtualhid"));
-  ASSERT_TRUE(body.contains("vigembus"));
-  ASSERT_TRUE(body.contains("xgpad"));
-  EXPECT_TRUE(body.at("virtualhid").contains("installed"));
-  EXPECT_TRUE(body.at("vigembus").contains("installed"));
-  EXPECT_TRUE(body.at("xgpad").contains("installed"));
-}
-
-TEST_F(ConfigHttpTest, VirtualInputLicenseReturnsCurrentStatus) {
-  SimpleWeb::CaseInsensitiveMultimap headers;
-  headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
-
-  const auto response = client->request("GET", "/virtual-input-license-test", "", headers);
-  ASSERT_EQ(response->status_code, "200 OK");
-  const auto body = nlohmann::json::parse(response->content.string());
-  EXPECT_TRUE(body.at("operation_ok").get<bool>());
-  EXPECT_TRUE(body.at("service_available").get<bool>());
-  EXPECT_EQ(body.at("state").get<std::string>(), "licensed");
-  EXPECT_TRUE(body.at("licensed").get<bool>());
-  EXPECT_EQ(body.at("active_devices").get<unsigned int>(), 2U);
-  EXPECT_EQ(body.at("message").get<std::string>(), "Test license status");
-}
-
-// Test: every public license state maps to a stable Web UI state string
-TEST(ConfigHttpLicenseStatusTest, BuildVirtualHidLicenseStatus_MapsEveryState) {
-  using enum lvh::LicenseState;
-
-  const std::array states {
-    std::pair {unavailable, "unavailable"s},
-    std::pair {unlicensed, "unlicensed"s},
-    std::pair {licensed, "licensed"s},
-    std::pair {expired, "expired"s},
-    std::pair {disabled, "disabled"s},
-    std::pair {invalid, "invalid"s},
-  };
-
-  for (const auto &[state, expected] : states) {
-    lvh::LicenseStatus license;
-    license.state = state;
-    const auto output = confighttp::build_virtualhid_license_status({lvh::OperationStatus::success(), license});
-    EXPECT_EQ(output["state"].get<std::string>(), expected);
-    EXPECT_EQ(output["licensed"].get<bool>(), state == licensed);
-  }
-}
-
-// Test: license status JSON includes all customer-visible metadata without a key field
-TEST(ConfigHttpLicenseStatusTest, BuildVirtualHidLicenseStatus_IncludesExpectedFields) {
-  lvh::LicenseStatus license;
-  license.service_available = true;
-  license.state = lvh::LicenseState::licensed;
-  license.active_devices = 2;
-  license.activation_limit = 5;
-  license.activation_usage = 3;
-  license.plan_name = "Yearly";
-  license.customer_email = "customer@example.com";
-  license.message = "License is active";
-  license.purchase_url = "https://example.com/buy";
-  license.manage_account_url = "https://example.com/manage";
-
-  const auto output = confighttp::build_virtualhid_license_status({lvh::OperationStatus::success(), license});
-  EXPECT_TRUE(output["operation_ok"].get<bool>());
-  EXPECT_TRUE(output["service_available"].get<bool>());
-  EXPECT_EQ(output["active_devices"].get<unsigned int>(), 2U);
-  EXPECT_EQ(output["activation_limit"].get<unsigned int>(), 5U);
-  EXPECT_EQ(output["activation_usage"].get<unsigned int>(), 3U);
-  EXPECT_EQ(output["plan_name"].get<std::string>(), "Yearly");
-  EXPECT_EQ(output["customer_email"].get<std::string>(), "customer@example.com");
-  EXPECT_FALSE(output.contains("expires_at"));
-  EXPECT_EQ(output["message"].get<std::string>(), "License is active");
-  EXPECT_EQ(output["purchase_url"].get<std::string>(), "https://example.com/buy");
-  EXPECT_EQ(output["manage_account_url"].get<std::string>(), "https://example.com/manage");
-  EXPECT_EQ(output["error"].get<std::string>(), "");
-  EXPECT_FALSE(output.contains("license_key"));
-}
-
-// Test: failed license operations preserve the latest status and expose only the safe error message
-TEST(ConfigHttpLicenseStatusTest, BuildVirtualHidLicenseStatus_IncludesOperationFailure) {
-  lvh::LicenseStatus license;
-  license.service_available = true;
-  license.state = lvh::LicenseState::invalid;
-  const auto operation = lvh::OperationStatus::failure(lvh::ErrorCode::license_invalid, "License is invalid");
-
-  const auto output = confighttp::build_virtualhid_license_status({operation, license});
-  EXPECT_FALSE(output["operation_ok"].get<bool>());
-  EXPECT_EQ(output["state"].get<std::string>(), "invalid");
-  EXPECT_EQ(output["error"].get<std::string>(), "License is invalid");
 }
 
 // ============================================================

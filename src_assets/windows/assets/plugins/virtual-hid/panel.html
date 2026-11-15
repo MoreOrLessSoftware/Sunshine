@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Virtual HID Driver</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --fg: #212529;
+      --muted: #6c757d;
+      --line: #dee2e6;
+      --accent: #0d6efd;
+      --accent-fg: #ffffff;
+      --ok: #198754;
+      --warn: #b8860b;
+      --bad: #dc3545;
+    }
+    :root[data-theme="dark"] {
+      --bg: #212529;
+      --fg: #dee2e6;
+      --muted: #adb5bd;
+      --line: #495057;
+      --accent: #6ea8fe;
+      --accent-fg: #1b1b1b;
+      --ok: #75b798;
+      --warn: #ffda6a;
+      --bad: #ea868f;
+    }
+    html, body { margin: 0; background: var(--bg); color: var(--fg); }
+    body { font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 12px 16px; }
+    .status { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+    .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--warn); }
+    .dot.bad { background: var(--bad); }
+    .muted { color: var(--muted); }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0 0 10px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    .newer { color: var(--warn); }
+    .current { color: var(--ok); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+    .button {
+      display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 4px;
+      padding: 4px 12px; font: inherit; color: var(--fg); background: var(--bg); text-decoration: none; cursor: pointer;
+    }
+    .button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+    .button:disabled { opacity: 0.6; cursor: default; }
+    p { margin: 0 0 6px; }
+    p:last-of-type { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div class="status" aria-live="polite">
+    <span id="dot" class="dot"></span>
+    <strong id="headline">Checking the driver...</strong>
+    <span id="detail" class="muted"></span>
+  </div>
+
+  <dl>
+    <dt>Installed version</dt>
+    <dd id="installed">-</dd>
+    <dt>Supported versions</dt>
+    <dd id="supported">-</dd>
+    <dt>Latest release</dt>
+    <dd id="latest">Checking...</dd>
+  </dl>
+
+  <div class="actions">
+    <a id="download" class="button primary" href="https://github.com/LizardByte/libvirtualhid/releases/latest" target="_blank" rel="noopener noreferrer">Download</a>
+    <button id="refresh" class="button" type="button">Refresh</button>
+  </div>
+
+  <p class="muted">
+    Virtual HID Driver needs a paid license. Activate, check or move your license in Virtual HID Control on this
+    computer, which the driver installs. Restart Sunshine after installing, updating or licensing the driver.
+  </p>
+
+  <script>
+    'use strict';
+    const id = new URLSearchParams(location.search).get('id') || 'virtual-hid';
+    const releasesApi = 'https://api.github.com/repos/LizardByte/libvirtualhid/releases/latest';
+    const $ = (name) => document.getElementById(name);
+    let status = null;
+    let latest = null;  // {version, url}, or {error: true}
+
+    // Follow Sunshine's light / dark theme (the page that frames this one).
+    function applyTheme() {
+      let theme = 'auto';
+      try {
+        theme = window.parent.document.documentElement.getAttribute('data-bs-theme') || 'auto';
+      } catch (e) {
+        theme = 'auto';
+      }
+      if (theme === 'auto') {
+        theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+    applyTheme();
+    try {
+      new MutationObserver(applyTheme).observe(window.parent.document.documentElement, {attributes: true, attributeFilter: ['data-bs-theme']});
+    } catch (e) { /* not framed by Sunshine */ }
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+
+    /**
+     * Parse a dotted version such as v2026.914.1218.10.
+     *
+     * @param {string} text Version, optionally starting with "v".
+     * @returns {number[]|null} Its numbers, or null when it isn't a version.
+     */
+    function parseVersion(text) {
+      const match = /^v?(\d+(?:\.\d+)*)/i.exec(String(text || '').trim());
+      return match ? match[1].split('.').map(Number) : null;
+    }
+
+    /**
+     * Compare two versions.
+     *
+     * @param {string} a First version.
+     * @param {string} b Second version.
+     * @returns {number|null} Negative when a is older, 0 when equal, positive when newer, or null when either isn't a version.
+     */
+    function compareVersions(a, b) {
+      const left = parseVersion(a);
+      const right = parseVersion(b);
+      if (!left || !right) {
+        return null;
+      }
+      for (let i = 0; i < Math.max(left.length, right.length); i++) {
+        const difference = (left[i] || 0) - (right[i] || 0);
+        if (difference !== 0) {
+          return difference;
+        }
+      }
+      return 0;
+    }
+
+    function setStatus(level, headline, detail) {
+      $('dot').className = 'dot ' + level;
+      $('headline').textContent = headline;
+      $('detail').textContent = detail || '';
+    }
+
+    function render() {
+      if (status) {
+        $('installed').textContent = status.installed ? status.version : 'Not installed';
+        $('supported').textContent = `${status.minimum_version} or newer`;
+        if (!status.installed) {
+          setStatus('', 'Not installed', 'Sunshine uses its other drivers for gamepads, keyboard and mouse.');
+        } else if (status.development) {
+          setStatus('ok', 'Development build installed', 'Development builds work with any version of Sunshine.');
+        } else if (!status.supported) {
+          setStatus('bad', 'Update needed', "This version of Sunshine can't use the installed driver.");
+        } else {
+          setStatus('ok', 'Installed', 'This version of Sunshine supports the installed driver.');
+        }
+      }
+
+      const latestCell = $('latest');
+      latestCell.className = '';
+      if (!latest) {
+        latestCell.textContent = 'Checking...';
+      } else if (latest.error) {
+        latestCell.textContent = "Couldn't check GitHub";
+      } else {
+        const comparison = status && status.installed ? compareVersions(status.version, latest.version) : null;
+        if (comparison !== null && comparison < 0) {
+          latestCell.textContent = `${latest.version}, newer than the installed driver`;
+          latestCell.className = 'newer';
+        } else if (comparison !== null) {
+          latestCell.textContent = `${latest.version}, installed`;
+          latestCell.className = 'current';
+        } else {
+          latestCell.textContent = latest.version;
+        }
+        $('download').href = latest.url;
+      }
+    }
+
+    async function loadStatus() {
+      setStatus('', 'Checking the driver...');
+      try {
+        const response = await fetch(`./status?id=${encodeURIComponent(id)}`, {cache: 'no-store'});
+        const body = await response.json();
+        if (!response.ok || !body.status) {
+          throw new Error(body.error || `HTTP ${response.status}`);
+        }
+        status = body.result;
+        render();
+      } catch (e) {
+        status = null;
+        setStatus('bad', "Couldn't check the driver", e.message);
+      }
+    }
+
+    async function loadLatestRelease() {
+      latest = null;
+      render();
+      try {
+        const response = await fetch(releasesApi, {headers: {Accept: 'application/vnd.github+json'}});
+        if (!response.ok) {
+          throw new Error(`GitHub returned ${response.status}`);
+        }
+        const release = await response.json();
+        if (!release.tag_name || release.draft || release.prerelease) {
+          throw new Error('GitHub did not return a stable release');
+        }
+        latest = {version: release.tag_name, url: release.html_url || $('download').href};
+      } catch (e) {
+        console.error('Failed to check the latest Virtual HID Driver release:', e);
+        latest = {error: true};
+      }
+      render();
+    }
+
+    async function refresh() {
+      $('refresh').disabled = true;
+      await Promise.all([loadStatus(), loadLatestRelease()]);
+      $('refresh').disabled = false;
+    }
+
+    $('refresh').addEventListener('click', refresh);
+    refresh();
+  </script>
+</body>
+</html>

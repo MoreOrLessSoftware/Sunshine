@@ -3,9 +3,8 @@
   Installs or removes the Sunshine xgpad driver (virtual Xbox Series controllers). Requires elevation.
 
 .DESCRIPTION
-  Used by the Sunshine installer through install-xgpad-driver.bat / uninstall-xgpad-driver.bat (install only
-  runs when the optional "Xbox Series Controller Driver" component is selected), and directly by Sunshine for
-  the Install and Uninstall actions on the web UI's Troubleshooting page.
+  Used by the xgpad plugin's install and uninstall scripts, so installing the plugin installs the driver and
+  uninstalling it removes the driver, and by the Sunshine uninstaller through uninstall-xgpad-driver.bat.
 
   install:
     1. Removes certificates and driver packages left behind by older xgpad versions.
@@ -21,23 +20,27 @@
   install or uninstall.
 
 .PARAMETER PackageDir
-  Folder containing xgpad.inf, xgpad.dll, xgpad.cat and xgpad.cer. Defaults to ..\drivers\xgpad relative
-  to this script (the Sunshine install layout).
+  Folder containing xgpad.inf, xgpad.dll, xgpad.cat and xgpad.cer. Defaults to the driver folder next to
+  this script.
+
+.PARAMETER LogFile
+  File to append a transcript to, for callers whose output isn't kept, such as the Sunshine uninstaller.
+  Plugin scripts leave it out, since their output already goes to the plugin's log.
 #>
 param(
   [Parameter(Mandatory = $true)]
   [ValidateSet('install', 'uninstall')]
   [string]$Action,
-  [string]$PackageDir = ''
+  [string]$PackageDir = '',
+  [string]$LogFile = ''
 )
 $ErrorActionPreference = 'Stop'
 
 # $PSScriptRoot is empty in param() defaults when Windows PowerShell runs a script with -File (as the
-# installer's .bat wrappers do), so resolve the install layout here.
+# uninstaller's .bat wrapper does), so resolve the package folder here.
 $scriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$installRoot = Split-Path -Parent $scriptDir
 if (-not $PackageDir) {
-  $PackageDir = Join-Path $installRoot 'drivers\xgpad'
+  $PackageDir = Join-Path $scriptDir 'driver'
 }
 
 # Windows PowerShell started from a PowerShell 7 process inherits PowerShell 7's module paths and loads its
@@ -49,13 +52,16 @@ if ($PSVersionTable.PSEdition -eq 'Desktop') {
   ) -join ';'
 }
 
-# Always keep a log next to sunshine.log: the installer runs this hidden or in a window that closes.
-$logFile = Join-Path $installRoot 'config\xgpad-driver.log'
-try {
-  New-Item -ItemType Directory -Force (Split-Path -Parent $logFile) | Out-Null
-  Start-Transcript -Path $logFile -Append | Out-Null
-} catch {
-  $logFile = $null
+# The uninstaller runs this hidden or in a window that closes, so it asks for a log
+$transcript = $false
+if ($LogFile) {
+  try {
+    New-Item -ItemType Directory -Force (Split-Path -Parent $LogFile) | Out-Null
+    Start-Transcript -Path $LogFile -Append | Out-Null
+    $transcript = $true
+  } catch {
+    Write-Output "Can't write the log to ${LogFile}: $($_.Exception.Message)"
+  }
 }
 Write-Output ("[{0}] xgpad-driver.ps1 -Action {1} as {2} (64-bit process: {3}, PowerShell {4}, TEMP={5})" -f `
     (Get-Date -Format s), $Action, [Security.Principal.WindowsIdentity]::GetCurrent().Name,
@@ -158,7 +164,7 @@ if ($Action -eq 'install') {
   Write-Output $_.ScriptStackTrace
   $exitCode = 1
 } finally {
-  if ($logFile) {
+  if ($transcript) {
     Stop-Transcript | Out-Null
   }
 }

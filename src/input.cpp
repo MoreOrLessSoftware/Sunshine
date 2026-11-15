@@ -2295,16 +2295,34 @@ namespace input {
     });
   }
 
+  namespace {
+    /**
+     * @brief Release held keys and buttons, then recreate the shared keyboard and mouse. Runs on the input thread.
+     */
+    void recreate_shared_virtual_input() {
+      task_pool.cancel(key_press_repeat_id);
+      key_press_repeat_id = nullptr;
+      reset_mouse_buttons();
+      reset_keyboard_keys();
+      auto &context = platf::virtualhid::get_input_context(platf_input);
+      context.refresh_keyboard();
+      context.refresh_mouse();
+    }
+  }  // namespace
+
   void refresh_virtual_input() {
     dispatch_input_task([]() {
       if (platf_input) {
-        task_pool.cancel(key_press_repeat_id);
-        key_press_repeat_id = nullptr;
-        reset_mouse_buttons();
-        reset_keyboard_keys();
-        auto &context = platf::virtualhid::get_input_context(platf_input);
-        context.refresh_keyboard();
-        context.refresh_mouse();
+        recreate_shared_virtual_input();
+      }
+    });
+  }
+
+  void refresh_virtual_input_if_license_changed() {
+    dispatch_input_task([]() {
+      if (platf_input && platf::virtualhid::get_input_context(platf_input).update_license_state()) {
+        BOOST_LOG(info) << "Virtual HID Driver license changed; recreating the virtual keyboard and mouse"sv;
+        recreate_shared_virtual_input();
       }
     });
   }
@@ -2335,6 +2353,8 @@ namespace input {
       dispatch_input_task([input, mail = std::move(mail)]() {
         rebind_input(input, mail);
       });
+    } else {
+      refresh_virtual_input_if_license_changed();
     }
 
     // Workaround to ensure new frames will be captured when a client connects

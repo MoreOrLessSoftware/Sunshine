@@ -21,7 +21,6 @@
 #include <condition_variable>
 #include <cstring>
 #include <cwchar>
-#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -122,12 +121,6 @@ namespace platf::xgpad {
      */
     constexpr std::wstring_view hardware_id_prefix = L"SunshineXgpad\\";
 
-    /**
-     * @brief Files that make up the bundled driver package.
-     */
-    constexpr std::wstring_view driver_package_files[] = {L"xgpad.inf", L"xgpad.dll", L"xgpad.cat", L"xgpad.cer"};
-
-    constexpr DWORD driver_script_timeout_ms = 120000;  ///< Longest the driver management script may run.
     constexpr auto create_timeout = 10s;  ///< Maximum time to wait for PnP to create a pad.
     constexpr int create_retries = 20;  ///< Retries while a just-removed instance ID is still registered.
 
@@ -684,70 +677,6 @@ namespace platf::xgpad {
 
   std::string driver_version() {
     return cached_driver_info(false).version;
-  }
-
-  std::filesystem::path install_root() {
-    std::wstring path(32768, L'\0');
-    const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-    path.resize(length);
-    return std::filesystem::path {path}.parent_path();
-  }
-
-  bool driver_package_available(const std::filesystem::path &root) {
-    std::error_code ec;
-    const auto package = root / "drivers" / "xgpad";
-    return std::filesystem::exists(root / "scripts" / "xgpad-driver.ps1", ec) &&
-           std::ranges::all_of(driver_package_files, [&](const std::wstring_view file) {
-             return std::filesystem::exists(package / file, ec);
-           });
-  }
-
-  std::wstring driver_script_command(const std::filesystem::path &powershell, const std::filesystem::path &script, const driver_action_e action) {
-    return L"\"" + powershell.wstring() + L"\" -NoProfile -ExecutionPolicy Bypass -File \"" + script.wstring() + L"\" -Action " +
-           (action == driver_action_e::install ? L"install" : L"uninstall");
-  }
-
-  int run_driver_script(const driver_action_e action, const std::filesystem::path &root) {
-    const auto script = root / "scripts" / "xgpad-driver.ps1";
-    std::error_code ec;
-    if (!std::filesystem::exists(script, ec)) {
-      BOOST_LOG(error) << "xgpad: driver management script not found: "sv << script.string();
-      return -1;
-    }
-
-    // An absolute path keeps a powershell.exe elsewhere on PATH from running with Sunshine's privileges.
-    wchar_t system_dir[MAX_PATH];
-    const auto system_dir_length = GetSystemDirectoryW(system_dir, MAX_PATH);
-    if (system_dir_length == 0 || system_dir_length >= MAX_PATH) {
-      return -1;
-    }
-    const auto powershell = std::filesystem::path {system_dir} / "WindowsPowerShell" / "v1.0" / "powershell.exe";
-    auto command = driver_script_command(powershell, script, action);
-
-    STARTUPINFOW startup_info {};
-    startup_info.cb = sizeof(startup_info);
-    PROCESS_INFORMATION process {};
-    if (!CreateProcessW(powershell.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, root.c_str(), &startup_info, &process)) {
-      BOOST_LOG(error) << "xgpad: couldn't run the driver management script: "sv << GetLastError();
-      return -1;
-    }
-    auto close_handles = util::fail_guard([&process]() {
-      CloseHandle(process.hThread);
-      CloseHandle(process.hProcess);
-    });
-
-    if (WaitForSingleObject(process.hProcess, driver_script_timeout_ms) != WAIT_OBJECT_0) {
-      BOOST_LOG(error) << "xgpad: the driver management script timed out"sv;
-      TerminateProcess(process.hProcess, 1);
-      WaitForSingleObject(process.hProcess, 5000);
-      return -1;
-    }
-
-    DWORD exit_code = 0;
-    if (!GetExitCodeProcess(process.hProcess, &exit_code)) {
-      return -1;
-    }
-    return static_cast<int>(exit_code);
   }
 
   bool is_xgpad_instance_id(const std::wstring_view instance_id) {
