@@ -166,6 +166,18 @@ public static class HdrControl {
         }
     }
 
+    // Names a display that doesn't report a name of its own by how it's connected.
+    static string FallbackName(int outputTechnology, uint targetId) {
+        switch (outputTechnology) {
+            case 5: return "HDMI display";
+            case 10: return "DisplayPort display";
+            case 11:
+            case 13:
+            case unchecked((int)0x80000000): return "Built-in display";
+            default: return "Display " + targetId;
+        }
+    }
+
     // Returns every active display. The primary display's desktop starts at (0,0).
     public static List<Display> GetDisplays() {
         PathInfo[] paths;
@@ -196,7 +208,7 @@ public static class HdrControl {
             TargetName name = new TargetName();
             name.Header = MakeHeader<TargetName>(GetTargetName, display.TargetAdapter, display.TargetId);
             Check(GetInfo(ref name));
-            display.FriendlyName = name.FriendlyName;
+            display.FriendlyName = string.IsNullOrEmpty(name.FriendlyName) ? FallbackName(name.OutputTechnology, display.TargetId) : name.FriendlyName;
             display.DevicePath = name.DevicePath;
             displays.Add(display);
         }
