@@ -239,6 +239,24 @@ TEST(ClientCommandsOffer, AppCommandsFormAGroup) {
   EXPECT_FALSE(client_commands::find(offer, "missing"));
 }
 
+TEST(ClientCommandsOffer, CommandsThatAreTurnedOffAreNotOffered) {
+  client_commands::command_t on {.id = "on", .label = "On"};
+  client_commands::command_t off {.id = "off", .label = "Off", .enabled = false};
+
+  auto offer = client_commands::make_offer({on, off}, "Desktop", {off});
+  ASSERT_EQ(offer.commands.size(), 1);
+  EXPECT_EQ(offer.commands[0].id, "on");
+  EXPECT_TRUE(offer.groups.empty());  // The application's only command is off
+  EXPECT_FALSE(client_commands::find(offer, "off"));  // So a client can't run it either
+
+  offer = client_commands::make_offer({}, "Desktop", {off, on});
+  ASSERT_EQ(offer.groups.size(), 1);
+  ASSERT_EQ(offer.groups[0].commands.size(), 1);
+  EXPECT_EQ(offer.groups[0].commands[0].id, "on");
+
+  EXPECT_EQ(client_commands::enabled_commands({off, on, off}).size(), 1);
+}
+
 TEST(ClientCommandsOffer, NoGroupWithoutAnAppOrItsCommands) {
   client_commands::command_t app {.id = "a", .label = "App"};
   EXPECT_TRUE(client_commands::make_offer({}, "", {app}).groups.empty());
@@ -438,6 +456,13 @@ TEST(ClientCommandsSave, DefinitionsRoundTrip) {
   EXPECT_FALSE(json.contains("steps"));
 
   EXPECT_EQ(client_commands::to_json(std::vector<client_commands::command_t> {keys, script}).size(), 2);
+
+  // Only a command that's turned off says so, so the others read as before
+  EXPECT_TRUE(keys.enabled);
+  EXPECT_FALSE(client_commands::to_json(keys).contains("enabled"));
+  auto off = parse_valid(R"({"id": "o", "label": "Off", "type": "keys", "steps": [[27]], "enabled": false})");
+  EXPECT_FALSE(off.enabled);
+  EXPECT_EQ(client_commands::to_json(off)["enabled"], false);
 }
 
 TEST(ClientCommandsSave, StrictListsRejectAnythingInvalid) {
@@ -616,6 +641,20 @@ TEST(ClientCommandsPrograms, OffersTheForegroundProgramsGroups) {
   EXPECT_EQ(offered[0].commands.size(), 1);
 
   EXPECT_TRUE(client_commands::program_offer({with_commands}, "").empty());
+
+  // Only the commands that are on, and no group when none are
+  auto mixed = parse_group(R"({"label": "Mixed", "programs": ["notepad.exe"], "commands": [
+    {"label": "Off", "type": "keys", "steps": [[27]], "enabled": false},
+    {"label": "On", "type": "keys", "steps": [[13]]}
+  ]})");
+  auto all_off = parse_group(R"({"label": "All Off", "programs": ["notepad.exe"], "commands": [
+    {"label": "Off", "type": "keys", "steps": [[27]], "enabled": false}
+  ]})");
+  offered = client_commands::program_offer({mixed, all_off}, "notepad.exe");
+  ASSERT_EQ(offered.size(), 1);
+  EXPECT_EQ(offered[0].label, "Mixed");
+  ASSERT_EQ(offered[0].commands.size(), 1);
+  EXPECT_EQ(offered[0].commands[0].label, "On");
 }
 
 TEST(ClientCommandsPrograms, GroupsRoundTrip) {
@@ -774,6 +813,21 @@ TEST(ClientCommandsPluginOverrides, ParsesAndRoundTrips) {
   EXPECT_EQ(overrides["nyrna/toggle"].icon, "material:pause");
   EXPECT_EQ(client_commands::to_json(overrides), json::parse(R"({"nyrna/toggle": {"label": "Pause Game", "icon": "material:pause"}, "p/label-only": {"label": "Only"}})"));
   EXPECT_TRUE(client_commands::parse_plugin_overrides(json::array()).empty());
+}
+
+TEST(ClientCommandsPluginOverrides, TurningACommandOffIsKept) {
+  auto overrides = client_commands::parse_plugin_overrides(json::parse(R"({
+    "p/off": {"enabled": false},
+    "p/on": {"enabled": true},
+    "p/off-renamed": {"label": "Renamed", "enabled": false}
+  })"));
+  ASSERT_EQ(overrides.size(), 2);  // Being on changes nothing on its own
+  EXPECT_FALSE(overrides["p/off"].enabled);
+  EXPECT_FALSE(overrides["p/off-renamed"].enabled);
+  EXPECT_EQ(client_commands::to_json(overrides), json::parse(R"({
+    "p/off": {"enabled": false},
+    "p/off-renamed": {"label": "Renamed", "enabled": false}
+  })"));
 }
 
 TEST(ClientCommandsPluginOverrides, ProgramsKeepTheDifferenceBetweenAbsentAndEmpty) {

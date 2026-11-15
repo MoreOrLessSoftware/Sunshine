@@ -156,6 +156,7 @@
     "icon": "Icon",
     "keeps_menu_open": "Keeps menu open",
     "in_plugin_group": "In the plugin's group",
+    "offered": "Offer this command to clients",
     "only_with_programs": "Only with {programs}",
     "key": "Key",
     "keys": "Keys",

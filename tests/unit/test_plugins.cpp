@@ -2287,6 +2287,8 @@ TEST_F(PluginsTest, OverridesReplaceTheProgramsACommandIsLimitedTo) {
   any.programs = programs_t {};
   client_commands::plugin_override_t label_only;
   label_only.label = "Renamed";
+  client_commands::plugin_override_t off;
+  off.enabled = false;
 
   // An override that doesn't set programs keeps the plugin's
   client_commands::set_foreground_program_for_testing("notepad.exe");
@@ -2302,6 +2304,9 @@ TEST_F(PluginsTest, OverridesReplaceTheProgramsACommandIsLimitedTo) {
   // An empty list removes the limit
   client_commands::set_foreground_program_for_testing("notepad.exe");
   EXPECT_EQ(offered_ids({{"p/limited", any}}), both);
+
+  // A command that's turned off isn't offered, whatever else its override sets
+  EXPECT_EQ(offered_ids({{"p/limited", any}, {"p/open", off}}), ids_t {"plugin:p/limited"});
 
   // A command the plugin didn't limit can be limited
   EXPECT_EQ(offered_ids({{"p/open", replaced}}), none);

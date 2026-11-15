@@ -53,6 +53,7 @@ namespace client_commands {
     bool elevated = false;  ///< Whether a `script` command runs elevated.
     std::map<std::string, std::string> env;  ///< Variables added to a `script` command's environment, such as a plugin's.
     std::filesystem::path log_file;  ///< File a `script` command's output is added to, or empty to discard it.
+    bool enabled = true;  ///< Whether clients are offered the command; a disabled one is kept but not offered.
   };
 
   /**
@@ -77,12 +78,13 @@ namespace client_commands {
   };
 
   /**
-   * @brief The user's label, icon and programs for a command that comes with a plugin.
+   * @brief The user's label, icon, programs and on or off setting for a command that comes with a plugin.
    */
   struct plugin_override_t {
     std::string label;  ///< Label to show instead of the plugin's, or empty to keep it.
     std::string icon;  ///< Icon to show instead of the plugin's, such as `material:<name>`, or empty to keep it.
     std::optional<std::vector<std::string>> programs;  ///< Programs to limit the command to instead of the plugin's, empty for no limit, or `std::nullopt` to keep the plugin's.
+    bool enabled = true;  ///< Whether clients are offered the command.
   };
 
   /**
@@ -258,9 +260,17 @@ namespace client_commands {
    *
    * @param groups Every program group.
    * @param host The programs on the host.
-   * @return A `program` group for each matching group that has commands.
+   * @return A `program` group for each matching group with commands that are turned on, holding just those.
    */
   std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, const host_programs_t &host);
+
+  /**
+   * @brief Drop the commands that are turned off.
+   *
+   * @param commands Commands to filter.
+   * @return The commands whose `enabled` is set, in the same order.
+   */
+  std::vector<command_t> enabled_commands(std::vector<command_t> commands);
 
   /**
    * @brief Return the program in the foreground on the host.
@@ -423,7 +433,8 @@ namespace client_commands {
    * @param global Global commands.
    * @param app_name Name of the application being streamed, or empty for none.
    * @param app_commands Commands of the application being streamed.
-   * @return The global commands, then a group for the application when it has commands.
+   * @return The global commands that are turned on, then a group for the application when it has commands
+   *         that are turned on.
    */
   offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands);
 

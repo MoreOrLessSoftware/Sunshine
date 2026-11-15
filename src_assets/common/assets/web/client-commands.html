@@ -33,6 +33,12 @@
       background-color: var(--color-bg-subtle);
     }
 
+    /* A command that's turned off: kept, but not offered to clients */
+    .command-off .command-icon,
+    .command-off .command-text {
+      opacity: 0.5;
+    }
+
     .command-summary {
       font-family: var(--bs-font-monospace);
       font-size: 0.85rem;
@@ -217,12 +223,13 @@
               <a :href="'./plugins#plugin-' + encodeURIComponent(currentPlugin.id)">{{ $t('client_commands.plugin_settings') }}</a>
             </div>
             <ul class="list-group mb-3">
-              <li class="list-group-item" v-for="command in currentPlugin.client_commands" :key="command.id">
+              <li class="list-group-item" v-for="command in currentPlugin.client_commands" :key="command.id"
+                  :class="{'command-off': !pluginEnabled(command)}">
                 <div class="d-flex align-items-center gap-3">
                   <span class="command-icon">
                     <span class="material-icon" v-if="glyph(pluginIcon(command))">{{ glyph(pluginIcon(command)) }}</span>
                   </span>
-                  <div class="flex-grow-1 min-w-0">
+                  <div class="flex-grow-1 min-w-0 command-text">
                     <div class="fw-semibold">
                       {{ pluginLabel(command) }}
                       <span class="badge bg-info text-dark ms-1">{{ command.top_level ? $t('client_commands.top_level') : $t('client_commands.in_plugin_group') }}</span>
@@ -236,6 +243,10 @@
                       <keyboard :size="14" class="icon" v-else></keyboard>
                       {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}
                     </div>
+                  </div>
+                  <div class="form-check form-switch mb-0" :title="$t('client_commands.offered')">
+                    <input class="form-check-input" type="checkbox" role="switch" :checked="pluginEnabled(command)"
+                           @change="setPluginEnabled(command, $event.target.checked)" :aria-label="$t('client_commands.offered')">
                   </div>
                   <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="isPluginCommandCustomized(command)" @click="resetPluginCommand(command)">
                     {{ $t('client_commands.reset_plugin_command') }}
@@ -292,11 +303,11 @@
           <div v-if="currentList.length === 0 && !editor" class="alert alert-secondary">{{ $t('client_commands.empty') }}</div>
           <ul class="list-group mb-3" v-if="currentList.length > 0">
             <li class="list-group-item d-flex align-items-center gap-3" v-for="(command, i) in currentList" :key="command.id"
-                :class="{'list-group-item-primary': editor && editor.index === i}">
+                :class="{'list-group-item-primary': editor && editor.index === i, 'command-off': !command.enabled}">
               <span class="command-icon">
                 <span class="material-icon" v-if="glyph(command.icon)">{{ glyph(command.icon) }}</span>
               </span>
-              <div class="flex-grow-1 min-w-0">
+              <div class="flex-grow-1 min-w-0 command-text">
                 <div class="fw-semibold">
                   {{ command.label }}
                   <span class="badge bg-warning text-dark ms-1" v-if="command.type === 'script' && command.elevated">{{ $t('_common.elevated') }}</span>
@@ -307,6 +318,10 @@
                   <square-terminal :size="14" class="icon" v-else></square-terminal>
                   {{ command.type === 'keys' ? describeSteps(command.steps) : command.cmd }}
                 </div>
+              </div>
+              <div class="form-check form-switch mb-0" :title="$t('client_commands.offered')">
+                <input class="form-check-input" type="checkbox" role="switch" v-model="command.enabled" :disabled="!!editor"
+                       :aria-label="$t('client_commands.offered')">
               </div>
               <div class="btn-group btn-group-sm" role="group">
                 <button type="button" class="btn btn-outline-secondary" :disabled="i === 0 || !!editor" @click="move(i, -1)"
@@ -577,6 +592,7 @@
       cmd: command.cmd || '',
       'working-dir': command['working-dir'] || '',
       elevated: !!command.elevated,
+      enabled: command.enabled !== false,
     };
   }
 
@@ -655,6 +671,10 @@
       out.cmd = command.cmd.trim();
       out['working-dir'] = command['working-dir'].trim();
       out.elevated = command.elevated;
+    }
+    // Only a command that's off says so, as the server writes it
+    if (!command.enabled) {
+      out.enabled = false;
     }
     return out;
   }
@@ -806,6 +826,7 @@
             icon: value.icon || '',
             programsMode: Array.isArray(value.programs) ? (value.programs.length > 0 ? 'only' : 'any') : 'plugin',
             programs: Array.isArray(value.programs) ? [...value.programs] : [],
+            enabled: value.enabled !== false,
           }]));
           this.pluginEditKey = null;
           this.markSaved();
@@ -871,11 +892,34 @@
           this.pluginEditKey = null;
         } else {
           if (!this.pluginOverrides[key]) {
-            this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: []};
+            this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: [], enabled: true};
           }
           this.pluginEditKey = key;
         }
         this.iconPicker.target = null;
+      },
+      /**
+       * Whether clients are offered a plugin command.
+       *
+       * @param {object} command The command, as the plugin lists it.
+       * @returns {boolean} `false` once it's turned off here.
+       */
+      pluginEnabled(command) {
+        const override = this.pluginOverrides[this.pluginKey(command)];
+        return !override || override.enabled !== false;
+      },
+      /**
+       * Turn a plugin command on or off for clients.
+       *
+       * @param {object} command The command, as the plugin lists it.
+       * @param {boolean} enabled Whether clients are offered it.
+       */
+      setPluginEnabled(command, enabled) {
+        const key = this.pluginKey(command);
+        if (!this.pluginOverrides[key]) {
+          this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: [], enabled: true};
+        }
+        this.pluginOverrides[key].enabled = enabled;
       },
       resetPluginCommand(command) {
         const override = this.pluginOverrides[this.pluginKey(command)];
@@ -900,6 +944,9 @@
           const programs = this.overridePrograms(override);
           if (programs !== null) {
             entry.programs = programs;
+          }
+          if (override.enabled === false) {
+            entry.enabled = false;
           }
           if (Object.keys(entry).length > 0) {
             out[key] = entry;

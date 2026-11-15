@@ -274,6 +274,7 @@ namespace client_commands {
     }
     command.icon = string_member(json, "icon");
     command.close_menu = bool_member(json, "close-menu", true);
+    command.enabled = bool_member(json, "enabled", true);
 
     const auto type = string_member(json, "type");
     if (type == "keys") {
@@ -454,6 +455,7 @@ namespace client_commands {
       }
 
       plugin_override_t entry {string_member(json, "label"), string_member(json, "icon")};
+      entry.enabled = bool_member(json, "enabled", true);
       if (!entry.icon.empty() && !entry.icon.starts_with("material:")) {
         error = std::format("\"{}\": the icon must be material:<name>", key);
         return std::nullopt;
@@ -474,10 +476,10 @@ namespace client_commands {
      * @brief Check whether an override of a plugin command changes anything.
      *
      * @param entry Override to check.
-     * @return `true` when it sets a label, an icon or programs.
+     * @return `true` when it sets a label, an icon or programs, or turns the command off.
      */
     bool changes_something(const plugin_override_t &entry) {
-      return !entry.label.empty() || !entry.icon.empty() || entry.programs.has_value();
+      return !entry.label.empty() || !entry.icon.empty() || entry.programs.has_value() || !entry.enabled;
     }
   }  // namespace
 
@@ -546,6 +548,9 @@ namespace client_commands {
       }
       if (entry.programs) {
         item["programs"] = *entry.programs;
+      }
+      if (!entry.enabled) {
+        item["enabled"] = false;
       }
       json[key] = std::move(item);
     }
@@ -627,11 +632,19 @@ namespace client_commands {
     return matches(group.programs, program);
   }
 
+  std::vector<command_t> enabled_commands(std::vector<command_t> commands) {
+    std::erase_if(commands, [](const command_t &command) {
+      return !command.enabled;
+    });
+    return commands;
+  }
+
   std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, const host_programs_t &host) {
     std::vector<group_t> offered;
     for (const auto &group : groups) {
-      if (!group.commands.empty() && matches(group.programs, host)) {
-        offered.push_back(group_t {"program", group.label, group.icon, group.commands});
+      auto commands = enabled_commands(group.commands);
+      if (!commands.empty() && matches(group.programs, host)) {
+        offered.push_back(group_t {"program", group.label, group.icon, std::move(commands)});
       }
     }
     return offered;
@@ -716,6 +729,10 @@ namespace client_commands {
       {"icon", command.icon},
       {"close-menu", command.close_menu},
     };
+    // Only written when off, so commands that are on read the same as before the setting existed
+    if (!command.enabled) {
+      json["enabled"] = false;
+    }
 
     if (command.type == type_e::keys) {
       json["type"] = "keys";
@@ -837,7 +854,8 @@ namespace client_commands {
 
   offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands) {
     offer_t offer;
-    offer.commands = std::move(global);
+    offer.commands = enabled_commands(std::move(global));
+    app_commands = enabled_commands(std::move(app_commands));
 
     if (!app_name.empty() && !app_commands.empty()) {
       offer.groups.push_back(group_t {"app", app_name, {}, std::move(app_commands)});

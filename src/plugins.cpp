@@ -2710,6 +2710,9 @@ namespace plugins {
       for (const auto &source : manifest.client_commands) {
         const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id));
         const bool has_override = entry != overrides.end();
+        if (has_override && !entry->second.enabled) {
+          continue;
+        }
         const auto &programs = has_override && entry->second.programs ? *entry->second.programs : source.programs;
         if (!programs.empty() && !client_commands::matches(programs, host)) {
           continue;
