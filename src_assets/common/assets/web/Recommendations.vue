@@ -9,7 +9,7 @@
           <div class="recommendation-icon" aria-hidden="true">
             <monitor v-if="item.id === 'virtual_display'" :size="21"></monitor>
             <gauge v-else-if="item.id === 'vrr_minimum_fps'" :size="21"></gauge>
-            <cpu v-else-if="item.id === 'nvenc_latency'" :size="21"></cpu>
+            <cpu v-else-if="item.id === 'nvenc_latency' || item.id === 'amf_direct'" :size="21"></cpu>
             <gamepad-2 v-else :size="21"></gamepad-2>
           </div>
           <div class="recommendation-body">
@@ -211,6 +211,13 @@ export default {
         }
       }
 
+      if (this.config.active_encoder === 'amdvce') {
+        const changes = this.amfChanges();
+        if (changes.length || keepResult('amf_direct')) {
+          list.push({id: 'amf_direct', href: './config#amd_direct', changes});
+        }
+      }
+
       if (this.config.platform === 'windows' && (this.suggestXgpad || keepResult('xgpad'))) {
         list.push({id: 'xgpad', href: './plugins'});
       }
@@ -269,6 +276,27 @@ export default {
       }
       if ((c.nvenc_split_encode ?? 'driver_decides') !== 'driver_decides') {
         changes.push({key: 'nvenc_split_encode', value: 'driver_decides', label: t('config.nvenc_split_encode_driver_decides_def')});
+      }
+      return changes;
+    },
+
+    /**
+     * The AMD AMF settings that differ from AMF Direct with each AV1 and HEVC frame encoded in 4 parts, which
+     * AMF hands over as each finishes.
+     *
+     * @returns {object[]} Each setting's config `key`, the `value` to save and a `label` to show.
+     */
+    amfChanges() {
+      const c = this.config;
+      const changes = [];
+      if (!isTruthy(c.amd_direct, false)) {
+        changes.push({key: 'amd_direct', value: 'enabled', label: this.$t('_common.enabled')});
+      }
+      if (`${c.amd_av1_tiles ?? 1}`.trim() !== '4') {
+        changes.push({key: 'amd_av1_tiles', value: 4, label: '4'});
+      }
+      if (`${c.amd_hevc_slices ?? 1}`.trim() !== '4') {
+        changes.push({key: 'amd_hevc_slices', value: 4, label: '4'});
       }
       return changes;
     },

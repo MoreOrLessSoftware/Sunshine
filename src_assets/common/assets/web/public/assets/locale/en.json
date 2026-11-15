@@ -585,6 +585,8 @@
     "plugin_notice_from": "From the {name} plugin",
     "plugin_notice_open": "Open",
     "pre_release_available": "Pre-release {version} available",
+    "rec_amf_direct_desc": "Sunshine is encoding with AMD AMF. AMF Direct sends AV1 and HEVC through AMD's AMF runtime instead of FFmpeg, and splitting each frame into 4 tiles (AV1) or slices (HEVC) lets Sunshine send each part as soon as AMF finishes it, which lowers latency.",
+    "rec_amf_direct_title": "Lower AMD Encoding Latency",
     "rec_applied_restarting": "Saved. Sunshine is restarting to apply the change.",
     "rec_apply_confirm": "Save this change and restart Sunshine? A stream in progress will end.",
     "rec_apply_failed": "The change could not be made: {error}",
