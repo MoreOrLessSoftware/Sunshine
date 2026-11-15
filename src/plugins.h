@@ -67,9 +67,39 @@ namespace plugins {
   constexpr std::size_t MAX_CHOICES_FILE_SIZE = 256 * 1024;
 
   /**
-   * @brief How long a choices script may run before it is stopped.
+   * @brief How long a choices or status script may run before it is stopped.
    */
   constexpr std::chrono::milliseconds DEFAULT_CHOICES_TIMEOUT = std::chrono::seconds(15);
+
+  /**
+   * @brief Largest file, in bytes, a status script may write.
+   */
+  constexpr std::size_t MAX_STATUS_FILE_SIZE = 256 * 1024;
+
+  /**
+   * @brief Most notices a status script may report.
+   */
+  constexpr std::size_t MAX_NOTICES = 10;
+
+  /**
+   * @brief Longest title, in bytes, of a notice a status script reports.
+   */
+  constexpr std::size_t MAX_NOTICE_TITLE_LENGTH = 200;
+
+  /**
+   * @brief Longest text, in bytes, of a notice a status script reports.
+   */
+  constexpr std::size_t MAX_NOTICE_TEXT_LENGTH = 2000;
+
+  /**
+   * @brief Longest link, in bytes, of a notice a status script reports.
+   */
+  constexpr std::size_t MAX_NOTICE_HREF_LENGTH = 512;
+
+  /**
+   * @brief Longest button text, in bytes, of a notice a status script reports.
+   */
+  constexpr std::size_t MAX_NOTICE_ACTION_LENGTH = 64;
 
   /**
    * @brief A configuration option declared by a plugin manifest.
@@ -110,6 +140,7 @@ namespace plugins {
     std::string connect_script;  ///< Runs when a client resumes the running application.
     std::string disconnect_script;  ///< Runs when the last client leaves the application running.
     std::string apply;  ///< Puts changed options into effect when they are saved. Always runs elevated.
+    std::string status;  ///< Reports the plugin's state and notices for the web UI. Runs as the signed-in user.
   };
 
   /**
@@ -169,6 +200,8 @@ namespace plugins {
     int order;  ///< Do scripts run in ascending order, undo scripts in descending order.
     bool elevated;  ///< Whether the do and undo scripts run elevated.
     bool manages_display;  ///< Whether the plugin sets up the display itself, replacing Sunshine's display device configuration.
+    bool idle_only;  ///< Whether the plugin can only be installed or uninstalled while no stream is running.
+    bool default_active;  ///< Whether a bundled plugin is installed and activated the first time Sunshine starts with it.
     scripts_t scripts;  ///< Scripts the plugin provides.
     std::vector<option_t> options;  ///< Configuration options.
     std::vector<action_t> actions;  ///< Buttons that run scripts on demand.
@@ -189,6 +222,7 @@ namespace plugins {
     std::string installed_version;  ///< Manifest version whose install script last succeeded, or empty when not installed.
     std::string origin;  ///< Folder or update feed URL a custom plugin was last imported from, or empty.
     nlohmann::json clients = nlohmann::json::object();  ///< Overrides for each client, keyed by its UUID, as `{"active": false, "options": {...}}` with either key optional.
+    bool installed_before = false;  ///< Whether the plugin was ever installed, so a `default_active` one isn't installed again after the user uninstalls it.
   };
 
   /**
@@ -480,8 +514,9 @@ namespace plugins {
   /**
    * @brief Start reinstalling, in the background, the bundled plugins whose version changed since they were installed.
    *
-   * Sunshine calls it once at startup, since bundled plugins only change when Sunshine is updated. The plugins are
-   * reinstalled one at a time, after any operation already running, and each is tried once; a failure is shown on
+   * Sunshine calls it once at startup, since bundled plugins only change when Sunshine is updated. It also installs
+   * and activates each bundled plugin whose manifest sets `default_active` and that was never installed. The plugins
+   * are installed one at a time, after any operation already running, and each is tried once; a failure is shown on
    * the plugin's page and the plugin waits to be reinstalled from the web UI. When install scripts can't run yet
    * because no user is signed in, it waits for one first. Custom plugins are never reinstalled automatically.
    * Returns immediately; `cancel_task()` and `load()` stop it.
@@ -682,9 +717,29 @@ namespace plugins {
    * @param error Receives the reason when the request is rejected.
    * @param activate Whether to activate the plugin once an install succeeds. Ignored for uninstall.
    * @param action_id Action to run when `action` is `action_e::run`; the plugin must be installed.
-   * @return Outcome of the request.
+   * @return Outcome of the request: `result_e::busy` too when another operation is running, or when the plugin is
+   *         `idle_only` and a stream is running.
    */
   result_e start_task(const std::string &id, action_e action, std::string &error, bool activate = false, const std::string &action_id = {});
+
+  /**
+   * @brief Check whether a plugin can only be installed or uninstalled while no stream is running.
+   *
+   * @param id Plugin ID.
+   * @return true if the plugin exists and its manifest sets `idle_only`.
+   */
+  bool idle_only(const std::string &id);
+
+  /**
+   * @brief Check whether a plugin does anything for a stream, so applications and clients can turn it off.
+   *
+   * A plugin that only installs something, such as a driver, does the same for every stream.
+   *
+   * @param manifest Plugin to check.
+   * @return `true` when the plugin has a do, undo, connect or disconnect script or client commands, or sets up
+   *         the display.
+   */
+  bool per_stream(const manifest_t &manifest);
 
   /**
    * @brief Check whether a choices script may offer a value.
@@ -731,11 +786,51 @@ namespace plugins {
   result_e list_choices(const std::string &id, const std::string &option_id, std::vector<choice_t> &out, std::string &error);
 
   /**
-   * @brief Replace how long `list_choices()` lets a choices script run.
+   * @brief Replace how long `list_choices()` and `plugin_status()` let a script run.
    *
    * @param timeout Longest run time.
    */
   void set_choices_timeout_for_testing(std::chrono::milliseconds timeout);
+
+  /**
+   * @brief Check the status a status script wrote, and its notices.
+   *
+   * The status is an object. Its optional `notices` is an array of at most `MAX_NOTICES` objects, each with a
+   * `title`, and optionally a `text`, a `level` of `info` (the default) or `warning`, an `href` starting with `./`
+   * (a page of the web UI) or `https://`, and an `action`, the text of the button that opens `href`. Other fields
+   * are kept as they are, for the plugin's panel.
+   *
+   * @param node Parsed JSON the script wrote.
+   * @param out Receives the status, with each notice holding exactly `level`, `title`, `text`, `href` and `action`.
+   * @param error Receives the reason when the status is rejected.
+   * @return `false` when the status isn't an object or a notice is invalid.
+   */
+  bool parse_status(const nlohmann::json &node, nlohmann::json &out, std::string &error);
+
+  /**
+   * @brief Get a plugin's status by running its status script.
+   *
+   * The script runs like a choices script, without elevation, as the signed-in user, in the plugin's data directory
+   * with the plugin's environment and `SUNSHINE_PLUGIN_STATUS_FILE`, which names the file the script writes its
+   * status to, as JSON (see `parse_status()`). Its output goes to `.status.log` in the data directory.
+   *
+   * @param id Plugin ID.
+   * @param out Receives the status.
+   * @param error Receives the reason when there is no status.
+   * @return `ok`, `not_found` (no such plugin), `invalid` (the plugin has no status script, or the script failed or
+   *         wrote a bad status), `not_installed`, or `unavailable` (no user is signed in).
+   */
+  result_e plugin_status(const std::string &id, nlohmann::json &out, std::string &error);
+
+  /**
+   * @brief Collect the notices of every installed, active plugin with a status script, for the home page.
+   *
+   * The status scripts run at the same time. A plugin whose script fails, or that needs a reinstall, adds nothing.
+   *
+   * @return Array of notices in plugin order, as `parse_status()` describes them, each with the `plugin` ID and its
+   *         `plugin_name` added. Empty when no user is signed in.
+   */
+  nlohmann::json plugin_notices();
 
   /**
    * @brief Return the HTML file of a plugin's panel.
@@ -808,6 +903,15 @@ namespace plugins {
    * @param callback Function to call, or an empty function to call nothing.
    */
   void set_change_callback(std::function<void()> callback);
+
+  /**
+   * @brief Set the function that tells whether a stream is running.
+   *
+   * Installing or uninstalling a plugin whose manifest sets `idle_only` is refused while it returns true.
+   *
+   * @param check Function returning whether a stream is running, or an empty function for never.
+   */
+  void set_stream_check(std::function<bool()> check);
 
   /**
    * @brief Block until the running install or uninstall finishes.

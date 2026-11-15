@@ -43,6 +43,7 @@
 #include "nvhttp.h"
 #include "plugins.h"
 #include "process.h"
+#include "rtsp.h"
 #include "system_tray.h"
 #include "upnp.h"
 #include "video.h"
@@ -446,6 +447,9 @@ int main(int argc, char *argv[]) {
   auto plugins_deinit_guard = plugins::init();
   plugins::set_change_callback([]() {
     proc::refresh(config::stream.file_apps);
+  });
+  plugins::set_stream_check([]() {
+    return rtsp_stream::session_count() > 0;
   });
   proc::refresh(config::stream.file_apps);
   // After the callback is set, so the applications pick up each plugin as its reinstall finishes.

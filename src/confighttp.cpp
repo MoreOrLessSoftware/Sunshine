@@ -3274,6 +3274,88 @@ namespace confighttp {
   }
 
   /**
+   * @brief Get a plugin's status, running its status script.
+   *
+   * The script's status is returned as it wrote it, except that each notice holds exactly `level`, `title`, `text`,
+   * `href` and `action`:
+   * @code{.json}
+   * {
+   *   "status": true,
+   *   "result": {
+   *     "version": "1.2.3",
+   *     "notices": [
+   *       {"level": "warning", "title": "Driver outdated", "text": "Update it.", "href": "./plugins", "action": "Open"}
+   *     ]
+   *   }
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/status?id=virtual-hid| GET| null}
+   */
+  void getPluginStatus(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    const auto query_params = request->parse_query_string();
+    const auto id_it = query_params.find("id");
+    if (id_it == query_params.end()) {
+      bad_request(response, request, "Plugin id is required");
+      return;
+    }
+
+    nlohmann::json result;
+    std::string error;
+    if (const auto outcome = plugins::plugin_status(id_it->second, result, error); outcome != plugins::result_e::ok) {
+      send_plugin_error(response, request, outcome, error);
+      return;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["result"] = std::move(result);
+    send_response(response, output_tree);
+  }
+
+  /**
+   * @brief Get the notices of every installed, active plugin with a status script, for the home page.
+   *
+   * The status scripts run at the same time, and a plugin whose script fails adds nothing:
+   * @code{.json}
+   * {
+   *   "status": true,
+   *   "notices": [
+   *     {
+   *       "plugin": "virtual-hid",
+   *       "plugin_name": "Virtual HID Driver",
+   *       "level": "warning",
+   *       "title": "Driver outdated",
+   *       "text": "Update it.",
+   *       "href": "./plugins",
+   *       "action": "Open"
+   *     }
+   *   ]
+   * }
+   * @endcode
+   *
+   * @api_examples{/api/plugins/notices| GET| null}
+   */
+  void getPluginNotices(const resp_https_t &response, const req_https_t &request) {
+    if (!authenticate(response, request)) {
+      return;
+    }
+
+    print_req(request);
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["notices"] = plugins::plugin_notices();
+    send_response(response, output_tree);
+  }
+
+  /**
    * @brief Get a plugin's panel page, shown in a frame on the plugin's card.
    *
    * Unlike every other response, the page may be framed by Sunshine's own pages (and no others).
@@ -3726,6 +3808,8 @@ namespace confighttp {
     server.resource["^/api/plugins/guide$"]["GET"] = getPluginGuide;
     server.resource["^/api/plugins/log$"]["GET"] = getPluginLog;
     server.resource["^/api/plugins/choices$"]["GET"] = getPluginChoices;
+    server.resource["^/api/plugins/status$"]["GET"] = getPluginStatus;
+    server.resource["^/api/plugins/notices$"]["GET"] = getPluginNotices;
     server.resource["^/api/plugins/panel$"]["GET"] = getPluginPanel;
     server.resource["^/api/plugins/proxy$"]["GET"] = proxyPluginRequest;
     server.resource["^/api/plugins/rescan$"]["POST"] = rescanPlugins;

@@ -255,6 +255,22 @@ namespace confighttp {
   void getPluginChoices(const resp_https_t &response, const req_https_t &request);
 
   /**
+   * @brief Get a plugin's status, running its status script.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPluginStatus(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Get the notices of every installed, active plugin with a status script, for the home page.
+   *
+   * @param response HTTP response object to populate.
+   * @param request HTTP request data from the client.
+   */
+  void getPluginNotices(const resp_https_t &response, const req_https_t &request);
+
+  /**
    * @brief Run one of a plugin's actions in the background.
    *
    * @param response HTTP response object to populate.

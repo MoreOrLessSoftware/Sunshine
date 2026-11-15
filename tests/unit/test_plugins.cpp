@@ -112,7 +112,9 @@ namespace {
       {"order", order},
       {"elevated", true},
       {"manages_display", true},
-      {"scripts", {{"install", "install.ps1"}, {"uninstall", "uninstall.ps1"}, {"do", "do.ps1"}, {"undo", "undo.ps1"}}},
+      {"idle_only", true},
+      {"default_active", true},
+      {"scripts", {{"install", "install.ps1"}, {"uninstall", "uninstall.ps1"}, {"do", "do.ps1"}, {"undo", "undo.ps1"}, {"status", "status.ps1"}}},
       {"options", json::array({
                     {{"id", "enabled"}, {"type", "boolean"}, {"label", "Enabled"}, {"default", true}},
                     {{"id", "multiplier"}, {"type", "number"}, {"label", "Multiplier"}, {"description", "Scale"}, {"default", 2}, {"min", 1}, {"max", 8}, {"step", 1}},
@@ -179,6 +181,7 @@ protected:
     plugins::reset_fetcher_for_testing();
     plugins::set_choices_timeout_for_testing(plugins::DEFAULT_CHOICES_TIMEOUT);
     plugins::set_change_callback({});
+    plugins::set_stream_check({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
     client_commands::set_running_programs_for_testing(std::nullopt);
@@ -251,6 +254,9 @@ TEST_F(PluginsTest, ParseManifestAppliesDefaults) {
   EXPECT_EQ(manifest->order, 1000);
   EXPECT_FALSE(manifest->elevated);
   EXPECT_FALSE(manifest->manages_display);
+  EXPECT_FALSE(manifest->idle_only);
+  EXPECT_FALSE(manifest->default_active);
+  EXPECT_TRUE(manifest->scripts.status.empty());
   EXPECT_TRUE(manifest->builtin);
   EXPECT_EQ(manifest->dir, builtin_dir);
   EXPECT_TRUE(manifest->scripts.install.empty());
@@ -272,6 +278,9 @@ TEST_F(PluginsTest, ParseManifestReadsEveryField) {
   EXPECT_EQ(manifest->order, 42);
   EXPECT_TRUE(manifest->elevated);
   EXPECT_TRUE(manifest->manages_display);
+  EXPECT_TRUE(manifest->idle_only);
+  EXPECT_TRUE(manifest->default_active);
+  EXPECT_EQ(manifest->scripts.status, "status.ps1");
   EXPECT_FALSE(manifest->builtin);
   EXPECT_EQ(manifest->scripts.install, "install.ps1");
   EXPECT_EQ(manifest->scripts.uninstall, "uninstall.ps1");
@@ -355,6 +364,9 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"OrderNotInteger", R"({"id":"p","order":1.5})", "'order' must be an integer"},
     invalid_manifest_t {"ElevatedNotBoolean", R"({"id":"p","elevated":"yes"})", "'elevated' must be a boolean"},
     invalid_manifest_t {"ManagesDisplayNotBoolean", R"({"id":"p","manages_display":1})", "'manages_display' must be a boolean"},
+    invalid_manifest_t {"IdleOnlyNotBoolean", R"({"id":"p","idle_only":"yes"})", "'idle_only' must be a boolean"},
+    invalid_manifest_t {"DefaultActiveNotBoolean", R"({"id":"p","default_active":1})", "'default_active' must be a boolean"},
+    invalid_manifest_t {"StatusScriptMissing", R"({"id":"p","scripts":{"status":"missing.ps1"}})", "script 'missing.ps1' does not exist"},
     invalid_manifest_t {"ScriptsNotObject", R"({"id":"p","scripts":[]})", "'scripts' must be an object"},
     invalid_manifest_t {"ScriptNotString", R"({"id":"p","scripts":{"do":1}})", "'do' must be a string"},
     invalid_manifest_t {"ScriptTraversal", R"({"id":"p","scripts":{"do":"../exists.ps1"}})", "must be a .ps1 file"},
@@ -609,6 +621,10 @@ TEST_F(PluginsTest, ListDescribesPlugins) {
   EXPECT_EQ(plugin["builtin"], true);
   EXPECT_EQ(plugin["elevated"], true);
   EXPECT_EQ(plugin["manages_display"], true);
+  EXPECT_EQ(plugin["idle_only"], true);
+  EXPECT_EQ(plugin["default_active"], true);
+  EXPECT_EQ(plugin["has_status"], true);
+  EXPECT_EQ(plugin["per_stream"], true);
   EXPECT_EQ(plugin["order"], 100);
   EXPECT_EQ(plugin["installed"], false);
   EXPECT_EQ(plugin["active"], false);
@@ -1235,6 +1251,62 @@ TEST_F(PluginsTest, PluginWithoutScriptsInstallsWithoutRunning) {
   plugins::wait_for_task();
   EXPECT_TRUE(calls.empty());
   EXPECT_EQ(find_plugin(plugins::list(), "bare")["installed"], true);
+}
+
+TEST(PluginsPerStreamTest, OnlyPluginsThatDoSomethingForAStreamArePerStream) {
+  plugins::manifest_t manifest {};
+  manifest.scripts.install = "install.ps1";
+  manifest.scripts.uninstall = "uninstall.ps1";
+  manifest.scripts.status = "status.ps1";
+  EXPECT_FALSE(plugins::per_stream(manifest));  // Like a plugin that installs a driver
+
+  for (auto *script : {&manifest.scripts.do_script, &manifest.scripts.undo_script, &manifest.scripts.connect_script, &manifest.scripts.disconnect_script}) {
+    *script = "s.ps1";
+    EXPECT_TRUE(plugins::per_stream(manifest));
+    script->clear();
+  }
+
+  manifest.client_commands.push_back({});
+  EXPECT_TRUE(plugins::per_stream(manifest));
+  manifest.client_commands.clear();
+
+  manifest.manages_display = true;
+  EXPECT_TRUE(plugins::per_stream(manifest));
+}
+
+TEST_F(PluginsTest, IdleOnlyPluginWaitsForStreamsToEnd) {
+  auto manifest = full_manifest("driver");
+  manifest["actions"] = json::array({{{"id", "check"}, {"script", "do.ps1"}}});
+  write_plugin(builtin_dir, "driver", manifest);
+  auto other = full_manifest("other");
+  other.erase("idle_only");
+  write_plugin(builtin_dir, "other", other);
+  plugins::load(paths());
+  EXPECT_TRUE(plugins::idle_only("driver"));
+  EXPECT_FALSE(plugins::idle_only("other"));
+  EXPECT_FALSE(plugins::idle_only("missing"));
+
+  bool streaming = true;
+  plugins::set_stream_check([&streaming]() {
+    return streaming;
+  });
+
+  // Only the plugin that asks for it waits, and only for install and uninstall
+  std::string error;
+  EXPECT_EQ(plugins::start_task("driver", plugins::action_e::install, error), plugins::result_e::busy);
+  EXPECT_NE(error.find("while a stream is running"), std::string::npos) << error;
+  EXPECT_EQ(plugins::start_task("driver", plugins::action_e::uninstall, error), plugins::result_e::busy);
+  ASSERT_EQ(plugins::start_task("other", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+
+  streaming = false;
+  ASSERT_EQ(plugins::start_task("driver", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  EXPECT_EQ(find_plugin(plugins::list(), "driver")["installed"], true);
+
+  streaming = true;
+  ASSERT_EQ(plugins::start_task("driver", plugins::action_e::run, error, false, "check"), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
 }
 
 TEST_F(PluginsTest, StartTaskRejectsUnknownAndConcurrentRequests) {
@@ -3407,6 +3479,301 @@ TEST_F(PluginsTest, UpdatedBundledPluginsAreReinstalledInOrderButCustomOnesAreNo
   EXPECT_EQ(find_plugin(list, "uninstalled")["installed"], false);
   EXPECT_TRUE(find_plugin(list, "current")["task"].is_null());
   EXPECT_EQ(plugins::load_state(state_file).at("second").installed_version, "2.0.0");
+}
+
+TEST(PluginsStatusTest, KeepsTheStatusAndFillsInEachNotice) {
+  const auto node = json::parse(R"({
+    "version": "1.2.3",
+    "notices": [
+      {"title": "Plain"},
+      {"level": "warning", "title": "Outdated", "text": "Update it.", "href": "./plugins", "action": "Open"},
+      {"title": "Docs", "href": "https://example.invalid/docs"}
+    ]
+  })");
+  json status;
+  std::string error;
+  ASSERT_TRUE(plugins::parse_status(node, status, error)) << error;
+  EXPECT_EQ(status["version"], "1.2.3");
+  ASSERT_EQ(status["notices"].size(), 3);
+  EXPECT_EQ(status["notices"][0], json::parse(R"({"level":"info","title":"Plain","text":"","href":"","action":""})"));
+  EXPECT_EQ(status["notices"][1], json::parse(R"({"level":"warning","title":"Outdated","text":"Update it.","href":"./plugins","action":"Open"})"));
+  EXPECT_EQ(status["notices"][2]["href"], "https://example.invalid/docs");
+
+  ASSERT_TRUE(plugins::parse_status(json::object(), status, error)) << error;
+  EXPECT_EQ(status["notices"], json::array());
+}
+
+/**
+ * @brief A status a status script may not report.
+ */
+struct invalid_status_t {
+  std::string name;  ///< Test name suffix.
+  json status;  ///< Status the script wrote.
+  std::string error;  ///< Text the error must contain.
+};
+
+/**
+ * @brief Test fixture for each rejected status.
+ */
+class PluginsInvalidStatusTest: public testing::TestWithParam<invalid_status_t> {};
+
+TEST_P(PluginsInvalidStatusTest, IsRejected) {
+  json status;
+  std::string error;
+  EXPECT_FALSE(plugins::parse_status(GetParam().status, status, error));
+  EXPECT_TRUE(error.contains(GetParam().error)) << error;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Plugins,
+  PluginsInvalidStatusTest,
+  testing::Values(
+    invalid_status_t {"NotObject", json::array(), "the status must be an object"},
+    invalid_status_t {"NoticesNotArray", {{"notices", "x"}}, "'notices' must be an array"},
+    invalid_status_t {"TooManyNotices", {{"notices", json(plugins::MAX_NOTICES + 1, {{"title", "t"}})}}, "at most 10 notices"},
+    invalid_status_t {"NoticeNotObject", {{"notices", {"x"}}}, "each notice must be an object"},
+    invalid_status_t {"TitleNotString", {{"notices", {{{"title", 1}}}}}, "'title' must be a string"},
+    invalid_status_t {"NoTitle", {{"notices", {{{"text", "t"}}}}}, "'title' must be 1 to"},
+    invalid_status_t {"LongTitle", {{"notices", {{{"title", std::string(plugins::MAX_NOTICE_TITLE_LENGTH + 1, 't')}}}}}, "'title' must be 1 to"},
+    invalid_status_t {"LongText", {{"notices", {{{"title", "t"}, {"text", std::string(plugins::MAX_NOTICE_TEXT_LENGTH + 1, 't')}}}}}, "'text' must be at most"},
+    invalid_status_t {"BadLevel", {{"notices", {{{"title", "t"}, {"level", "danger"}}}}}, "'level' must be 'info' or 'warning'"},
+    invalid_status_t {"ScriptLink", {{"notices", {{{"title", "t"}, {"href", "javascript:alert(1)"}}}}}, "'href' must start with ./ or https://"},
+    invalid_status_t {"PlainHttpLink", {{"notices", {{{"title", "t"}, {"href", "http://example.invalid"}}}}}, "'href' must start with ./ or https://"},
+    invalid_status_t {"LongLink", {{"notices", {{{"title", "t"}, {"href", "./" + std::string(plugins::MAX_NOTICE_HREF_LENGTH, 'p')}}}}}, "'href' must start with ./ or https://"},
+    invalid_status_t {"LongAction", {{"notices", {{{"title", "t"}, {"action", std::string(plugins::MAX_NOTICE_ACTION_LENGTH + 1, 'a')}}}}}, "'action' must be at most"}
+  ),
+  [](const testing::TestParamInfo<invalid_status_t> &info) {
+    return info.param.name;
+  }
+);
+
+/**
+ * @brief Test fixture with installed plugins that have status scripts.
+ */
+class PluginsStatusScriptTest: public PluginsTest {
+protected:
+  void SetUp() override {
+    PluginsTest::SetUp();
+    for (const auto *id : {"a", "b"}) {
+      write_plugin(builtin_dir, id, {{"id", id}, {"name", std::format("Plugin {}", id)}, {"scripts", {{"status", "status.ps1"}}}});
+    }
+    write_plugin(builtin_dir, "plain", {{"id", "plain"}});
+    write_text(state_file, R"({"plugins":{
+      "a":{"installed":true,"active":true},
+      "b":{"installed":true,"active":true},
+      "plain":{"installed":true,"active":true}
+    }})");
+    plugins::load(paths());
+  }
+
+  /**
+   * @brief Make the script runner write a status for each plugin, then exit.
+   *
+   * @param statuses Text each plugin's script writes, keyed by plugin ID; a plugin without one writes nothing.
+   * @param exit_code Exit code the scripts return.
+   */
+  void scripts_write(std::map<std::string, std::string> statuses, int exit_code = 0) {
+    plugins::set_script_runner_for_testing([this, statuses, exit_code](const std::string &command, bool elevated, const std::map<std::string, std::string> &env, const fs::path &working_dir, const fs::path &log_file, std::stop_token) {
+      {
+        std::scoped_lock lock {calls_mutex};
+        calls.push_back({command, elevated, env, working_dir, log_file});
+      }
+      if (const auto it = statuses.find(env.at("SUNSHINE_PLUGIN_ID")); it != statuses.end()) {
+        write_text(fs::path(env.at("SUNSHINE_PLUGIN_STATUS_FILE")), it->second);
+      }
+      return exit_code;
+    });
+  }
+};
+
+TEST_F(PluginsStatusScriptTest, RunsTheStatusScriptAsTheUser) {
+  scripts_write({{"a", "\xEF\xBB\xBF" R"({"driver":"1.0","notices":[{"title":"Hello"}]})"}});
+  json status;
+  std::string error;
+  ASSERT_EQ(plugins::plugin_status("a", status, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(status["driver"], "1.0");
+  EXPECT_EQ(status["notices"][0]["title"], "Hello");
+
+  ASSERT_EQ(calls.size(), 1);
+  const auto &call = calls[0];
+  EXPECT_EQ(call.command, plugins::script_command(builtin_dir / "a" / "status.ps1"));
+  EXPECT_FALSE(call.elevated);
+  EXPECT_EQ(call.working_dir, data_dir / "a");
+  EXPECT_EQ(call.log_file, data_dir / "a" / ".status.log");
+  const auto file = fs::path(call.env.at("SUNSHINE_PLUGIN_STATUS_FILE"));
+  EXPECT_EQ(file.parent_path(), data_dir / "a");
+  EXPECT_FALSE(fs::exists(file));
+  EXPECT_TRUE(read_text(call.log_file).contains("Reporting the status"));
+}
+
+TEST_F(PluginsStatusScriptTest, RejectsRequestsItCannotRun) {
+  json status;
+  std::string error;
+  EXPECT_EQ(plugins::plugin_status("missing", status, error), plugins::result_e::not_found);
+  EXPECT_EQ(plugins::plugin_status("plain", status, error), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains("has no status script")) << error;
+
+  std::string uninstall_error;
+  ASSERT_EQ(plugins::start_task("b", plugins::action_e::uninstall, uninstall_error), plugins::result_e::ok) << uninstall_error;
+  plugins::wait_for_task();
+  EXPECT_EQ(plugins::plugin_status("b", status, error), plugins::result_e::not_installed);
+
+  plugins::set_session_check_for_testing([] {
+    return false;
+  },
+                                         1ms);
+  EXPECT_EQ(plugins::plugin_status("a", status, error), plugins::result_e::unavailable);
+  EXPECT_TRUE(plugins::plugin_notices().empty());
+}
+
+/**
+ * @brief A status script run that gives no status.
+ */
+struct failed_status_run_t {
+  std::string name;  ///< Test name suffix.
+  std::optional<std::string> content;  ///< Text the script writes, or `std::nullopt` for nothing.
+  int exit_code;  ///< Exit code of the script.
+  std::string error;  ///< Text the error must contain.
+};
+
+/**
+ * @brief Test fixture for each failed status script run.
+ */
+class PluginsFailedStatusTest: public PluginsStatusScriptTest, public testing::WithParamInterface<failed_status_run_t> {};
+
+TEST_P(PluginsFailedStatusTest, ReportsTheReason) {
+  const auto &run = GetParam();
+  std::map<std::string, std::string> statuses;
+  if (run.content) {
+    statuses["a"] = *run.content;
+  }
+  scripts_write(statuses, run.exit_code);
+  json status;
+  std::string error;
+  EXPECT_EQ(plugins::plugin_status("a", status, error), plugins::result_e::invalid);
+  EXPECT_TRUE(error.contains(run.error)) << error;
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Plugins,
+  PluginsFailedStatusTest,
+  testing::Values(
+    failed_status_run_t {"ExitCode", "{}", 3, "the status script failed with exit code 3"},
+    failed_status_run_t {"NoFile", std::nullopt, 0, "the status script wrote no status"},
+    failed_status_run_t {"InvalidJson", "{", 0, "the status script wrote invalid JSON"},
+    failed_status_run_t {"BadStatus", "[]", 0, "the status script wrote a bad status: the status must be an object"},
+    failed_status_run_t {"TooLarge", std::string(plugins::MAX_STATUS_FILE_SIZE + 1, ' '), 0, "wrote more than"}
+  ),
+  [](const testing::TestParamInfo<failed_status_run_t> &info) {
+    return info.param.name;
+  }
+);
+
+TEST_F(PluginsStatusScriptTest, NoticesComeFromEveryActivePluginInOrder) {
+  scripts_write({
+    {"a", R"({"notices":[{"title":"From a","level":"warning"}]})"},
+    {"b", R"({"notices":[{"title":"First from b"},{"title":"Second from b"}]})"},
+  });
+  auto notices = plugins::plugin_notices();
+  ASSERT_EQ(notices.size(), 3);
+  EXPECT_EQ(notices[0]["plugin"], "a");
+  EXPECT_EQ(notices[0]["plugin_name"], "Plugin a");
+  EXPECT_EQ(notices[0]["level"], "warning");
+  EXPECT_EQ(notices[1]["title"], "First from b");
+  EXPECT_EQ(notices[2]["plugin"], "b");
+  EXPECT_EQ(calls.size(), 2);  // The plugin without a status script runs nothing
+
+  // A failing script adds nothing, and an inactive plugin isn't asked
+  scripts_write({{"b", R"({"notices":[{"title":"From b"}]})"}});
+  notices = plugins::plugin_notices();
+  ASSERT_EQ(notices.size(), 1);
+  EXPECT_EQ(notices[0]["plugin"], "b");
+
+  std::string error;
+  ASSERT_EQ(plugins::configure("b", false, std::nullopt, error), plugins::result_e::ok) << error;
+  calls.clear();
+  EXPECT_TRUE(plugins::plugin_notices().empty());
+  EXPECT_EQ(calls.size(), 1);
+}
+
+TEST_F(PluginsTest, DefaultActivePluginsAreInstalledOnceAtStartup) {
+  auto manifest = full_manifest("default");
+  manifest.erase("idle_only");
+  const auto dir = write_plugin(builtin_dir, "default", manifest);
+  auto custom = full_manifest("custom");
+  write_plugin(custom_dir, "custom", custom);
+  auto off = full_manifest("off");
+  off.erase("default_active");
+  write_plugin(builtin_dir, "off", off);
+  plugins::load(paths());
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("default", "succeeded");
+  }));
+  plugins::cancel_task();
+
+  ASSERT_EQ(calls.size(), 1);  // Custom plugins and ones that aren't on by default stay as they are
+  EXPECT_EQ(calls[0].command, plugins::script_command(dir / "install.ps1"));
+  auto list = plugins::list();
+  EXPECT_EQ(find_plugin(list, "default")["installed"], true);
+  EXPECT_EQ(find_plugin(list, "default")["active"], true);
+  EXPECT_EQ(find_plugin(list, "custom")["installed"], false);
+  EXPECT_EQ(find_plugin(list, "off")["installed"], false);
+  EXPECT_TRUE(plugins::load_state(state_file).at("default").installed_before);
+
+  // Once the user uninstalls it, it stays uninstalled
+  std::string error;
+  ASSERT_EQ(plugins::start_task("default", plugins::action_e::uninstall, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  plugins::load(paths());
+  calls.clear();
+  plugins::reinstall_updated_builtins();
+  std::this_thread::sleep_for(200ms);
+  plugins::cancel_task();
+  EXPECT_TRUE(calls.empty());
+  EXPECT_EQ(find_plugin(plugins::list(), "default")["installed"], false);
+}
+
+TEST_F(PluginsTest, AFailedDefaultInstallIsTriedOnce) {
+  auto manifest = full_manifest("default");
+  manifest.erase("idle_only");
+  write_plugin(builtin_dir, "default", manifest);
+  plugins::load(paths());
+  runner_exit_code = 1;
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("default", "failed");
+  }));
+  plugins::cancel_task();
+  EXPECT_EQ(calls.size(), 1);
+  EXPECT_EQ(find_plugin(plugins::list(), "default")["installed"], false);
+
+  // Not tried again at the next start; the user can install it from the web UI
+  plugins::load(paths());
+  calls.clear();
+  plugins::reinstall_updated_builtins();
+  std::this_thread::sleep_for(200ms);
+  plugins::cancel_task();
+  EXPECT_TRUE(calls.empty());
+}
+
+TEST_F(PluginsTest, StateRemembersPluginsThatWereInstalledBefore) {
+  write_text(state_file, R"({"plugins":{
+    "installed":{"installed":true},
+    "removed":{"installed":false,"installed_before":true},
+    "never":{"installed":false}
+  }})");
+  auto state = plugins::load_state(state_file);
+  EXPECT_TRUE(state.at("installed").installed_before);  // Installed before this was recorded
+  EXPECT_TRUE(state.at("removed").installed_before);
+  EXPECT_FALSE(state.at("never").installed_before);
+
+  ASSERT_TRUE(plugins::save_state(state_file, state));
+  state = plugins::load_state(state_file);
+  EXPECT_TRUE(state.at("removed").installed_before);
+  EXPECT_FALSE(state.at("never").installed_before);
 }
 
 TEST_F(PluginsTest, AFailedStartupReinstallIsTriedOnce) {

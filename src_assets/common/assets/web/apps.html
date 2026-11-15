@@ -839,7 +839,7 @@
 
       fetch("./api/plugins")
         .then(r => r.json())
-        .then(r => this.activePlugins = (r.plugins || []).filter(plugin => plugin.active))
+        .then(r => this.activePlugins = (r.plugins || []).filter(plugin => plugin.active && plugin.per_stream))
         .catch((e) => console.error(e));
       this.loadClientOverrides();
 

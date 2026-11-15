@@ -52,6 +52,30 @@
       </div>
     </div>
 
+    <!-- Notices from plugins' status scripts -->
+    <div class="alert my-4"
+         :class="notice.level === 'warning' ? 'alert-warning' : 'alert-info'"
+         v-for="(notice, index) in pluginNotices"
+         :key="`${notice.plugin}-${index}`">
+      <div class="d-flex align-items-center" :class="{ 'mb-3': notice.href }">
+        <alert-triangle v-if="notice.level === 'warning'" :size="32" class="icon-lg me-3 flex-shrink-0"></alert-triangle>
+        <info v-else :size="32" class="icon-lg me-3 flex-shrink-0"></info>
+        <div>
+          <p class="mb-1"><strong>{{ notice.title }}</strong></p>
+          <p class="mb-1" v-if="notice.text">{{ notice.text }}</p>
+          <p class="mb-0 small text-body-secondary">{{ $t('index.plugin_notice_from', { name: notice.plugin_name }) }}</p>
+        </div>
+      </div>
+      <a v-if="notice.href"
+         class="btn"
+         :class="notice.level === 'warning' ? 'btn-warning' : 'btn-info'"
+         :href="notice.href"
+         :target="notice.href.startsWith('https://') ? '_blank' : null"
+         :rel="notice.href.startsWith('https://') ? 'noopener noreferrer' : null">
+        {{ notice.action || $t('index.plugin_notice_open') }}
+      </a>
+    </div>
+
     <!-- Resources -->
     <div class="my-4">
       <Resource-Card :installed-version-not-stable="installedVersionNotStable"></Resource-Card>
@@ -90,6 +114,7 @@
     data() {
       return {
         installedVersionNotStable: false,
+        pluginNotices: [],
         logs: null,
         platform: "",
         controllerEnabled: false,
@@ -101,6 +126,8 @@
       }
     },
     async created() {
+      // Status scripts can take a few seconds, so the notices load on their own
+      this.loadPluginNotices();
       try {
         let config = await fetch("./api/config").then((r) => r.json());
         this.platform = config.platform;
@@ -200,6 +227,17 @@
       }
     },
     methods: {
+      /**
+       * Load the notices plugins report through their status scripts.
+       */
+      async loadPluginNotices() {
+        try {
+          const body = await fetch("./api/plugins/notices").then((r) => r.json());
+          this.pluginNotices = body.notices || [];
+        } catch (e) {
+          console.error("Failed to fetch plugin notices:", e);
+        }
+      },
       /**
        * Build a home-page notice for the current Windows virtual-input state.
        *

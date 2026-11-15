@@ -127,7 +127,9 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `order`       | No       | Plugins with a lower order run first. Defaults to 1000. The bundled plugins use 50 to 500.                          |
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. When several such plugins are active for an application, only the first in plugin order runs. Defaults to `false`. |
-| `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect` and `apply`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply`. |
+| `idle_only`   | No       | `true` when installing or uninstalling the plugin must wait until no stream is running, such as for a plugin that installs a driver a stream may be using. Defaults to `false`. |
+| `default_active` | No    | `true` for a bundled plugin that Sunshine installs and activates the first time it starts with it. A user who uninstalls it keeps it uninstalled, and an install that fails isn't tried again. Custom plugins ignore it. Defaults to `false`. |
+| `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect`, `apply` and `status`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply` and [Status and notices](#status-and-notices) for `status`. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
 | `actions`     | No       | Buttons shown on the plugin's card once it is installed. Each has an `id` (like an option ID), a `script` (a `.ps1` file directly inside the plugin folder), and optionally a `label` and `description`. Action scripts always run as administrator. |
 | `panel`       | No       | A page shown on the plugin's card once it is installed: `file` (an `.html` file directly inside the plugin folder), and optionally `port` and `height`: in pixels from 100 to 2000 (default 360), or `"auto"` to grow and shrink with the page's content, which then shouldn't set its own height to fill the frame. |
@@ -174,6 +176,36 @@ ConvertTo-Json -InputObject @($choices) -Compress | Set-Content -LiteralPath $en
 nothing; something like "Don't change" works well. Since the script's list can change, the option accepts any value
 the script could list, and a saved value the script no longer lists stays selected, marked as not found. The do and
 undo scripts should handle such a value, for example by logging a warning and leaving things as they are.
+
+## Status and notices
+A plugin can report its state, such as the version of a driver it manages, with a `status` script. Sunshine runs it
+when the plugin's panel asks for `/api/plugins/status?id=<id>` and, for every installed and active plugin, when the home
+page loads. Like a [choices script](#listing-choices), it runs as the signed-in user, without elevation, with the
+[script environment](#script-environment) and the plugin's own option values. It gets one more variable,
+`SUNSHINE_PLUGIN_STATUS_FILE`, the file to write the status to as a JSON object. It has 15 seconds to exit with 0,
+the file can't be larger than 256 KiB, and its output goes to `.status.log` in its data folder. The status file is in
+the data folder too, so grant users access to it in the install script as for choices scripts.
+
+The object can hold anything the panel needs. Its `notices`, an array of at most 10, are shown on the home page:
+
+| Field    | Required | Description                                                                                      |
+|----------|----------|--------------------------------------------------------------------------------------------------|
+| `title`  | Yes      | Up to 200 bytes.                                                                                 |
+| `text`   | No       | Up to 2000 bytes.                                                                                |
+| `level`  | No       | `info` (the default) or `warning`.                                                               |
+| `href`   | No       | A page of the web UI starting with `./`, such as `./plugins`, or an `https://` page.             |
+| `action` | No       | Text of the button that opens `href`, up to 64 bytes. Defaults to *Open*.                        |
+
+```powershell
+$status = @{ version = $version; notices = @() }
+if ($outdated) {
+    $status.notices += @{ level = 'warning'; title = 'Driver outdated'; text = "Version $version is too old."; href = './plugins' }
+}
+ConvertTo-Json -InputObject $status -Depth 4 -Compress | Set-Content -LiteralPath $env:SUNSHINE_PLUGIN_STATUS_FILE -Encoding UTF8
+```
+
+A status that isn't an object, or that has an invalid notice, is rejected as a whole, and the plugin shows no notices.
+Keep the script quick, since the home page waits for it.
 
 ## Applying options
 An option that needs more than a new value at the next stream, such as a driver setting, can set `"apply": true`.
@@ -285,7 +317,8 @@ The output of install, uninstall, action, apply, client command, do, undo, conne
 `<id>.log` in the `plugin-data` folder of the config directory, and *View log* on the plugin's page shows it. Each run
 of a do, undo, connect or disconnect script starts with a line naming it, the application and the time, and the log
 starts over once it grows past 1 MB. Installing, uninstalling, applying options or running an action also starts it
-over. The output of a choices script goes to `.choices.log` in the plugin's data folder.
+over. The output of a choices script goes to `.choices.log` and that of a status script to `.status.log`, both in
+the plugin's data folder.
 
 ## Notes for coding agents
 If you are an AI coding agent writing a plugin, follow these as well as the reference above.

@@ -347,6 +347,8 @@ protected:
     server->resource["^/plugins-uninstall-test$"]["POST"] = confighttp::uninstallPlugin;
     server->resource["^/plugins-log-test$"]["GET"] = confighttp::getPluginLog;
     server->resource["^/plugins-choices-test$"]["GET"] = confighttp::getPluginChoices;
+    server->resource["^/plugins-status-test$"]["GET"] = confighttp::getPluginStatus;
+    server->resource["^/plugins-notices-test$"]["GET"] = confighttp::getPluginNotices;
     server->resource["^/plugins-guide-test$"]["GET"] = confighttp::getPluginGuide;
     server->resource["^/plugins-import-test$"]["POST"] = confighttp::importPlugin;
     server->resource["^/plugins-check-updates-test$"]["POST"] = confighttp::checkPluginUpdates;
@@ -2141,6 +2143,7 @@ protected:
     std::ofstream(plugin_dir / "install.ps1") << "exit 0\n";
     std::ofstream(plugin_dir / "go.ps1") << "exit 0\n";
     std::ofstream(plugin_dir / "choices.ps1") << "exit 0\n";
+    std::ofstream(plugin_dir / "status.ps1") << "exit 0\n";
     std::ofstream(plugin_dir / "panel.html") << "<!doctype html><title>Test panel</title>";
     // The panel reads from a port nothing listens on: bind one, then close it.
     {
@@ -2152,7 +2155,7 @@ protected:
       "id": "p",
       "name": "Test Plugin",
       "version": "1.0.0",
-      "scripts": {{"install": "install.ps1"}},
+      "scripts": {{"install": "install.ps1", "status": "status.ps1"}},
       "options": [
         {{"id": "level", "type": "number", "default": 1, "min": 0, "max": 10}},
         {{"id": "profile", "type": "choice", "choices": [{{"value": "", "label": "Don't change"}}], "choices_script": "choices.ps1"}}
@@ -2484,6 +2487,52 @@ TEST_F(PluginsConfigHttpTest, GetPluginChoicesRunsTheChoicesScript) {
   EXPECT_TRUE(body.at("status").get<bool>());
   EXPECT_EQ(body.at("choices"), nlohmann::json::parse(R"([{"value":"","label":"Don't change"},{"value":"a.icc","label":"A","group":"Installed"}])"));
   EXPECT_EQ(get_plugin()["options"][1]["dynamic"], true);
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginStatusAndNoticesRunTheStatusScript) {
+  // Nothing is installed yet, so there is nothing to report
+  auto response = send("GET", "/plugins-notices-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(nlohmann::json::parse(response->content.string()).at("notices"), nlohmann::json::array());
+
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p","activate":true})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  plugins::set_script_runner_for_testing([](const std::string &, bool, const std::map<std::string, std::string> &env, const std::filesystem::path &, const std::filesystem::path &, std::stop_token) {
+    std::ofstream(std::filesystem::path(env.at("SUNSHINE_PLUGIN_STATUS_FILE"))) << R"({"driver":"1.0","notices":[{"level":"warning","title":"Outdated","href":"./plugins"}]})";
+    return 0;
+  });
+
+  response = send("GET", "/plugins-status-test?id=p");
+  ASSERT_EQ(response->status_code, "200 OK");
+  auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_TRUE(body.at("status").get<bool>());
+  EXPECT_EQ(body.at("result").at("driver"), "1.0");
+  EXPECT_EQ(body.at("result").at("notices").at(0).at("title"), "Outdated");
+  EXPECT_EQ(get_plugin()["has_status"], true);
+
+  response = send("GET", "/plugins-notices-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+  body = nlohmann::json::parse(response->content.string());
+  ASSERT_EQ(body.at("notices").size(), 1);
+  EXPECT_EQ(body.at("notices").at(0).at("plugin"), "p");
+  EXPECT_EQ(body.at("notices").at(0).at("plugin_name"), "Test Plugin");
+  EXPECT_EQ(body.at("notices").at(0).at("level"), "warning");
+}
+
+TEST_F(PluginsConfigHttpTest, GetPluginStatusReportsErrors) {
+  EXPECT_EQ(send("GET", "/plugins-status-test")->status_code, "400 Bad Request");
+  EXPECT_EQ(send("GET", "/plugins-status-test?id=missing")->status_code, "404 Not Found");
+  EXPECT_EQ(send("GET", "/plugins-status-test?id=p")->status_code, "400 Bad Request");  // Not installed
+
+  ASSERT_EQ(send("POST", "/plugins-install-test", R"({"id":"p"})")->status_code, "200 OK");
+  plugins::wait_for_task();
+  const auto response = send("GET", "/plugins-status-test?id=p");  // The script writes no status
+  EXPECT_EQ(response->status_code, "400 Bad Request");
+  EXPECT_TRUE(response->content.string().contains("wrote no status")) << response->content.string();
+
+  SimpleWeb::CaseInsensitiveMultimap headers;
+  EXPECT_EQ(client->request("GET", "/plugins-status-test?id=p", "", headers)->status_code, "401 Unauthorized");
+  EXPECT_EQ(client->request("GET", "/plugins-notices-test", "", headers)->status_code, "401 Unauthorized");
 }
 
 TEST_F(PluginsConfigHttpTest, GetPluginChoicesReportsErrors) {

@@ -583,6 +583,8 @@
     "choose_gamepad_driver": "Choose Gamepad Drivers",
     "fix_now": "Fix Now",
     "startup_errors": "<b>Attention!</b> Sunshine detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
+    "plugin_notice_from": "From the {name} plugin",
+    "plugin_notice_open": "Open",
     "pre_release_available": "Pre-release {version} available",
     "review_virtual_input": "Review Virtual Input",
     "update_available": "Update {version} available",

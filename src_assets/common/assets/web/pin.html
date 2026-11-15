@@ -471,7 +471,8 @@
             apiFetch('./api/plugins', {method: 'GET'}).then((r) => r.json()),
             apiFetch('./api/clients/plugin-options', {method: 'GET'}).then((r) => r.json()),
           ]);
-          this.activePlugins = (plugins.plugins || []).filter((plugin) => plugin.active);
+          // Plugins that do nothing for a stream, such as one that installs a driver, can't be turned off per client
+          this.activePlugins = (plugins.plugins || []).filter((plugin) => plugin.active && plugin.per_stream);
           this.clientOverrides = overrides.clients || {};
         } catch (error) {
           console.error('Failed to load the plugin settings of clients', error);

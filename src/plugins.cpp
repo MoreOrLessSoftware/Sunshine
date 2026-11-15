@@ -11,7 +11,9 @@
 #include <condition_variable>
 #include <format>
 #include <fstream>
+#include <future>
 #include <mutex>
+#include <ranges>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -27,6 +29,7 @@
 #include "crypto.h"
 #include "logging.h"
 #include "plugins.h"
+#include "utility.h"
 
 #ifdef _WIN32
   // fopen() interprets the filename as an ANSI string on Windows, so we use _wfsopen() instead.
@@ -111,6 +114,7 @@ namespace plugins {
       bool task_running = false;  ///< Whether an install or uninstall is running.
       script_runner_t runner = run_script;  ///< Runs install and uninstall scripts.
       std::function<void()> on_change;  ///< Called after a background operation changes plugin state.
+      std::function<bool()> streaming;  ///< Whether a stream is running, for plugins that are `idle_only`.
       std::jthread worker;  ///< Thread running the current install or uninstall.
       std::function<bool()> session_ready = default_session_ready;  ///< Whether install scripts can run yet.
       std::chrono::milliseconds session_poll = DEFAULT_SESSION_POLL;  ///< Time between checks of `session_ready`.
@@ -1043,6 +1047,7 @@ namespace plugins {
             state.options = *pending_options;
           } else {
             state.installed = action == action_e::install;
+            state.installed_before = state.installed_before || state.installed;
             state.active = state.installed && (state.active || activate);
             state.installed_version = state.installed ? manifest.version : std::string {};
           }
@@ -1146,6 +1151,23 @@ namespace plugins {
     }
 
     /**
+     * @brief Find the first bundled plugin that is on by default, was never installed, and hasn't been tried yet.
+     *
+     * @param reg Registry to search.
+     * @param attempted IDs of the plugins already tried.
+     * @return The plugin, or `nullptr` when there is none.
+     */
+    const manifest_t *next_default_install(const registry_t &reg, const std::set<std::string> &attempted) {
+      for (const auto &manifest : reg.manifests) {
+        const auto *state = find_state(reg, manifest.id);
+        if (manifest.builtin && manifest.default_active && (!state || (!state->installed && !state->installed_before)) && !attempted.contains(manifest.id)) {
+          return &manifest;
+        }
+      }
+      return nullptr;
+    }
+
+    /**
      * @brief Body of the thread started by `reinstall_updated_builtins()`.
      *
      * @param stop Requests the thread to end; a reinstall it already started keeps running.
@@ -1156,7 +1178,7 @@ namespace plugins {
       std::chrono::milliseconds poll;
       {
         std::scoped_lock lock {reg.mutex};
-        if (!next_builtin_reinstall(reg, {})) {
+        if (!next_builtin_reinstall(reg, {}) && !next_default_install(reg, {})) {
           return;
         }
         session_ready = reg.session_ready;
@@ -1178,14 +1200,26 @@ namespace plugins {
           std::scoped_lock lock {reg.mutex};
           if (!reg.task_running) {
             const auto *manifest = next_builtin_reinstall(reg, attempted);
+            bool first_install = false;
+            if (!manifest) {
+              manifest = next_default_install(reg, attempted);
+              first_install = true;
+            }
             if (!manifest) {
               return;
             }
             attempted.insert(manifest->id);
-            BOOST_LOG(info) << "Reinstalling plugin ["sv << manifest->id << "] since it changed from version ["sv
-                            << find_state(reg, manifest->id)->installed_version << "] to ["sv << manifest->version << ']';
+            if (first_install) {
+              // Only once: a user who uninstalls it keeps it uninstalled, and a failed install waits for the web UI
+              BOOST_LOG(info) << "Installing plugin ["sv << manifest->id << "] since it's on by default"sv;
+              reg.state[manifest->id].installed_before = true;
+              save_state(reg.paths.state_file, reg.state);
+            } else {
+              BOOST_LOG(info) << "Reinstalling plugin ["sv << manifest->id << "] since it changed from version ["sv
+                              << find_state(reg, manifest->id)->installed_version << "] to ["sv << manifest->version << ']';
+            }
             const auto env = script_env(*manifest, effective_options(reg, *manifest), plugin_data_dir(reg.paths, manifest->id));
-            launch_task(reg, manifest->id, action_e::install, *manifest, env, false, {}, std::nullopt);
+            launch_task(reg, manifest->id, action_e::install, *manifest, env, first_install, {}, std::nullopt);
           }
         }
         sleep_unless_stopped(stop, 100ms);
@@ -1290,6 +1324,20 @@ namespace plugins {
       }
       manifest.manages_display = node["manages_display"].get<bool>();
     }
+    if (node.contains("idle_only")) {
+      if (!node["idle_only"].is_boolean()) {
+        error = "'idle_only' must be a boolean";
+        return std::nullopt;
+      }
+      manifest.idle_only = node["idle_only"].get<bool>();
+    }
+    if (node.contains("default_active")) {
+      if (!node["default_active"].is_boolean()) {
+        error = "'default_active' must be a boolean";
+        return std::nullopt;
+      }
+      manifest.default_active = node["default_active"].get<bool>();
+    }
 
     if (node.contains("scripts")) {
       const auto &scripts = node["scripts"];
@@ -1303,10 +1351,11 @@ namespace plugins {
           !read_string(scripts, "undo", manifest.scripts.undo_script, error) ||
           !read_string(scripts, "connect", manifest.scripts.connect_script, error) ||
           !read_string(scripts, "disconnect", manifest.scripts.disconnect_script, error) ||
-          !read_string(scripts, "apply", manifest.scripts.apply, error)) {
+          !read_string(scripts, "apply", manifest.scripts.apply, error) ||
+          !read_string(scripts, "status", manifest.scripts.status, error)) {
         return std::nullopt;
       }
-      for (const auto *script : {&manifest.scripts.install, &manifest.scripts.uninstall, &manifest.scripts.do_script, &manifest.scripts.undo_script, &manifest.scripts.connect_script, &manifest.scripts.disconnect_script, &manifest.scripts.apply}) {
+      for (const auto *script : {&manifest.scripts.install, &manifest.scripts.uninstall, &manifest.scripts.do_script, &manifest.scripts.undo_script, &manifest.scripts.connect_script, &manifest.scripts.disconnect_script, &manifest.scripts.apply, &manifest.scripts.status}) {
         if (!is_valid_script(*script, dir, error)) {
           return std::nullopt;
         }
@@ -1554,6 +1603,7 @@ namespace plugins {
         if (entry.contains("clients") && entry["clients"].is_object()) {
           plugin.clients = entry["clients"];
         }
+        plugin.installed_before = entry.value("installed_before", false) || plugin.installed;
         state[id] = std::move(plugin);
       }
     } catch (const std::exception &e) {
@@ -1572,7 +1622,8 @@ namespace plugins {
         {"options", plugin.options},
         {"installed_version", plugin.installed_version},
         {"origin", plugin.origin},
-        {"clients", plugin.clients}
+        {"clients", plugin.clients},
+        {"installed_before", plugin.installed_before}
       };
     }
 
@@ -2587,6 +2638,10 @@ namespace plugins {
         {"builtin", manifest.builtin},
         {"elevated", manifest.elevated},
         {"manages_display", manifest.manages_display},
+        {"idle_only", manifest.idle_only},
+        {"default_active", manifest.default_active},
+        {"has_status", !manifest.scripts.status.empty()},
+        {"per_stream", per_stream(manifest)},
         {"order", manifest.order},
         {"options", std::move(options)},
         {"actions", std::move(actions)},
@@ -2707,6 +2762,19 @@ namespace plugins {
       }
     }
     return {};
+  }
+
+  bool per_stream(const manifest_t &manifest) {
+    const auto &scripts = manifest.scripts;
+    return !scripts.do_script.empty() || !scripts.undo_script.empty() || !scripts.connect_script.empty() ||
+           !scripts.disconnect_script.empty() || !manifest.client_commands.empty() || manifest.manages_display;
+  }
+
+  bool idle_only(const std::string &id) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    const auto *manifest = find_manifest(reg, id);
+    return manifest && manifest->idle_only;
   }
 
   bool manages_display(const std::string &id) {
@@ -2928,6 +2996,10 @@ namespace plugins {
       error = "another plugin operation is still running";
       return result_e::busy;
     }
+    if (found->idle_only && action != action_e::run && reg.streaming && reg.streaming()) {
+      error = std::format("plugin '{}' can't be installed or uninstalled while a stream is running", id);
+      return result_e::busy;
+    }
 
     const auto manifest = *found;
     const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, id));
@@ -2973,53 +3045,152 @@ namespace plugins {
 
   namespace {
     /**
-     * @brief Numbers the files choices scripts write, so scripts running at the same time don't share one.
+     * @brief Numbers the files choices and status scripts write, so scripts running at the same time don't share one.
      */
-    std::atomic<std::uint64_t> choices_file_counter {0};
+    std::atomic<std::uint64_t> result_file_counter {0};
 
     /**
-     * @brief Read the list a choices script wrote, then delete the file.
-     *
-     * @param file File the script wrote.
-     * @param out Receives the parsed choices.
-     * @param error Receives the reason when the list is missing or rejected.
-     * @return `false` when the file is missing, too large, not JSON, or rejected by `parse_script_choices()`.
+     * @brief A script that runs as the signed-in user and writes its result to a file, such as a choices script.
      */
-    bool read_choices_file(const fs::path &file, std::vector<choice_t> &out, std::string &error) {
+    struct user_script_t {
+      std::string command;  ///< Command line that runs the script.
+      std::map<std::string, std::string> env;  ///< Environment, without the variable naming the result file.
+      fs::path data_dir;  ///< Plugin data directory, where the script runs and writes its result and log.
+      script_runner_t runner;  ///< Runs the script.
+      std::chrono::milliseconds timeout {};  ///< Longest the script may run.
+    };
+
+    /**
+     * @brief Describe what a user script writes and where.
+     */
+    struct user_script_output_t {
+      std::string_view kind;  ///< What the script is, such as `choices`, used in the file names and messages.
+      std::string_view result;  ///< Noun for what the script writes, such as `list`, used when it writes nothing.
+      std::string_view file_variable;  ///< Environment variable naming the file the script writes.
+      std::string log_header;  ///< First line of the log.
+      std::size_t max_size;  ///< Largest file, in bytes, the script may write.
+    };
+
+    /**
+     * @brief Run a user script, then read and delete the file it wrote.
+     *
+     * @param script Script to run.
+     * @param output What the script writes and where.
+     * @param content Receives the file's content, without a UTF-8 byte order mark.
+     * @param reason Receives the reason when there is no content.
+     * @return `true` when the script exited with 0 in time and wrote a file of at most `output.max_size` bytes.
+     */
+    bool run_user_script(user_script_t script, const user_script_output_t &output, std::string &content, std::string &reason) {
       std::error_code ec;
-      const auto size = fs::file_size(file, ec);
-      if (ec) {
-        error = "the choices script wrote no list";
+      fs::create_directories(script.data_dir, ec);
+      const auto result_file = script.data_dir / std::format(".{}-{}.json", output.kind, result_file_counter++);
+      const auto log_file = script.data_dir / std::format(".{}.log", output.kind);
+      fs::remove(result_file, ec);
+      script.env[std::string {output.file_variable}] = path_to_utf8(fs::path(result_file).make_preferred());
+
+      if (std::unique_ptr<FILE, decltype(&std::fclose)> file {open_shared(log_file, L"w"), &std::fclose}; file) {
+        std::fputs(std::format("{}\n", output.log_header).c_str(), file.get());
+      }
+
+      BOOST_LOG(info) << "Running plugin script ["sv << script.command << ']';
+      std::stop_source stop;
+      int exit_code;
+      {
+        // Stops the script once the timeout passes, unless the script finished first and stopped this thread.
+        std::jthread watchdog([&stop, timeout = script.timeout](std::stop_token finished) {
+          std::mutex mutex;
+          std::condition_variable_any cv;
+          std::unique_lock lock {mutex};
+          cv.wait_for(lock, finished, timeout, [] {
+            return false;
+          });
+          if (!finished.stop_requested()) {
+            stop.request_stop();
+          }
+        });
+        exit_code = script.runner(script.command, false, script.env, script.data_dir, log_file, stop.get_token());
+      }
+
+      auto remove_result = util::fail_guard([&result_file]() {
+        std::error_code ignored;
+        fs::remove(result_file, ignored);
+      });
+      if (stop.stop_requested()) {
+        reason = std::format("the {} script did not finish within {} seconds", output.kind, std::chrono::ceil<std::chrono::seconds>(script.timeout).count());
         return false;
       }
-      if (size > MAX_CHOICES_FILE_SIZE) {
-        fs::remove(file, ec);
-        error = std::format("the choices script wrote more than {} bytes", MAX_CHOICES_FILE_SIZE);
+      if (exit_code != 0) {
+        reason = std::format("the {} script failed with exit code {}", output.kind, exit_code);
+        return false;
+      }
+      const auto size = fs::file_size(result_file, ec);
+      if (ec) {
+        reason = std::format("the {} script wrote no {}", output.kind, output.result);
+        return false;
+      }
+      if (size > output.max_size) {
+        reason = std::format("the {} script wrote more than {} bytes", output.kind, output.max_size);
         return false;
       }
 
-      std::string content;
       {
-        std::ifstream in(file, std::ios::binary);
+        std::ifstream in(result_file, std::ios::binary);
         std::stringstream ss;
         ss << in.rdbuf();
         content = ss.str();
       }
-      fs::remove(file, ec);
-
       // PowerShell 5.1 writes a byte order mark with -Encoding UTF8
       if (content.starts_with("\xEF\xBB\xBF"sv)) {
         content.erase(0, 3);
       }
-      const auto node = json::parse(content, nullptr, false);
-      if (node.is_discarded()) {
-        error = "the choices script wrote invalid JSON";
+      return true;
+    }
+
+    /**
+     * @brief Check a notice a status script reported.
+     *
+     * @param entry Notice as the script wrote it.
+     * @param out Receives the notice with every field filled in.
+     * @param error Receives the reason when the notice is rejected.
+     * @return `false` when a field has the wrong type, is empty or too long, or the level or link is not allowed.
+     */
+    bool parse_notice(const json &entry, json &out, std::string &error) {
+      if (!entry.is_object()) {
+        error = "each notice must be an object";
         return false;
       }
-      if (!parse_script_choices(node, out, error)) {
-        error = "the choices script wrote a bad list: " + error;
+      std::string level = "info";
+      std::string title;
+      std::string text;
+      std::string href;
+      std::string action;
+      if (!read_string(entry, "level", level, error) || !read_string(entry, "title", title, error) ||
+          !read_string(entry, "text", text, error) || !read_string(entry, "href", href, error) ||
+          !read_string(entry, "action", action, error)) {
         return false;
       }
+      if (level != "info" && level != "warning") {
+        error = "a notice's 'level' must be 'info' or 'warning'";
+        return false;
+      }
+      if (title.empty() || title.size() > MAX_NOTICE_TITLE_LENGTH) {
+        error = std::format("a notice's 'title' must be 1 to {} bytes", MAX_NOTICE_TITLE_LENGTH);
+        return false;
+      }
+      if (text.size() > MAX_NOTICE_TEXT_LENGTH) {
+        error = std::format("a notice's 'text' must be at most {} bytes", MAX_NOTICE_TEXT_LENGTH);
+        return false;
+      }
+      // Only pages of the web UI and https:// pages, so a notice can't run script through a javascript: link
+      if (href.size() > MAX_NOTICE_HREF_LENGTH || (!href.empty() && !href.starts_with("./") && !href.starts_with("https://"))) {
+        error = std::format("a notice's 'href' must start with ./ or https:// and be at most {} bytes", MAX_NOTICE_HREF_LENGTH);
+        return false;
+      }
+      if (action.size() > MAX_NOTICE_ACTION_LENGTH) {
+        error = std::format("a notice's 'action' must be at most {} bytes", MAX_NOTICE_ACTION_LENGTH);
+        return false;
+      }
+      out = {{"level", level}, {"title", title}, {"text", text}, {"href", href}, {"action", action}};
       return true;
     }
   }  // namespace
@@ -3027,11 +3198,7 @@ namespace plugins {
   result_e list_choices(const std::string &id, const std::string &option_id, std::vector<choice_t> &out, std::string &reason) {
     auto &reg = registry();
     option_t option;
-    std::string command;
-    std::map<std::string, std::string> env;
-    fs::path data_dir;
-    script_runner_t runner;
-    std::chrono::milliseconds timeout;
+    user_script_t script;
     {
       std::scoped_lock lock {reg.mutex};
       const auto *manifest = find_manifest(reg, id);
@@ -3055,53 +3222,23 @@ namespace plugins {
         return result_e::unavailable;
       }
       option = *found;
-      command = script_command(manifest->dir / option.choices_script);
-      data_dir = plugin_data_dir(reg.paths, id);
-      env = script_env(*manifest, effective_options(reg, *manifest), data_dir);
-      runner = reg.runner;
-      timeout = reg.choices_timeout;
+      script.command = script_command(manifest->dir / option.choices_script);
+      script.data_dir = plugin_data_dir(reg.paths, id);
+      script.env = script_env(*manifest, effective_options(reg, *manifest), script.data_dir);
+      script.runner = reg.runner;
+      script.timeout = reg.choices_timeout;
     }
+    script.env["SUNSHINE_PLUGIN_CHOICE_OPTION"] = option_id;
 
-    std::error_code ec;
-    fs::create_directories(data_dir, ec);
-    const auto choices_file = data_dir / std::format(".choices-{}-{}.json", option_id, choices_file_counter++);
-    const auto log_file = data_dir / ".choices.log";
-    fs::remove(choices_file, ec);
-    env["SUNSHINE_PLUGIN_CHOICE_OPTION"] = option_id;
-    env["SUNSHINE_PLUGIN_CHOICES_FILE"] = path_to_utf8(fs::path(choices_file).make_preferred());
-
-    if (std::unique_ptr<FILE, decltype(&std::fclose)> file {open_shared(log_file, L"w"), &std::fclose}; file) {
-      std::fputs(std::format("Listing choices for option '{}'\n", option_id).c_str(), file.get());
-    }
-
-    BOOST_LOG(info) << "Running plugin script ["sv << command << ']';
-    std::stop_source stop;
-    int exit_code;
-    {
-      // Stops the script once the timeout passes, unless the script finished first and stopped this thread.
-      std::jthread watchdog([&stop, timeout](std::stop_token finished) {
-        std::mutex mutex;
-        std::condition_variable_any cv;
-        std::unique_lock lock {mutex};
-        cv.wait_for(lock, finished, timeout, [] {
-          return false;
-        });
-        if (!finished.stop_requested()) {
-          stop.request_stop();
-        }
-      });
-      exit_code = runner(command, false, env, data_dir, log_file, stop.get_token());
-    }
-
-    if (stop.stop_requested()) {
-      fs::remove(choices_file, ec);
-      reason = std::format("the choices script did not finish within {} seconds", std::chrono::ceil<std::chrono::seconds>(timeout).count());
-    } else if (exit_code != 0) {
-      fs::remove(choices_file, ec);
-      reason = std::format("the choices script failed with exit code {}", exit_code);
-    } else {
+    std::string content;
+    const user_script_output_t output {"choices", "list", "SUNSHINE_PLUGIN_CHOICES_FILE", std::format("Listing choices for option '{}'", option_id), MAX_CHOICES_FILE_SIZE};
+    if (run_user_script(std::move(script), output, content, reason)) {
       std::vector<choice_t> listed;
-      if (read_choices_file(choices_file, listed, reason)) {
+      if (const auto node = json::parse(content, nullptr, false); node.is_discarded()) {
+        reason = "the choices script wrote invalid JSON";
+      } else if (!parse_script_choices(node, listed, reason)) {
+        reason = "the choices script wrote a bad list: " + reason;
+      } else {
         out = option.choices;
         std::set<std::string> seen;
         for (const auto &choice : out) {
@@ -3118,6 +3255,117 @@ namespace plugins {
 
     BOOST_LOG(error) << "Plugin ["sv << id << "] couldn't list the choices of option ["sv << option_id << "]: "sv << reason;
     return result_e::invalid;
+  }
+
+  bool parse_status(const nlohmann::json &node, nlohmann::json &out, std::string &error) {
+    if (!node.is_object()) {
+      error = "the status must be an object";
+      return false;
+    }
+    json notices = json::array();
+    if (node.contains("notices")) {
+      const auto &entries = node["notices"];
+      if (!entries.is_array()) {
+        error = "'notices' must be an array";
+        return false;
+      }
+      if (entries.size() > MAX_NOTICES) {
+        error = std::format("there can be at most {} notices", MAX_NOTICES);
+        return false;
+      }
+      for (const auto &entry : entries) {
+        json notice;
+        if (!parse_notice(entry, notice, error)) {
+          return false;
+        }
+        notices.push_back(std::move(notice));
+      }
+    }
+    out = node;
+    out["notices"] = std::move(notices);
+    return true;
+  }
+
+  result_e plugin_status(const std::string &id, nlohmann::json &out, std::string &reason) {
+    auto &reg = registry();
+    user_script_t script;
+    {
+      std::scoped_lock lock {reg.mutex};
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest) {
+        reason = std::format("plugin '{}' not found", id);
+        return result_e::not_found;
+      }
+      if (manifest->scripts.status.empty()) {
+        reason = std::format("plugin '{}' has no status script", id);
+        return result_e::invalid;
+      }
+      if (const auto *state = find_state(reg, id); !state || !state->installed) {
+        reason = std::format("plugin '{}' must be installed before reporting its status", id);
+        return result_e::not_installed;
+      }
+      if (!reg.session_ready()) {
+        reason = "a user must be signed in to report the status";
+        return result_e::unavailable;
+      }
+      script.command = script_command(manifest->dir / manifest->scripts.status);
+      script.data_dir = plugin_data_dir(reg.paths, id);
+      script.env = script_env(*manifest, effective_options(reg, *manifest), script.data_dir);
+      script.runner = reg.runner;
+      script.timeout = reg.choices_timeout;
+    }
+
+    std::string content;
+    const user_script_output_t output {"status", "status", "SUNSHINE_PLUGIN_STATUS_FILE", "Reporting the status", MAX_STATUS_FILE_SIZE};
+    if (run_user_script(std::move(script), output, content, reason)) {
+      if (const auto node = json::parse(content, nullptr, false); node.is_discarded()) {
+        reason = "the status script wrote invalid JSON";
+      } else if (!parse_status(node, out, reason)) {
+        reason = "the status script wrote a bad status: " + reason;
+      } else {
+        return result_e::ok;
+      }
+    }
+
+    BOOST_LOG(error) << "Plugin ["sv << id << "] couldn't report its status: "sv << reason;
+    return result_e::invalid;
+  }
+
+  nlohmann::json plugin_notices() {
+    auto &reg = registry();
+    std::vector<std::pair<std::string, std::string>> reporting;  // ID and name of each plugin to ask
+    {
+      std::scoped_lock lock {reg.mutex};
+      if (!reg.session_ready()) {
+        return json::array();
+      }
+      for (const auto &manifest : reg.manifests) {
+        const auto *state = find_state(reg, manifest.id);
+        if (!manifest.scripts.status.empty() && state && state->installed && state->active && !needs_reinstall(manifest, *state)) {
+          reporting.emplace_back(manifest.id, manifest.name);
+        }
+      }
+    }
+
+    std::vector<std::future<json>> statuses;
+    statuses.reserve(reporting.size());
+    for (const auto &id : reporting | std::views::keys) {
+      statuses.push_back(std::async(std::launch::async, [id]() {
+        json status;
+        std::string error;
+        return plugin_status(id, status, error) == result_e::ok ? status["notices"] : json::array();
+      }));
+    }
+
+    json notices = json::array();
+    for (std::size_t i = 0; i < reporting.size(); ++i) {
+      for (auto notice : statuses[i].get()) {
+        notice["plugin"] = reporting[i].first;
+        notice["plugin_name"] = reporting[i].second;
+        notices.push_back(std::move(notice));
+      }
+    }
+    return notices;
   }
 
   void set_choices_timeout_for_testing(std::chrono::milliseconds timeout) {
@@ -3359,6 +3607,12 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     reg.on_change = std::move(callback);
+  }
+
+  void set_stream_check(std::function<bool()> check) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.streaming = std::move(check);
   }
 
   void set_script_runner_for_testing(script_runner_t runner) {
