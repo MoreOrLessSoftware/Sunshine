@@ -2858,3 +2858,78 @@ p {
     gap: 0.25rem;
     text-decoration: none;
 }
+
+/* ==========================================================================
+   Home Recommendations
+   ========================================================================== */
+
+.recommendation-list {
+    display: grid;
+    gap: var(--spacing-md);
+}
+
+.recommendation {
+    align-items: flex-start;
+    background-color: var(--color-bg-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    display: flex;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+}
+
+.recommendation-icon {
+    align-items: center;
+    background-color: var(--color-primary-light);
+    border-radius: var(--radius-md);
+    color: var(--color-primary);
+    display: flex;
+    flex: 0 0 auto;
+    height: 2.25rem;
+    justify-content: center;
+    width: 2.25rem;
+}
+
+.recommendation-body {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.recommendation-body h3 {
+    font-size: 1rem;
+    letter-spacing: normal;
+    line-height: 1.4;
+    margin: 0 0 var(--spacing-xs);
+}
+
+.recommendation-body p {
+    font-size: 0.875rem;
+    line-height: 1.55;
+    margin: 0;
+}
+
+.recommendation-changes,
+.recommendation-failures {
+    font-size: 0.875rem;
+    margin: var(--spacing-sm) 0 0;
+    padding-left: 1.25rem;
+}
+
+.recommendation-failures a {
+    overflow-wrap: anywhere;
+}
+
+.recommendation-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+}
+
+.recommendation-actions .btn {
+    align-items: center;
+    display: inline-flex;
+    gap: 0.35rem;
+}
+

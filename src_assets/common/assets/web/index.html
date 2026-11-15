@@ -70,6 +70,9 @@
       </a>
     </div>
 
+    <!-- Recommendations -->
+    <Recommendations :config="config" :suggest-xgpad="suggestXgpad" @xgpad-installed="loadVirtualInputStatus"></Recommendations>
+
     <!-- Resources -->
     <div class="my-4">
       <Resource-Card :installed-version-not-stable="installedVersionNotStable"></Resource-Card>
@@ -82,6 +85,7 @@
   import { initApp } from './init'
   import Navbar from './Navbar.vue'
   import ResourceCard from './ResourceCard.vue'
+  import Recommendations from './Recommendations.vue'
   import VersionBadge from './VersionBadge.vue'
   import {
     AlertCircle,
@@ -96,6 +100,7 @@
     components: {
       Navbar,
       ResourceCard,
+      Recommendations,
       VersionBadge,
       AlertCircle,
       AlertTriangle,
@@ -105,12 +110,15 @@
     },
     data() {
       return {
+        config: null,
         installedVersionNotStable: false,
         pluginNotices: [],
         logs: null,
         platform: "",
         controllerEnabled: false,
         gamepadDriver: '',
+        virtualhidInstalled: null,  // Whether Virtual HID Driver is installed, as its plugin reports, or null until known
+        xgpad: null,  // The xgpad plugin, which installs the xgpad driver, or null when this build has none
       }
     },
     async created() {
@@ -118,9 +126,14 @@
       this.loadPluginNotices();
       try {
         let config = await fetch("./api/config").then((r) => r.json());
+        this.config = config;
         this.platform = config.platform;
         this.controllerEnabled = config.controller !== "disabled";
         this.gamepadDriver = config.gamepad_driver || '';
+
+        if (this.platform === 'windows') {
+          await this.loadVirtualInputStatus();
+        }
       } catch (e) {
         console.error(e);
       }
@@ -136,6 +149,19 @@
        */
       showGamepadDriverChoice() {
         return this.platform === 'windows' && !this.gamepadDriver;
+      },
+      /**
+       * Whether to recommend the xgpad plugin, which installs the xgpad driver: gamepads are on, no virtual gamepad
+       * driver is installed, and the selected gamepad driver setting would use xgpad.
+       */
+      suggestXgpad() {
+        return this.xgpadMightBeUsed && !!this.xgpad && !this.xgpad.installed && this.virtualhidInstalled === false;
+      },
+      /**
+       * Whether the gamepad driver setting would use xgpad for controllers.
+       */
+      xgpadMightBeUsed() {
+        return this.platform === 'windows' && this.controllerEnabled && ['', 'all', 'xgpad'].includes(this.gamepadDriver);
       },
       /** Parse the text errors, calculating the text, the timestamp and the level */
       fancyLogs() {
@@ -159,6 +185,35 @@
           this.pluginNotices = body.notices || [];
         } catch (e) {
           console.error("Failed to fetch plugin notices:", e);
+        }
+      },
+      /**
+       * Load whether the xgpad plugin installed its driver and, when that decides whether to recommend it, whether
+       * the Virtual HID Driver plugin reports its driver as installed.
+       */
+      async loadVirtualInputStatus() {
+        let plugins = [];
+        try {
+          plugins = (await fetch("./api/plugins").then((r) => r.json())).plugins || [];
+        } catch (e) {
+          console.error("Failed to fetch plugins:", e);
+          return;
+        }
+        this.xgpad = plugins.find((plugin) => plugin.id === 'xgpad') || null;
+        if (!this.xgpadMightBeUsed || !this.xgpad || this.xgpad.installed) {
+          return;
+        }
+
+        const virtualhid = plugins.find((plugin) => plugin.id === 'virtual-hid');
+        if (!virtualhid || !virtualhid.installed) {
+          this.virtualhidInstalled = false;
+          return;
+        }
+        try {
+          const body = await fetch("./api/plugins/status?id=virtual-hid").then((r) => r.json());
+          this.virtualhidInstalled = body.status ? !!body.result.installed : null;
+        } catch (e) {
+          console.error("Failed to fetch the Virtual HID Driver status:", e);
         }
       },
     }
