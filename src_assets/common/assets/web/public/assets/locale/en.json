@@ -47,7 +47,6 @@
     "auto_detach_desc": "This will attempt to automatically detect launcher-type apps that close quickly after launching another program or instance of themselves. When a launcher-type app is detected, it is treated as a detached app.",
     "badge_admin": "Admin",
     "badge_app_prep": "App prep",
-    "badge_auto_detach": "Auto-detach",
     "badge_detached": "Detached",
     "badge_no_global_prep": "No global prep",
     "badge_plugin_options": "Plugin settings",

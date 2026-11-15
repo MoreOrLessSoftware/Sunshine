@@ -123,7 +123,6 @@
                 <span v-if="app['exclude-global-prep-cmd']" class="badge app-flag-badge">{{ $t('apps.badge_no_global_prep') }}</span>
                 <span v-if="app['exclude-plugins'] && app['exclude-plugins'].length" class="badge app-flag-badge">{{ $t('apps.badge_plugins_excluded') }}</span>
                 <span v-if="hasPluginOptions(app)" class="badge app-flag-badge">{{ $t('apps.badge_plugin_options') }}</span>
-                <span v-if="app['auto-detach']" class="badge app-flag-badge">{{ $t('apps.badge_auto_detach') }}</span>
               </div>
             </div>
           </div>
@@ -1229,7 +1228,6 @@
         if (app['exclude-global-prep-cmd']) badges.push(this.$t('apps.badge_no_global_prep'));
         if (app['exclude-plugins'] && app['exclude-plugins'].length) badges.push(this.$t('apps.badge_plugins_excluded'));
         if (this.hasPluginOptions(app)) badges.push(this.$t('apps.badge_plugin_options'));
-        if (app['auto-detach']) badges.push(this.$t('apps.badge_auto_detach'));
         return badges;
       },
       handleImageError(event) {
