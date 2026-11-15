@@ -311,7 +311,11 @@ export default {
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(settings),
         }));
-        await apiFetch('./api/restart', {method: 'POST', headers: {'Content-Type': 'application/json'}});
+        try {
+          await apiFetch('./api/restart', {method: 'POST', headers: {'Content-Type': 'application/json'}});
+        } catch {
+          // Sunshine stops before it answers, so the request failing just means it's restarting
+        }
         this.results = {...this.results, [item.id]: {ok: true, message: this.$t('index.rec_applied_restarting')}};
       } catch (e) {
         console.error('Failed to apply recommended settings:', e);
