@@ -573,7 +573,7 @@ function Set-StreamDisplay {
     $rate = Select-RefreshRate $rates $fps
     $current = [DisplayManager]::GetCurrentMode($device)
     if ($current.Width -eq $width -and $current.Height -eq $height -and $current.Frequency -eq $rate) {
-        Write-Output "$name is already at ${width}x${height} $rate Hz"
+        Write-Output "$name is already at ${width}x${height} $rate Hz, the closest for a $fps fps client (available: $($rates -join ', ') Hz)"
         return
     }
     Write-Output "Setting $name to ${width}x${height} $rate Hz for a $fps fps client (available: $($rates -join ', ') Hz)"
