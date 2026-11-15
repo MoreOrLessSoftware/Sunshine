@@ -43,7 +43,7 @@
           <span class="input-group-text">
             <monitor :size="18" class="icon"></monitor>
           </span>
-          <input v-model="name" type="text" :placeholder="`${$t('pin.device_name')}`" id="name-input" class="form-control" required />
+          <input v-model="name" @input="nameEdited = name !== ''" type="text" :placeholder="`${$t('pin.device_name')}`" id="name-input" class="form-control" required />
         </div>
         <button class="btn btn-primary">
           <forward :size="18" class="icon"></forward>
@@ -213,6 +213,19 @@
   // Where the chosen order of the device list is remembered, and the orders it can be
   const SORT_KEY = 'pin.clientSort';
   const SORT_MODES = ['default', 'asc', 'desc', 'recent'];
+  // Moonlight's default device name, which says nothing about the device
+  const DEFAULT_CLIENT_NAME = 'roth';
+
+  /**
+   * The device name to start the pairing form with: the name the client sent, unless it's Moonlight's default.
+   *
+   * @param {object|undefined} pairing The selected pending pairing request.
+   * @returns {string} The suggested name, or an empty string.
+   */
+  function suggestedDeviceName(pairing) {
+    const name = (pairing && pairing.name || '').trim();
+    return name.toLowerCase() === DEFAULT_CLIENT_NAME ? '' : name;
+  }
 
   let app = createApp({
     components: {
@@ -239,6 +252,7 @@
         editError: '',
         editForm: null,
         name: '',
+        nameEdited: false,
         pluginSettingsOpen: {},
         saving: false,
         searchQuery: '',
@@ -285,6 +299,18 @@
       },
     },
     watch: {
+      /**
+       * Start the device name from the name the selected request reports, unless the operator typed one.
+       *
+       * @param {string} id The id of the selected pairing request.
+       */
+      selectedPairingId(id) {
+        if (this.nameEdited) {
+          return;
+        }
+        const pairing = this.pendingPairings.find((p) => p.id === id);
+        this.name = suggestedDeviceName(pairing);
+      },
       sortMode(mode) {
         try {
           window.localStorage.setItem(SORT_KEY, mode);
@@ -364,6 +390,7 @@
           this.status = {type: 'success', message: this.i18n.t('pin.pair_success')};
           this.pin = '';
           this.name = '';
+          this.nameEdited = false;
           await this.refreshClients();
         } else {
           this.status = {type: 'danger', message: this.i18n.t('pin.pair_failure')};
