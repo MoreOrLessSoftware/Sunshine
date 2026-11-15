@@ -312,6 +312,7 @@
                   {{ command.label }}
                   <span class="badge bg-warning text-dark ms-1" v-if="command.type === 'script' && command.elevated">{{ $t('_common.elevated') }}</span>
                   <span class="badge bg-light text-dark border ms-1" v-if="!command['close-menu']">{{ $t('client_commands.keeps_menu_open') }}</span>
+                  <span class="badge bg-info text-dark ms-1" v-if="command.programs.length > 0">{{ $t('client_commands.only_with_programs', { programs: command.programs.join(', ') }) }}</span>
                 </div>
                 <div class="command-summary text-muted">
                   <keyboard :size="14" class="icon" v-if="command.type === 'keys'"></keyboard>
@@ -459,6 +460,14 @@
                 </div>
               </template>
 
+              <!-- Groups are already limited to their programs -->
+              <div class="mb-3" v-if="!currentGroup">
+                <label class="form-label" for="command-programs">{{ $t('client_commands.command_programs') }}</label>
+                <input type="text" class="form-control font-monospace" id="command-programs" :value="editor.draft.programs.join(', ')"
+                       placeholder="photoshop.exe" @change="setPrograms(editor.draft, $event.target.value)">
+                <div class="form-text">{{ $t('client_commands.command_programs_desc') }}</div>
+              </div>
+
               <div class="form-check mb-3">
                 <input class="form-check-input" type="checkbox" id="command-close-menu" v-model="editor.draft['close-menu']">
                 <label class="form-check-label" for="command-close-menu">{{ $t('client_commands.close_menu') }}</label>
@@ -593,6 +602,7 @@
       'working-dir': command['working-dir'] || '',
       elevated: !!command.elevated,
       enabled: command.enabled !== false,
+      programs: Array.isArray(command.programs) ? [...command.programs] : [],
     };
   }
 
@@ -675,6 +685,9 @@
     // Only a command that's off says so, as the server writes it
     if (!command.enabled) {
       out.enabled = false;
+    }
+    if (command.programs.length > 0) {
+      out.programs = command.programs;
     }
     return out;
   }

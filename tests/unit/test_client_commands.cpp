@@ -254,7 +254,24 @@ TEST(ClientCommandsOffer, CommandsThatAreTurnedOffAreNotOffered) {
   ASSERT_EQ(offer.groups[0].commands.size(), 1);
   EXPECT_EQ(offer.groups[0].commands[0].id, "on");
 
-  EXPECT_EQ(client_commands::enabled_commands({off, on, off}).size(), 1);
+  EXPECT_EQ(client_commands::offered_commands({off, on, off}, {}).size(), 1);
+}
+
+TEST(ClientCommandsOffer, CommandsLimitedToProgramsNeedOneOfThem) {
+  client_commands::command_t any {.id = "any", .label = "Any"};
+  client_commands::command_t gimp {.id = "gimp", .label = "GIMP", .programs = {"gimp.exe"}};
+  client_commands::command_t obs {.id = "obs", .label = "OBS", .programs = {"~obs64"}};
+
+  const client_commands::host_programs_t editing {"gimp.exe", {"obs64.exe"}};
+  auto offer = client_commands::make_offer({any, gimp, obs}, "Desktop", {gimp}, editing);
+  ASSERT_EQ(offer.commands.size(), 3);  // GIMP in the foreground, OBS running
+  ASSERT_EQ(offer.groups.size(), 1);
+
+  const client_commands::host_programs_t browsing {"firefox.exe", {}};
+  offer = client_commands::make_offer({any, gimp, obs}, "Desktop", {gimp}, browsing);
+  ASSERT_EQ(offer.commands.size(), 1);
+  EXPECT_EQ(offer.commands[0].id, "any");
+  EXPECT_TRUE(offer.groups.empty());  // The application's only command needs GIMP
 }
 
 TEST(ClientCommandsOffer, NoGroupWithoutAnAppOrItsCommands) {
@@ -463,6 +480,18 @@ TEST(ClientCommandsSave, DefinitionsRoundTrip) {
   auto off = parse_valid(R"({"id": "o", "label": "Off", "type": "keys", "steps": [[27]], "enabled": false})");
   EXPECT_FALSE(off.enabled);
   EXPECT_EQ(client_commands::to_json(off)["enabled"], false);
+
+  // Likewise only a command limited to programs lists them
+  EXPECT_FALSE(client_commands::to_json(keys).contains("programs"));
+  auto limited = parse_valid(R"({"id": "l", "label": "Limited", "type": "keys", "steps": [[27]], "programs": ["gimp", "~obs64"]})");
+  EXPECT_EQ(limited.programs, (std::vector<std::string> {"gimp", "~obs64"}));
+  EXPECT_EQ(client_commands::to_json(limited)["programs"], json::parse(R"(["gimp", "~obs64"])"));
+
+  std::string error;
+  for (const auto *text : {R"({"label": "x", "type": "keys", "steps": [[27]], "programs": "gimp"})", R"({"label": "x", "type": "keys", "steps": [[27]], "programs": [""]})", R"({"label": "x", "type": "keys", "steps": [[27]], "programs": [1]})"}) {
+    EXPECT_FALSE(client_commands::parse_command(json::parse(text), "id", error)) << text;
+    EXPECT_EQ(error, "\"programs\" must be an array of file names");
+  }
 }
 
 TEST(ClientCommandsSave, StrictListsRejectAnythingInvalid) {

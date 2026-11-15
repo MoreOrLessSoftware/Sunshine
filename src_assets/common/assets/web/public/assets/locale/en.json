@@ -132,6 +132,8 @@
     "close_menu": "Close the menu after running it",
     "cmd": "Command",
     "cmd_desc": "Started on this host when the command is picked and left to run. Its environment has SUNSHINE_CLIENT_COMMAND_ID, SUNSHINE_CLIENT_COMMAND_LABEL, the picking client's SUNSHINE_CLIENT_NAME, and the streamed application's SUNSHINE_APP_ID and SUNSHINE_APP_NAME.",
+    "command_programs": "Only show with these programs",
+    "command_programs_desc": "Optional. File names of the programs, separated by commas, such as photoshop, game.exe. The .exe is optional. The command is only shown while one of them is in the foreground on this host. Put ~ before a name, as in ~obs64, for a program that only has to be running. Leave empty to always show it. Windows only.",
     "customize": "Customize label and icon",
     "customized": "Customized",
     "delete": "Delete",

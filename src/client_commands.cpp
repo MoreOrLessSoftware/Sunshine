@@ -275,6 +275,15 @@ namespace client_commands {
     command.icon = string_member(json, "icon");
     command.close_menu = bool_member(json, "close-menu", true);
     command.enabled = bool_member(json, "enabled", true);
+    if (const auto programs = json.find("programs"); programs != json.end()) {
+      if (!programs->is_array() || !std::ranges::all_of(*programs, [](const nlohmann::json &program) {
+            return program.is_string() && !program.get<std::string>().empty();
+          })) {
+        error = "\"programs\" must be an array of file names";
+        return std::nullopt;
+      }
+      command.programs = programs->get<std::vector<std::string>>();
+    }
 
     const auto type = string_member(json, "type");
     if (type == "keys") {
@@ -632,9 +641,9 @@ namespace client_commands {
     return matches(group.programs, program);
   }
 
-  std::vector<command_t> enabled_commands(std::vector<command_t> commands) {
-    std::erase_if(commands, [](const command_t &command) {
-      return !command.enabled;
+  std::vector<command_t> offered_commands(std::vector<command_t> commands, const host_programs_t &host) {
+    std::erase_if(commands, [&host](const command_t &command) {
+      return !command.enabled || (!command.programs.empty() && !matches(command.programs, host));
     });
     return commands;
   }
@@ -642,7 +651,7 @@ namespace client_commands {
   std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, const host_programs_t &host) {
     std::vector<group_t> offered;
     for (const auto &group : groups) {
-      auto commands = enabled_commands(group.commands);
+      auto commands = offered_commands(group.commands, host);
       if (!commands.empty() && matches(group.programs, host)) {
         offered.push_back(group_t {"program", group.label, group.icon, std::move(commands)});
       }
@@ -732,6 +741,9 @@ namespace client_commands {
     // Only written when off, so commands that are on read the same as before the setting existed
     if (!command.enabled) {
       json["enabled"] = false;
+    }
+    if (!command.programs.empty()) {
+      json["programs"] = command.programs;
     }
 
     if (command.type == type_e::keys) {
@@ -852,10 +864,10 @@ namespace client_commands {
     return true;
   }
 
-  offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands) {
+  offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands, const host_programs_t &host) {
     offer_t offer;
-    offer.commands = enabled_commands(std::move(global));
-    app_commands = enabled_commands(std::move(app_commands));
+    offer.commands = offered_commands(std::move(global), host);
+    app_commands = offered_commands(std::move(app_commands), host);
 
     if (!app_name.empty() && !app_commands.empty()) {
       offer.groups.push_back(group_t {"app", app_name, {}, std::move(app_commands)});
@@ -884,11 +896,12 @@ namespace client_commands {
       }
     }
 
-    auto offer = make_offer(load_global(file()), app_name, std::move(app_commands));
+    // The programs on the host are only looked up once, and only when a command or group lists programs
+    const host_programs_t host;
+    auto offer = make_offer(load_global(file()), app_name, std::move(app_commands), host);
 
-    // The programs on the host are only looked up when there are groups to match them
     if (auto groups = load_program_groups(file()); !groups.empty()) {
-      for (auto &group : program_offer(groups, host_programs_t {})) {
+      for (auto &group : program_offer(groups, host)) {
         offer.groups.push_back(std::move(group));
       }
     }

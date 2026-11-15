@@ -54,6 +54,7 @@ namespace client_commands {
     std::map<std::string, std::string> env;  ///< Variables added to a `script` command's environment, such as a plugin's.
     std::filesystem::path log_file;  ///< File a `script` command's output is added to, or empty to discard it.
     bool enabled = true;  ///< Whether clients are offered the command; a disabled one is kept but not offered.
+    std::vector<std::string> programs;  ///< Programs the command is only offered with (see `matches()`), or empty for any.
   };
 
   /**
@@ -260,17 +261,20 @@ namespace client_commands {
    *
    * @param groups Every program group.
    * @param host The programs on the host.
-   * @return A `program` group for each matching group with commands that are turned on, holding just those.
+   * @return A `program` group for each matching group with commands to offer (see `offered_commands()`), holding
+   *         just those.
    */
   std::vector<group_t> program_offer(const std::vector<program_group_t> &groups, const host_programs_t &host);
 
   /**
-   * @brief Drop the commands that are turned off.
+   * @brief Keep the commands that can be offered now: those turned on whose programs, if they have any, match the
+   * programs on the host.
    *
    * @param commands Commands to filter.
-   * @return The commands whose `enabled` is set, in the same order.
+   * @param host The programs on the host, only looked up when a command lists programs.
+   * @return The commands to offer, in the same order.
    */
-  std::vector<command_t> enabled_commands(std::vector<command_t> commands);
+  std::vector<command_t> offered_commands(std::vector<command_t> commands, const host_programs_t &host);
 
   /**
    * @brief Return the program in the foreground on the host.
@@ -433,10 +437,11 @@ namespace client_commands {
    * @param global Global commands.
    * @param app_name Name of the application being streamed, or empty for none.
    * @param app_commands Commands of the application being streamed.
-   * @return The global commands that are turned on, then a group for the application when it has commands
-   *         that are turned on.
+   * @param host The programs on the host, for commands limited to programs.
+   * @return The global commands that can be offered now (see `offered_commands()`), then a group for the
+   *         application when it has such commands.
    */
-  offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands);
+  offer_t make_offer(std::vector<command_t> global, const std::string &app_name, std::vector<command_t> app_commands, const host_programs_t &host = host_programs_t {});
 
   /**
    * @brief Build what is offered to a client now.
