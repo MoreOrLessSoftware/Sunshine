@@ -49,8 +49,21 @@ if (-not (Test-Path (Join-Path $wdk 'Include\wdf\umdf\2.15\wdf.h'))) {
   New-Item -ItemType Directory -Force $wdkRoot | Out-Null
   $nupkg = Join-Path $wdkRoot 'wdk.zip'
   Write-Host "Downloading Microsoft.Windows.WDK.x64 $WdkVersion ..."
-  Invoke-WebRequest -UseBasicParsing -OutFile $nupkg `
-    "https://api.nuget.org/v3-flatcontainer/microsoft.windows.wdk.x64/$WdkVersion/microsoft.windows.wdk.x64.$WdkVersion.nupkg"
+  $nupkgUrl = "https://api.nuget.org/v3-flatcontainer/microsoft.windows.wdk.x64/$WdkVersion/microsoft.windows.wdk.x64.$WdkVersion.nupkg"
+  # The package is large and CI runners occasionally get the connection reset, so retry with backoff.
+  $maxAttempts = 4
+  for ($attempt = 1; ; $attempt++) {
+    try {
+      Invoke-WebRequest -UseBasicParsing -OutFile $nupkg $nupkgUrl
+      break
+    } catch {
+      Remove-Item $nupkg -ErrorAction SilentlyContinue
+      if ($attempt -ge $maxAttempts) { throw }
+      $delay = 5 * $attempt
+      Write-Host "Download failed ($($_.Exception.Message)); retrying in $delay s (attempt $attempt of $maxAttempts) ..."
+      Start-Sleep -Seconds $delay
+    }
+  }
   Expand-Archive -Force $nupkg $wdkRoot
   Remove-Item $nupkg
 }
