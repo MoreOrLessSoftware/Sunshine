@@ -15,7 +15,7 @@ Plugins automate the setup you would otherwise do with preparation commands. Eac
 - Plugins can add action buttons, a live panel, home page notices and status scripts, and can run scripts when a client resumes or leaves.
 - Import your own plugin from a folder or a GitHub URL, and check for updates. A [plugin guide](src_assets/windows/assets/plugins/PLUGIN_GUIDE.md) is included, written for people and for coding agents.
 
-![Plugins](./screenshots/plugins.webp)
+[![Plugins](./screenshots/plugins.webp)](./screenshots/plugins.webp?raw=true)
 
 Bundled plugins:
 
@@ -29,7 +29,7 @@ Bundled plugins:
 - **Latency Test**: a test pattern for measuring latency and pacing with a phone camera.
 - **Virtual HID** and **Xbox Series Controller Driver**: the virtual input options below, installable from the web UI.
 
-![Virtual Display plugin](./screenshots/plugin_virtual_display.webp)
+[![Virtual Display plugin](./screenshots/plugin_virtual_display.webp)](./screenshots/plugin_virtual_display.webp?raw=true)
 
 ### Client Commands
 
@@ -40,9 +40,9 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 - Plugins add commands of their own, and you can change their labels, icons and programs.
 - Individual commands can be turned on or off. Command lines are told which client and application they run for.
 
-![Client Commands](./screenshots/client_commands.webp)
+[![Client Commands](./screenshots/client_commands.webp)](./screenshots/client_commands.webp?raw=true)
 
-![Client Commands Example in Moonlight X](https://github.com/MoreOrLessSoftware/moonlight-android/blob/mlsoft-x/screenshots/v0.8.0/overlay_menu.png?raw=true)\
+[![Client Commands Example in Moonlight X](https://github.com/MoreOrLessSoftware/moonlight-android/blob/mlsoft-x/screenshots/v0.8.0/overlay_menu.png?raw=true)](https://github.com/MoreOrLessSoftware/moonlight-android/blob/mlsoft-x/screenshots/v0.8.0/overlay_menu.png?raw=true)\
 *Example client commands in Moonlight X on Android.*
 
 ### Web UI
@@ -74,7 +74,7 @@ On AMD GPUs on Windows, AV1 and HEVC are encoded through AMD's AMF directly, ins
 
 Support for [PyroWave](https://github.com/Themaister/pyrowave), an experimental wavelet codec for very low latency at very high bitrates on a wired LAN. Encodes 4:2:0 and 4:4:4 in Vulkan compute on Windows and spends its error correction on the critical packets of each frame. Needs a client that decodes PyroWave, such as MoreOrLessSoftware Moonlight PC.
 
-![PyroWave streaming to MoreOrLessSoftware Moonlight](./screenshots/pyrowave_demo.webp)
+[![PyroWave streaming to MoreOrLessSoftware Moonlight](./screenshots/pyrowave_demo.webp)](./screenshots/pyrowave_demo.webp?raw=true)
 
 ### Error Correction
 
