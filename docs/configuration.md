@@ -1583,6 +1583,41 @@ supported on the current platform.
     </tr>
 </table>
 
+### frame_cadence_smoothing
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Frame generation presents each rendered frame and the frames generated for it as a batch. Paced by
+            the game, the frames of a batch come unevenly, such as 7 ms then 9 ms apart over and over at twice
+            the rendered frame rate, and a client that shows frames by their timestamps shows that as judder.
+            With this setting, Sunshine looks for such a repeating pattern of 2 to 4 frames, and while it lasts,
+            timestamps each frame where it would be if the frames were evenly spaced. Frames are captured and
+            sent as before; only their timestamps change, by at most three tenths of a frame interval.
+            @note{Frames keep the time they were presented at whenever no steady pattern is found: when the
+            cadence is even already, when it is irregular, when a frame was missed, and when the pattern is too
+            lopsided to be pacing error, such as 40 FPS on a 60 Hz display. A milder repeating pattern from
+            another cause is evened out as well, such as 24 FPS video on a 60 Hz display.}
+            @note{The host processing latency sent to the client is measured from the adjusted timestamp, so it
+            reads up to three tenths of a frame interval higher for the frames that were moved.}
+            @note{Windows only, with Desktop Duplication capture.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            frame_cadence_smoothing = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Network
 
 ### upnp

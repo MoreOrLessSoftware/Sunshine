@@ -672,6 +672,15 @@ INSTANTIATE_TEST_SUITE_P(
   )
 );
 
+TEST_F(LowFpsBitrateBoostConfigTest, FrameCadenceSmoothingIsOffUnlessEnabled) {
+  config::video.frame_cadence_smoothing = false;
+  config::apply_config_for_test(""sv);
+  EXPECT_FALSE(config::video.frame_cadence_smoothing);
+
+  config::apply_config_for_test("frame_cadence_smoothing = enabled\n"sv);
+  EXPECT_TRUE(config::video.frame_cadence_smoothing);
+}
+
 using FecPercentageConfigParam = std::tuple<std::string_view, int>;
 
 /**

@@ -19,6 +19,7 @@
 #include <winrt/windows.graphics.capture.h>
 
 // local includes
+#include "src/frame_cadence.h"
 #include "src/platform/common.h"
 #include "src/utility.h"
 #include "src/video.h"
@@ -722,6 +723,7 @@ namespace platf::dxgi {
 
     std::optional<std::chrono::steady_clock::time_point> last_frame_presented;  ///< When the desktop last presented a new frame. See snapshot().
     std::optional<int64_t> held_back_cursor_qpc;  ///< When a cursor update waiting for the next frame happened, if one is waiting.
+    frame_cadence_smoother_t cadence_smoother;  ///< Stamps frames evenly when they are presented in a repeating uneven pattern. Used with frame_cadence_smoothing on.
 
     texture2d_t old_surface_delayed_destruction;  ///< Old surface delayed destruction.
     std::chrono::steady_clock::time_point old_surface_timestamp;  ///< Old surface timestamp.

@@ -1675,9 +1675,18 @@ namespace platf::dxgi {
 
     // The cursor's new position and shape are kept above either way, for the next frame to draw.
     // See hold_back_cursor_update().
+    std::optional<std::chrono::steady_clock::time_point> presented_at;
     if (frame_update_flag) {
       last_frame_presented = frame_timestamp.value_or(std::chrono::steady_clock::now());
       held_back_cursor_qpc.reset();
+
+      // Frame generation paced by the game presents its frames unevenly in a repeating pattern.
+      // The frame is traced from when it was really presented, and stamped for the client
+      // where an even pattern would have it. See frame_cadence_smoother_t.
+      if (config::video.frame_cadence_smoothing && frame_timestamp) {
+        presented_at = frame_timestamp;
+        frame_timestamp = cadence_smoother.stamp(*frame_timestamp, frame_info.AccumulatedFrames);
+      }
     } else if (!send_held_back_cursor && hold_back_cursor_update(last_frame_presented, std::chrono::steady_clock::now(), client_frame_rate)) {
       held_back_cursor_qpc = frame_info.LastMouseUpdateTime.QuadPart ? frame_info.LastMouseUpdateTime.QuadPart : qpc_counter();
       held_back_cursor_update = true;
@@ -2037,6 +2046,10 @@ namespace platf::dxgi {
     if (img_out) {
       img_out->frame_timestamp = frame_timestamp;
       img_out->trace.mark(frame_trace::point_e::acquired, acquired_timestamp);
+      img_out->trace.presents = frame_info.AccumulatedFrames;
+      if (presented_at) {
+        img_out->trace.mark(frame_trace::point_e::present, *presented_at);
+      }
     }
 
     return capture_e::ok;

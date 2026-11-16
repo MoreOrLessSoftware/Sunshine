@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { $tp } from '../../../platform-i18n'
 import PlatformLayout from '../../../PlatformLayout.vue'
+import Checkbox from '../../../Checkbox.vue'
 
 const props = defineProps([
   'platform',
@@ -31,6 +32,14 @@ const config = ref(props.config)
     <input type="number" min="1" max="8" step="0.5" class="form-control" id="low_fps_bitrate_boost" placeholder="1" v-model="config.low_fps_bitrate_boost" />
     <div class="form-text">{{ $t("config.low_fps_bitrate_boost_desc") }}</div>
   </div>
+
+  <!--frame_cadence_smoothing-->
+  <Checkbox class="mb-3"
+            id="frame_cadence_smoothing"
+            locale-prefix="config"
+            v-model="config.frame_cadence_smoothing"
+            default="false"
+  ></Checkbox>
 </template>
 
 <style scoped>

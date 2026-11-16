@@ -3145,7 +3145,8 @@ namespace video {
           }
 
           trace = img->trace;
-          if (frame_timestamp) {
+          // Capture marks the present itself when it stamps the frame at another time
+          if (frame_timestamp && !trace->has(frame_trace::point_e::present)) {
             trace->mark(frame_trace::point_e::present, *frame_timestamp);
           }
           trace->mark(frame_trace::point_e::popped);

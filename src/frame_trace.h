@@ -62,6 +62,7 @@ namespace frame_trace {
     bool idr = false;  ///< Whether the frame is a key frame.
     std::uint32_t rtp_timestamp = 0;  ///< RTP timestamp the frame was sent with, 90 kHz.
     std::size_t packets = 0;  ///< Packets the frame was sent as, FEC included.
+    std::uint32_t presents = 0;  ///< Presents the desktop took since the frame captured before this one, this frame's included. 0 if the capture API doesn't say.
 
     /**
      * @brief Record that the frame passed a point.
@@ -314,7 +315,7 @@ namespace frame_trace {
   inline std::string csv_header() {
     return "frame,rtp_us,present_us,present_interval_us,"
            "acquired_us,queued_us,popped_us,converted_us,flushed_us,submitted_us,gpu_done_us,encoded_us,"
-           "broadcast_popped_us,header_us,sent_us,bytes,packets,fec_us,encrypt_us,pacing_us,send_us,replaced,idr\n";
+           "broadcast_popped_us,header_us,sent_us,bytes,packets,fec_us,encrypt_us,pacing_us,send_us,replaced,idr,presents\n";
   }
 
   /**
@@ -323,7 +324,9 @@ namespace frame_trace {
    * @details `rtp_us` is the RTP timestamp in microseconds, as Moonlight computes a frame's
    *          presentation time (timestamp * 1000 / 90), so rows can be matched with the client's
    *          own traces. `present_us` is when the frame was presented on the host's clock, and each
-   *          later point is microseconds after it, or -1 if the frame didn't pass it.
+   *          later point is microseconds after it, or -1 if the frame didn't pass it. `presents` is how
+   *          many times the desktop was presented since the frame captured before this one, so
+   *          more than 1 means presents came faster than capture took them.
    *
    * @param trace The frame's trace, marked as sent.
    * @param previous_present When the previous sent frame was presented, or unset for the first.
@@ -348,7 +351,7 @@ namespace frame_trace {
     const auto rtp_us = static_cast<unsigned long long>(trace.rtp_timestamp) * 1000 / 90;
 
     return std::format(
-      "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+      "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
       trace.frame_index,
       rtp_us,
       present_us,
@@ -371,7 +374,8 @@ namespace frame_trace {
       total_us(trace.pacing),
       total_us(trace.send),
       trace.frames_skipped,
-      trace.idr ? 1 : 0
+      trace.idr ? 1 : 0,
+      trace.presents
     );
   }
 }  // namespace frame_trace

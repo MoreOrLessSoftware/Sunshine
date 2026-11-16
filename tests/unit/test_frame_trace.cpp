@@ -268,7 +268,7 @@ TEST(FrameTraceCsvTest, RowsHaveAFieldForEveryColumn) {
   const auto row = fields(frame_trace::csv_row(make_trace(start, 6ms), {}));
   EXPECT_EQ(header.size(), row.size());
   EXPECT_EQ(header.front(), "frame");
-  EXPECT_EQ(header.back(), "idr");
+  EXPECT_EQ(header.back(), "presents");
 }
 
 TEST(FrameTraceCsvTest, MatchesTheClientsPresentationTime) {
@@ -277,6 +277,7 @@ TEST(FrameTraceCsvTest, MatchesTheClientsPresentationTime) {
   trace.rtp_timestamp = 90'000 * 5 + 45;  // 5 s and half a millisecond at 90 kHz
   trace.packets = 412;
   trace.frames_skipped = 1;
+  trace.presents = 3;
 
   const auto row = fields(frame_trace::csv_row(trace, trace.at[static_cast<std::size_t>(point_e::present)] - 8333us));
   EXPECT_EQ(row[0], "7");
@@ -289,6 +290,7 @@ TEST(FrameTraceCsvTest, MatchesTheClientsPresentationTime) {
   EXPECT_EQ(row[19], "1000");  // pacing
   EXPECT_EQ(row[21], "1");
   EXPECT_EQ(row[22], "0");
+  EXPECT_EQ(row[23], "3");  // presents since the frame captured before
 }
 
 TEST(FrameTraceCsvTest, MarksPointsAFrameDidNotPass) {

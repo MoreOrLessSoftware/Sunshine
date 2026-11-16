@@ -202,6 +202,7 @@ set(SUNSHINE_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/thread_safe.cpp"
         "${CMAKE_SOURCE_DIR}/src/thread_safe.h"
         "${CMAKE_SOURCE_DIR}/src/sync.h"
+        "${CMAKE_SOURCE_DIR}/src/frame_cadence.h"
         "${CMAKE_SOURCE_DIR}/src/frame_rate_limiter.h"
         "${CMAKE_SOURCE_DIR}/src/round_robin.h"
         "${CMAKE_SOURCE_DIR}/src/stat_trackers.h"
