@@ -71,6 +71,8 @@ On AMD GPUs on Windows, AV1 and HEVC are encoded through AMD's AMF directly, ins
 
 Support for [PyroWave](https://github.com/Themaister/pyrowave), an experimental wavelet codec for very low latency at very high bitrates on a wired LAN. Encodes 4:2:0 and 4:4:4 in Vulkan compute on Windows and spends its error correction on the critical packets of each frame. Needs a client that decodes PyroWave, such as MoreOrLessSoftware Moonlight PC.
 
+![PyroWave streaming to MoreOrLessSoftware Moonlight](./screenshots/pyrowave_demo.webp)
+
 ### Error Correction
 
 - The client can choose its own FEC percentage, and `fec_percentage = 0` sends none.
