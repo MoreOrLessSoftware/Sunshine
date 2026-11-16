@@ -42,6 +42,9 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 
 ![Client Commands](./screenshots/client_commands.webp)
 
+![Client Commands Example in Moonlight X](https://github.com/MoreOrLessSoftware/moonlight-android/blob/mlsoft-x/screenshots/v0.8.0/overlay_menu.png?raw=true)\
+*Example client commands in Moonlight X on Android.*
+
 ### Web UI
 
 - Recommendations on the Home page, such as the best AMD encoder settings or the Virtual Display app, applied in one click.
