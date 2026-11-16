@@ -437,7 +437,7 @@ export default {
           await readJson(await apiFetch('./api/apps', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name: VIRTUAL_DISPLAY_APP, index: -1, 'image-path': 'desktop.png'}),
+            body: JSON.stringify({name: VIRTUAL_DISPLAY_APP, index: -1, 'image-path': 'virtual_display.png'}),
           }));
         }
 
