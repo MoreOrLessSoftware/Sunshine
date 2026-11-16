@@ -98,3 +98,22 @@ See the [docs](docs) folder, in particular [plugins](docs/plugins.md), [client c
 ## Building
 
 See the upstream instructions: [docs/building.md](docs/building.md).
+
+## Downloads
+
+[Download the installer or portable zip from releases](https://github.com/MoreOrLessSoftware/Sunshine/releases)
+
+## Credits
+
+This is a fork of [LizardByte Sunshine](https://github.com/LizardByte/Sunshine), created by [Elia Zammuto](https://github.com/loki-47-6F-64) and maintained by [LizardByte](https://github.com/LizardByte) and its contributors. Video encoding with PyroWave uses [PyroWave](https://github.com/Themaister/pyrowave) by Hans-Kristian Arntzen.
+
+The bundled plugins build on these projects:
+
+- [sunshine-vdisplay](https://github.com/Zayrick/sunshine-vdisplay) by Zayrick, the virtual display driver used by Virtual Display.
+- [PSVirtualDesktop](https://github.com/MScholtes/PSVirtualDesktop) by Markus Scholtes, which creates the new Windows desktop for Virtual Display and Display Manager.
+- [vsync-toggle](https://github.com/xanderfrangos/vsync-toggle) by Xander Frangos, used by V-Sync Toggle on NVIDIA GPUs.
+- [Nyrna](https://github.com/Merrit/nyrna) by Merritt Codes, which suspends and resumes games for the Nyrna plugin.
+- [Stadiacast](https://github.com/MoreOrLessSoftware/stadiacast), a fork of [jkfran's Stadiacast](https://github.com/jkfran/stadiacast), for Stadia Controller.
+- [latency-analyzer](https://github.com/MoreOrLessSoftware/latency-analyzer), the test pattern and analysis tools for Latency Test.
+- [libvirtualhid](https://github.com/LizardByte/libvirtualhid) by LizardByte, for Virtual HID.
+- [RivaTuner Statistics Server](https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/) by Unwinder, which RTSS Frame Limit controls (installed separately).
