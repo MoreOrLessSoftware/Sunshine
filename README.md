@@ -1,536 +1,100 @@
-<div align="center">
-  <img
-    src="sunshine.svg"
-    alt="Sunshine icon"
-    width="256"
-/>
-  <h1 align="center">Sunshine</h1>
-  <h4 align="center">Self-hosted game stream host for Moonlight.</h4>
-</div>
+# MoreOrLessSoftware Sunshine
 
-<div align="center">
-  <a href="https://github.com/LizardByte/Sunshine"><img src="https://img.shields.io/github/stars/lizardbyte/sunshine.svg?logo=github&style=for-the-badge" alt="GitHub stars"></a>
-  <a href="https://github.com/LizardByte/Sunshine/releases/latest"><img src="https://img.shields.io/github/downloads/lizardbyte/sunshine/total.svg?style=for-the-badge&logo=github" alt="GitHub Releases"></a>
-  <a href="https://hub.docker.com/r/lizardbyte/sunshine"><img src="https://img.shields.io/docker/pulls/lizardbyte/sunshine.svg?style=for-the-badge&logo=docker" alt="Docker"></a>
-  <a href="https://github.com/LizardByte/Sunshine/pkgs/container/sunshine"><img src="https://img.shields.io/badge/dynamic/json.svg?url=https%3A%2F%2Fipitio.github.io%2Fbackage%2FLizardByte%2FSunshine%2Fsunshine.json&query=%24.downloads&label=ghcr%20pulls&style=for-the-badge&logo=github" alt="GHCR"></a>
-  <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/downloads/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub installs"></a>
-  <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/v/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub Version"></a>
-  <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/l/LizardByte/Sunshine"><img src="https://img.shields.io/winget/v/LizardByte.Sunshine.svg?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAHuSURBVFhH7ZfNTtRQGIYZiMDwN/IrCAqIhMSNKxcmymVwG+5dcDVsWHgDrtxwCYQVl+BChzDEwSnPY+eQ0sxoOz1mQuBNnpyvTdvz9jun5/SrjfxnJUkyQbMEz2ELduF1l0YUA3QyTrMAa2AnPtyOXsELeAYNyKtV2EC3k3lYgTOwg09ghy/BTp7CKBRV844BOpmmMV2+ySb4BmInG7AKY7AHH+EYqqhZo9PPBG/BVDlOizAD/XQFmnoPXzxRQX8M/CCYS48L6RIc4ygGHK9WGg9HZSZMUNRPVwNJGg5Hg2Qgqh4N3FsDsb6EmgYm07iwwvUxstdxJTwgmILf4CfZ6bb5OHANX8GN5x20IVxnG8ge94pt2xpwU3GnCwayF4Q2G2vgFLzHndFzQdk4q77nNfCdwL28qNyMtmEf3A1/QV5FjDiPWo5jrwf8TWZChTlgJvL4F9QL50/A43qVidTvLcuoM2wDQ1+IkgefgUpLcYwMVBqCKNJA2b0gKNocOIITOIef8C/F/CdMbh/GklynsSawKLHS8d9/B1x2LUqsfFyy3TMsWj5A1cLkotDbYO4JjWWZlZEGv8EbOIR1CAVN2eG8W5oNKgxaeC6DmTJjZs7ixUxpznLPLT+v4sXpoMLcLI3mzFSonDXIEI/M3QCIO4YuimBJ/gAAAABJRU5ErkJggg==" alt="Winget Version"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/ci.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/ci.yml.svg?branch=master&label=CI%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (CI)"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/localize.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/localize.yml.svg?branch=master&label=localize%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (localize)"></a>
-  <a href="https://codecov.io/gh/LizardByte/Sunshine"><img src="https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fapp.lizardbyte.dev%2Fdashboard%2Fshields%2Fcodecov%2FSunshine.json&style=for-the-badge&logo=codecov" alt="Codecov"></a>
-  <a href="https://sonarcloud.io/project/overview?id=LizardByte_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/LizardByte_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
-</div>
+This is a fork of [LizardByte Sunshine](https://github.com/LizardByte/Sunshine), the self-hosted game stream host for Moonlight. The upstream documentation is on [Read the Docs](https://docs.lizardbyte.dev/projects/sunshine).
 
-## ℹ️ About
+It works with any Moonlight client, but many features are designed for the MoreOrLessSoftware clients: [Moonlight PC](https://github.com/MoreOrLessSoftware/moonlight-qt) (Windows and Linux) and [Moonlight for Android](https://github.com/MoreOrLessSoftware/moonlight-android). Releases for Windows (an installer and a portable zip) are on the [releases page](https://github.com/MoreOrLessSoftware/Sunshine/releases).
 
-Sunshine is a self-hosted game stream host for Moonlight.
-Offering low-latency, cloud gaming server capabilities with support for AMD, Intel, and Nvidia GPUs for hardware
-encoding. Software encoding is also available. You can connect to Sunshine from any Moonlight client on a variety of
-devices. A web UI is provided to allow configuration, and client pairing, from your favorite web browser. Pair from
-the local server or any mobile device.
+## New In This Fork
 
-LizardByte has the full documentation hosted on [Read the Docs](https://docs.lizardbyte.dev/projects/sunshine)
+### Plugins
 
-* [Stable Docs](https://docs.lizardbyte.dev/projects/sunshine/latest/)
-* [Beta Docs](https://docs.lizardbyte.dev/projects/sunshine/master/)
+Plugins automate the setup you would otherwise do with preparation commands. Each one bundles the scripts that run when a stream starts and stops, a step that downloads what the scripts need, and options you change in the web UI. Windows only. See the [plugin docs](docs/plugins.md).
 
-## 🎮 Feature Compatibility
+- Install, activate, configure, reinstall and uninstall plugins from the **Plugins** page. Bundled plugins are active by default and reinstall themselves when Sunshine updates.
+- Options can differ per application or per client (the client wins), and the page shows which devices override an option.
+- Plugins can add action buttons, a live panel, home page notices and status scripts, and can run scripts when a client resumes or leaves.
+- Import your own plugin from a folder or a GitHub URL, and check for updates. A [plugin guide](src_assets/windows/assets/plugins/PLUGIN_GUIDE.md) is included, written for people and for coding agents.
 
-<table>
-    <caption id="gamepad_emulation">Gamepad Emulation</caption>
-    <tr>
-        <th>Feature</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td colspan="5" align="center">
-        What type of gamepads can be emulated on the host.<br>
-        Clients may support other gamepads.
-        </td>
-    </tr>
-    <tr>
-        <td>Generic</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>DualShock / DS4 (PlayStation 4)</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>DualSense / DS5 (PlayStation 5)</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Nintendo Switch Pro</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Xbox 360</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Xbox One</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Xbox Series</td>
-        <td>🟡<sup>1</sup></td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-    </tr>
-</table>
+![Plugins](./screenshots/plugins.webp)
 
-> [!NOTE]
-> <sup>1</sup> Missing motion, touchpad input, battery state, RGB LEDs, adaptive triggers, and raw HID output reports.
+Bundled plugins:
 
-<table>
-    <caption id="encoding_api">Encoding API</caption>
-    <tr>
-        <th>Encoding API</th>
-        <th>GPU Vendor</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td>AMF</td>
-        <td>AMD</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>Media Foundation</td>
-        <td>Qualcomm</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>NVENC</td>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>QuickSync</td>
-        <td>Intel</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td rowspan="3">VAAPI</td>
-        <td>AMD</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Video Toolbox</td>
-        <td>Apple</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td rowspan="3">Vulkan Video</td>
-        <td>AMD</td>
-        <td>🟡</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Intel</td>
-        <td>🟡</td>
-        <td>🟡</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NVIDIA</td>
-        <td>➖</td>
-        <td>🟡</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Software</td>
-        <td>Any</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-</table>
+- **Virtual Display (using SudoVDA)**: a virtual monitor matching the client's resolution and frame rate, optionally at a multiple of it (the default is 4x), shared or per client, with 10-bit SDR and an option to stream on a new Windows desktop.
+- **Display Manager**: sets a physical display to the client's resolution and refresh rate while it streams, and restores your layout afterwards.
+- **HDR Control**: turns HDR on or off for a stream, with a *Toggle HDR* client command.
+- **RTSS Frame Limit**: caps games at the client's frame rate through RivaTuner.
+- **V-Sync Toggle**: sets the driver's global V-Sync for the stream (NVIDIA and AMD).
+- **Nyrna**: a *Suspend* / *Resume* client command, with a notification showing what is suspended.
+- **Stadia Controller**: use a Stadia Controller over Wi-Fi as a virtual Xbox controller, with a live view of its buttons and optional headset audio.
+- **Latency Test**: a test pattern for measuring latency and pacing with a phone camera.
+- **Virtual HID** and **Xbox Series Controller Driver**: the virtual input options below, installable from the web UI.
 
-<table>
-    <caption id="screen_capture">Screen Capture</caption>
-    <tr>
-        <th>Capture Method</th>
-        <th>FreeBSD</th>
-        <th>Linux</th>
-        <th>macOS</th>
-        <th>Windows</th>
-    </tr>
-    <tr>
-        <td>DXGI Desktop Duplication</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>KMS/DRM</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>NvFBC (X11 only)</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>ScreenCaptureKit</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Wayland (wlroots)</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>Windows.Graphics.Capture</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>🟡</td>
-    </tr>
-    <tr>
-        <td>&nbsp;&nbsp;↳ Portable</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>&nbsp;&nbsp;↳ Service</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>➖</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>X11</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>XDG Desktop Portal</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-    <tr>
-        <td>KWin Screencast</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>➖</td>
-        <td>➖</td>
-    </tr>
-</table>
+![Virtual Display plugin](./screenshots/plugin_virtual_display.webp)
 
-<table>
-    <caption id="capture_encoding_compat">Capture → Encoding Compatibility (Linux/FreeBSD)</caption>
-    <tr>
-        <th>Capture Method</th>
-        <th>VAAPI</th>
-        <th>Vulkan Video</th>
-        <th>NVENC (CUDA)</th>
-        <th>Software</th>
-    </tr>
-    <tr>
-        <td>KMS/DRM</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>NvFBC</td>
-        <td>❌</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>❌</td>
-    </tr>
-    <tr>
-        <td>Wayland (wlroots)</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>X11</td>
-        <td>✅</td>
-        <td>❌</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>XDG Desktop Portal</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-    <tr>
-        <td>KWin Screencast</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-        <td>✅</td>
-    </tr>
-</table>
+### Client Commands
 
-**Legend:** ✅ Supported | 🟡 Partial Support | ❌ Not Yet Supported | ➖ Not Applicable
+Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each one types a key combination on the host or starts a program or script. See the [client command docs](docs/client_commands.md).
 
-## 🖥️ System Requirements
+- Edit them on the **Client Commands** page, for all streams, for one application, or for a group of programs.
+- Program groups appear when one of their programs is in the foreground (or, with a `~` before the name, just running).
+- Plugins add commands of their own, and you can change their labels, icons and programs.
+- Individual commands can be turned on or off. Command lines are told which client and application they run for.
 
-> [!WARNING]
-> These tables are a work in progress. Do not purchase hardware based on this information.
+![Client Commands](./screenshots/client_commands.webp)
 
-<table>
-    <caption id="minimum_requirements">Minimum Requirements</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: VCE 1.0 or higher, see: <a href="https://github.com/obsproject/obs-amd-encoder/wiki/Hardware-Support">obs-amd hardware support</a></td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: VAAPI-compatible, see: <a href="https://www.intel.com/content/www/us/en/developer/articles/technical/linuxmedia-vaapi.html">VAAPI hardware support</a><br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>Nvidia: NVENC enabled cards, see: <a href="https://developer.nvidia.com/video-encode-and-decode-gpu-support-matrix-new">nvenc support matrix</a></td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 3 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i3 or higher</td>
-    </tr>
-    <tr>
-        <td>RAM</td>
-        <td>4GB or more</td>
-    </tr>
-    <tr>
-        <td rowspan="6">OS</td>
-        <td>FreeBSD: 15.1+</td>
-    </tr>
-    <tr>
-        <td>Linux/Debian: 13+ (trixie)</td>
-    </tr>
-    <tr>
-        <td>Linux/Fedora: 43+</td>
-    </tr>
-    <tr>
-        <td>Linux/Ubuntu: 22.04+ (jammy)</td>
-    </tr>
-    <tr>
-        <td>macOS: 14.2+</td>
-    </tr>
-    <tr>
-        <td>Windows: 11+</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: 5GHz, 802.11ac</td>
-    </tr>
-    <tr>
-        <td>Client: 5GHz, 802.11ac</td>
-    </tr>
-</table>
+### Web UI
 
-<table>
-    <caption id="4k_suggestions">4k Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.1 or higher</td>
-    </tr>
-    <tr>
-        <td>
-            Intel:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: HD Graphics 510 or higher<br>
-            &nbsp;&nbsp;Windows: Skylake or newer with QuickSync encoding support
-        </td>
-    </tr>
-    <tr>
-        <td>
-            Nvidia:<br>
-            &nbsp;&nbsp;FreeBSD/Linux: GeForce RTX 2000 series or higher<br>
-            &nbsp;&nbsp;Windows: Geforce GTX 1080 or higher
-        </td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+- Recommendations on the Home page, such as the best AMD encoder settings or the Virtual Display app, applied in one click.
+- A **Clients + PIN** page to manage paired devices: rename them in a dialog, search and sort, see when each last connected, and have a client's name filled in when you pair with a PIN.
+- Plugin settings for an application or a client, with option choices that a script can supply.
+- A list view for the Applications page, and an overview of every application against every plugin.
+- The Sunshine version in the page header, and the active encoder and NVENC unit count in the configuration.
+- A layout that works on phones.
 
-<table>
-    <caption id="hdr_suggestions">HDR Suggestions</caption>
-    <tr>
-        <th>Component</th>
-        <th>Requirement</th>
-    </tr>
-    <tr>
-        <td rowspan="3">GPU</td>
-        <td>AMD: Video Coding Engine 3.4 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: HD Graphics 730 or higher</td>
-    </tr>
-    <tr>
-        <td>Nvidia: Pascal-based GPU (GTX 10-series) or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">CPU</td>
-        <td>AMD: Ryzen 5 or higher</td>
-    </tr>
-    <tr>
-        <td>Intel: Core i5 or higher</td>
-    </tr>
-    <tr>
-        <td rowspan="2">Network</td>
-        <td>Host: CAT5e ethernet or better</td>
-    </tr>
-    <tr>
-        <td>Client: CAT5e ethernet or better</td>
-    </tr>
-</table>
+### Latency and Frame Pacing
 
-## ❓ Support
+- Frames are captured as soon as the desktop presents them, instead of on a fixed timer. The client sees steadier timestamps and less apparent jitter. This allows for native-like VRR frame pacing on the client with more minimal frame buffering.
+- Frame generation (DLSS FG, AFMF and the like) sometimes presents frames unevenly. With *Frame cadence smoothing*, the repeating pattern is detected and each frame is stamped where even spacing would put it, so a client that shows frames by their timestamps shows no judder.
+- Frames are sent in parts while they encode, with a configurable send rate and finer slices, for NVENC and the AMF encoders. The client can ask for a send rate or opt out of sub-frame slices.
+- When a game renders fewer frames than the stream's frame rate, the bitrate is raised to match, so the stream stays close to the bitrate the client asked for. Repeating frames can be turned off or tuned with `minimum_fps_target`.
+- Per-frame latency traces: a log, and a CSV of every sent frame for matching against client logs.
+- The host answers the client's clock sync requests on the video port.
 
-Our support methods are listed in our [LizardByte Docs](https://docs.lizardbyte.dev/latest/about/support.html).
+### AMF Direct Encoding
 
-## 💲 Sponsors and Supporters
+On AMD GPUs on Windows, AV1 and HEVC are encoded through AMD's AMF directly, instead of through FFmpeg.
 
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/sponsors.svg' alt="Sponsors"/>
-</p>
+- Frames are sent while they encode, as tiles (AV1) or slices (HEVC), set with `amd_av1_tiles` and `amd_hevc_slices`.
+- AV1 recovers from lost frames with long-term references instead of an IDR frame.
 
-## 👥 Contributors
+### PyroWave
 
-Thank you to all the contributors who have helped make Sunshine better!
+Support for [PyroWave](https://github.com/Themaister/pyrowave), an experimental wavelet codec for very low latency at very high bitrates on a wired LAN. Encodes 4:2:0 and 4:4:4 in Vulkan compute on Windows and spends its error correction on the critical packets of each frame. Needs a client that decodes PyroWave, such as MoreOrLessSoftware Moonlight PC.
 
-### GitHub
+### Error Correction
 
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/github.Sunshine.svg' alt="GitHub contributors"/>
-</p>
+- The client can choose its own FEC percentage, and `fec_percentage = 0` sends none.
+- A configurable video send rate.
 
-### CrowdIn
+### Input
 
-<p align="center">
-  <img src='https://cdn.jsdelivr.net/gh/LizardByte/contributors@dist/crowdin.606145.svg' alt="CrowdIn contributors"/>
-</p>
+- **Xbox Series Controller Driver** (xgpad): a virtual Xbox Series X|S controller that XInput, Windows.Gaming.Input and GameInput see as a real one, with Guide and Share buttons and impulse trigger rumble. It needs no kernel driver. It is an optional installer component that can also be installed from the web UI.
+- **Virtual HID**: virtual gamepads without ViGEmBus, which is no longer needed.
 
-<div class="section_buttons">
+### Sessions
 
-| Previous |                                       Next |
-|:---------|-------------------------------------------:|
-|          | [Getting Started](docs/getting_started.md) |
+- Preparation commands can run when a client resumes a running application or when the last client leaves it.
+- The output of do, undo, connect and disconnect scripts is kept and shown in the web UI.
 
-</div>
+### Building and Releases
 
-<details style="display: none;">
-  <summary></summary>
-  [TOC]
-</details>
+- Pushing a `vX.X.X` tag builds a Windows MSI and a portable zip and attaches them to a draft release.
+- The version shown names the tag or branch, and the update check can be turned off.
+
+## Documentation
+
+See the [docs](docs) folder, in particular [plugins](docs/plugins.md), [client commands](docs/client_commands.md) and the [configuration reference](docs/configuration.md).
+
+## Building
+
+See the upstream instructions: [docs/building.md](docs/building.md).
