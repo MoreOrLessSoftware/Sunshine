@@ -361,9 +361,8 @@ supported on the current platform.
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Controls which virtual gamepad drivers Sunshine may use. The Web UI and startup notification continue to
-            request a choice while this option is not set. If Sunshine detects an active Virtual HID Driver license,
-            it automatically sets this option to `all` when it is missing.
+            Controls which virtual gamepad drivers Sunshine may use. By default it uses every driver that is
+            installed. The home page warns when no virtual gamepad driver is installed.
             @warning{ViGEmBus has limited gamepad features, supports only Xbox 360 and DualShock 4 emulation, and has
             reached end of life.}
             @note{This option applies only to Windows.}
@@ -372,13 +371,13 @@ supported on the current platform.
     <tr>
         <td>Default</td>
         <td colspan="2">@code{}
-            not set
+            all
             @endcode</td>
     </tr>
     <tr>
         <td>Example</td>
         <td colspan="2">@code{}
-            gamepad_driver = all
+            gamepad_driver = xgpad
             @endcode</td>
     </tr>
     <tr>

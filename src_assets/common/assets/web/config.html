@@ -226,7 +226,7 @@
             nameKey: "config.category_input",
             options: {
               "controller": "enabled",
-              "gamepad_driver": "",
+              "gamepad_driver": "all",
               "gamepad": "auto",
               "ds4_back_as_touchpad_click": "enabled",
               "motion_as_ds4": "enabled",
@@ -462,6 +462,7 @@
           delete this.config.active_encoder;
           delete this.config.nvenc_engines;
           delete this.config.virtualhid_driver_installed;
+          delete this.config.vigembus_installed;
 
           // TODO: let each tab's Component handle it's own data instead of doing it here
 

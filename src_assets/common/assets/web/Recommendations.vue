@@ -96,7 +96,7 @@ import { restartSunshine } from './server_status'
 const DISMISSED_KEY = 'index.dismissedRecommendations';
 
 // Fields of the /api/config response that aren't settings, so they're never written back to the config file
-const RESPONSE_ONLY_KEYS = ['platform', 'status', 'version', 'display_version', 'update_check', 'active_encoder', 'nvenc_engines', 'virtualhid_driver_installed'];
+const RESPONSE_ONLY_KEYS = ['platform', 'status', 'version', 'display_version', 'update_check', 'active_encoder', 'nvenc_engines', 'virtualhid_driver_installed', 'vigembus_installed'];
 
 // Values the config file accepts for an enabled boolean setting
 const TRUTHY_VALUES = ['true', '1', 'enabled', 'enable', 'yes', 'on'];

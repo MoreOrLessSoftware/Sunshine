@@ -1534,13 +1534,15 @@ TEST(ConfigHttpEncoderTest, AddEncoderInfo_SetsActiveEncoder) {
   ASSERT_EQ(output_tree["nvenc_engines"].get<int>(), 2);
 }
 
-// Test: the config response says whether the Virtual HID Driver is installed
-TEST(ConfigHttpVirtualInputTest, AddVirtualInputInfo_SetsDriverInstalled) {
+// Test: the config response says whether the Virtual HID Driver and ViGEmBus are installed
+TEST(ConfigHttpVirtualInputTest, AddVirtualInputInfo_SetsDriversInstalled) {
   nlohmann::json output_tree;
-  confighttp::add_virtual_input_info(output_tree, true);
+  confighttp::add_virtual_input_info(output_tree, true, false);
   ASSERT_TRUE(output_tree["virtualhid_driver_installed"].get<bool>());
-  confighttp::add_virtual_input_info(output_tree, false);
+  ASSERT_FALSE(output_tree["vigembus_installed"].get<bool>());
+  confighttp::add_virtual_input_info(output_tree, false, true);
   ASSERT_FALSE(output_tree["virtualhid_driver_installed"].get<bool>());
+  ASSERT_TRUE(output_tree["vigembus_installed"].get<bool>());
 }
 
 // Test: the active encoder and NVENC unit count are unknown before an encoder has been created

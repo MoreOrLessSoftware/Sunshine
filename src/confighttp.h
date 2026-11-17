@@ -347,13 +347,14 @@ namespace confighttp {
   /**
    * @brief Add which virtual input drivers are installed to a config response.
    *
-   * Sets "virtualhid_driver_installed", so the home page can tell whether controllers need another driver and
-   * whether to recommend the Virtual HID Driver plugin.
+   * Sets "virtualhid_driver_installed" and "vigembus_installed", so the home page can tell whether controllers have
+   * any driver and whether to recommend the Virtual HID Driver plugin.
    *
-   * @param output_tree Response to add the field to.
+   * @param output_tree Response to add the fields to.
    * @param virtualhid_driver_installed Whether the Virtual HID Driver is installed.
+   * @param vigembus_installed Whether the ViGEmBus driver is installed.
    */
-  void add_virtual_input_info(nlohmann::json &output_tree, bool virtualhid_driver_installed);
+  void add_virtual_input_info(nlohmann::json &output_tree, bool virtualhid_driver_installed, bool vigembus_installed);
 
   void resetPortalToken(const resp_https_t &response, const req_https_t &request);
 

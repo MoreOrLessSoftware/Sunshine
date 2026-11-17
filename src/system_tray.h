@@ -104,15 +104,6 @@ namespace system_tray {
    */
   void update_tray_plugin_failed(const std::string &plugin_id, const std::string &plugin_name, const std::string &detail);
 
-#ifdef _WIN32
-  /**
-   * @brief Ask the user to choose a gamepad driver when the gamepad driver setting is unset.
-   *
-   * Clicking the notification opens the gamepad driver setting in the Web UI.
-   */
-  void prepare_tray_gamepad_driver_notice();
-#endif
-
   /**
    * @brief Initializes and runs the system tray in a separate thread.
    * @return 0 if initialization was successful, non-zero otherwise.

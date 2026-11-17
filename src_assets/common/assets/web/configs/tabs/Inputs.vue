@@ -36,7 +36,6 @@ watch(
     <div class="mb-3" v-if="platform === 'windows'">
       <label for="gamepad_driver" class="form-label">{{ $t('config.gamepad_driver') }}</label>
       <select id="gamepad_driver" class="form-select" v-model="config.gamepad_driver" required>
-        <option value="" disabled>{{ $t('config.gamepad_driver_select') }}</option>
         <option value="all">{{ $t('config.gamepad_driver_all') }}</option>
         <option value="virtualhid">{{ $t('config.gamepad_driver_virtualhid') }}</option>
         <option value="vigembus">{{ $t('config.gamepad_driver_vigembus') }}</option>

@@ -371,7 +371,6 @@
     "gamepad_driver": "Windows Gamepad Drivers",
     "gamepad_driver_all": "All Available Drivers",
     "gamepad_driver_desc": "Choose which virtual gamepad drivers Sunshine may use. All Available Drivers prefers Virtual HID Driver when licensed; otherwise it uses the Sunshine Xbox Series Driver (xgpad) for Xbox controllers when installed and ViGEmBus for the rest. Virtual HID Driver is an optional paid upgrade. ViGEmBus supports only Xbox 360 and DualShock 4, has limited features, and has reached end of life. Sunshine Xbox Series Driver (xgpad) emulates every controller as an Xbox Series X|S controller with Guide, Share and impulse triggers, and falls back to the other drivers when its driver is not installed. Install it with the Xbox Series Controller Driver plugin on the Plugins page.",
-    "gamepad_driver_select": "Choose a driver...",
     "gamepad_driver_vigembus": "ViGEmBus",
     "gamepad_driver_virtualhid": "Virtual HID Driver",
     "gamepad_driver_xgpad": "Sunshine Xbox Series Driver (xgpad)",
@@ -598,7 +597,6 @@
   },
   "index": {
     "description": "Sunshine is a self-hosted game stream host for Moonlight.",
-    "choose_gamepad_driver": "Choose Gamepad Drivers",
     "fix_now": "Fix Now",
     "startup_errors": "<b>Attention!</b> Sunshine detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
     "plugin_notice_from": "From the {name} plugin",
@@ -636,15 +634,13 @@
     "rec_vrr_minimum_fps_title": "Streaming to a VRR Display?",
     "rec_xgpad_action": "Install xgpad",
     "rec_xgpad_confirm": "Install the Xbox Series Controller Driver plugin? It installs the xgpad driver and trusts a self-signed certificate made for this Sunshine release on this computer. The certificate's private key was destroyed after signing, so it can't sign anything else.",
-    "rec_xgpad_desc": "Neither Virtual HID Driver nor the Sunshine Xbox Series Driver (xgpad) is installed, so controllers from clients need ViGEmBus, which has limited features and has reached end of life. The Xbox Series Controller Driver plugin, included with Sunshine, installs xgpad.",
+    "rec_xgpad_desc": "No virtual gamepad driver is installed, so controllers from clients won't work. The Xbox Series Controller Driver plugin, included with Sunshine, installs the Sunshine Xbox Series Driver (xgpad).",
     "rec_xgpad_done": "The driver is installed. Restart Sunshine so controllers use it.",
     "rec_xgpad_title": "Install a Virtual Gamepad Driver",
     "recommendations": "Recommendations",
     "recommendations_desc": "Changes that can improve streaming on this host.",
     "update_available": "Update {version} available",
     "version": "Version {version}",
-    "gamepad_driver_choice_desc": "Choose whether Sunshine may use all available drivers, only Virtual HID Driver, only ViGEmBus, or the Sunshine Xbox Series Driver (xgpad). Virtual HID Driver is an optional paid upgrade. ViGEmBus has limited features and has reached end of life.",
-    "gamepad_driver_choice_title": "Choose Windows Gamepad Drivers",
     "welcome": "Hello, Sunshine!"
   },
   "navbar": {

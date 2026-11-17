@@ -31,21 +31,6 @@
       </div>
     </div>
 
-    <!-- Windows gamepad driver choice -->
-    <div class="alert alert-info my-4" v-if="showGamepadDriverChoice">
-      <div class="d-flex align-items-center mb-3">
-        <info :size="32" class="icon-lg me-3 flex-shrink-0"></info>
-        <div>
-          <p class="mb-1"><strong>{{ $t('index.gamepad_driver_choice_title') }}</strong></p>
-          <p class="mb-1">{{ $t('index.gamepad_driver_choice_desc') }}</p>
-        </div>
-      </div>
-      <a class="btn btn-info" href="./config#gamepad_driver">
-        <gamepad-2 :size="18" class="icon"></gamepad-2>
-        {{ $t('index.choose_gamepad_driver') }}
-      </a>
-    </div>
-
     <!-- Notices from plugins' status scripts -->
     <div class="alert my-4"
          :class="notice.level === 'warning' ? 'alert-warning' : 'alert-info'"
@@ -92,7 +77,6 @@
     AlertTriangle,
     FileText,
     Info,
-    Gamepad2
   } from '@lucide/vue'
 
   console.log("Hello, Sunshine!")
@@ -106,7 +90,6 @@
       AlertTriangle,
       FileText,
       Info,
-      Gamepad2
     },
     data() {
       return {
@@ -132,17 +115,12 @@
     },
     computed: {
       /**
-       * Whether to ask for a gamepad driver choice, since the setting is unset on Windows.
-       */
-      showGamepadDriverChoice() {
-        return this.platform === 'windows' && !this.gamepadDriver;
-      },
-      /**
        * Whether to recommend the xgpad plugin, which installs the xgpad driver: gamepads are on, no virtual gamepad
        * driver is installed, and the selected gamepad driver setting would use xgpad.
        */
       suggestXgpad() {
-        return this.xgpadMightBeUsed && !!this.xgpad && !this.xgpad.installed && this.config.virtualhid_driver_installed === false;
+        return this.xgpadMightBeUsed && !!this.xgpad && !this.xgpad.installed && this.config.virtualhid_driver_installed === false &&
+          this.config.vigembus_installed === false;
       },
       /**
        * Whether the gamepad driver setting would use xgpad for controllers.

@@ -185,10 +185,6 @@ protected:
    * @brief Reset any tray state left by an earlier test.
    */
   void SetUp() override {
-  #ifdef _WIN32
-    original_gamepad_driver_ = config::input.gamepad_driver;
-    config::input.gamepad_driver = config::GAMEPAD_DRIVER_ALL;
-  #endif
     EXPECT_EQ(system_tray::end_tray(), 0);
   #ifndef _WIN32
     std::ignore = tray_loop(0);
@@ -213,9 +209,6 @@ protected:
     std::ignore = tray_restore_mouse_position();
   #endif
     system_tray::reset_tray_data_for_testing();
-  #ifdef _WIN32
-    config::input.gamepad_driver = std::move(original_gamepad_driver_);
-  #endif
   }
 
   /**
@@ -232,11 +225,6 @@ protected:
   #endif
     return result;
   }
-
-private:
-  #ifdef _WIN32
-  std::string original_gamepad_driver_;  ///< Original gamepad driver preference restored after each test.
-  #endif
 };
 
 TEST_F(SystemTrayTest, UpdatesAreIgnoredBeforeInitialization) {
@@ -270,17 +258,6 @@ TEST_F(SystemTrayTest, ResolvesDevelopmentTrayIconsFromExecutableDirectory) {
   EXPECT_EQ(system_tray::resource_path_for_testing("test_assets/web/images/logo-sunshine.svg"), sunshine_icon);
 }
 
-TEST_F(SystemTrayTest, PromptsForUnsetGamepadDriver) {
-  config::input.gamepad_driver.clear();
-  system_tray::prepare_tray_gamepad_driver_notice();
-
-  const auto &tray_data = system_tray::tray_data_for_testing();
-  EXPECT_STREQ(tray_data.notification_title, "Choose a Gamepad Driver");
-  EXPECT_STREQ(tray_data.notification_text, "Choose which virtual gamepad drivers Sunshine may use in the Input settings.");
-  EXPECT_STREQ(tray_data.notification_icon, tray_data.allIconPaths[0]);
-  EXPECT_NE(tray_data.notification_cb, nullptr);
-}
-
 TEST_F(SystemTrayTest, PluginFailureNamesThePluginAndItsError) {
   system_tray::update_tray_plugin_failed("rtss-limit", "RTSS Frame Limit", "Failed to set the limit");
 
@@ -292,16 +269,6 @@ TEST_F(SystemTrayTest, PluginFailureNamesThePluginAndItsError) {
 
   system_tray::update_tray_plugin_failed("p", "P", "");
   EXPECT_STREQ(tray_data.notification_text, "Click here to see its log.");
-}
-
-TEST_F(SystemTrayTest, ChosenGamepadDriverNeedsNoPrompt) {
-  config::input.gamepad_driver = config::GAMEPAD_DRIVER_XGPAD;
-  system_tray::prepare_tray_gamepad_driver_notice();
-
-  const auto &tray_data = system_tray::tray_data_for_testing();
-  EXPECT_EQ(tray_data.notification_title, nullptr);
-  EXPECT_EQ(tray_data.notification_text, nullptr);
-  EXPECT_EQ(tray_data.notification_cb, nullptr);
 }
   #endif
 

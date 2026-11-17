@@ -604,6 +604,20 @@ namespace platf {
     return has_device_with_driver(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Enum\\ROOT\\LIBVIRTUALHID");
   }
 
+  bool registry_key_exists(HKEY root, const std::wstring &path) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, path.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+      return false;
+    }
+    RegCloseKey(key);
+    return true;
+  }
+
+  bool vigembus_installed() {
+    // The driver's installer registers it as the ViGEmBus service.
+    return registry_key_exists(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\ViGEmBus");
+  }
+
   // Note: This does NOT append a null terminator
   /**
    * @brief Append a null-terminated string to a Windows environment block.

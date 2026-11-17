@@ -457,24 +457,4 @@ namespace config {
    * @return Parsed configuration key-value entries.
    */
   std::unordered_map<std::string, std::string> parse_config(const std::string_view &file_content);
-
-  /**
-   * @brief Persist a configuration option when the active file does not already define it.
-   *
-   * Existing text and comments are retained because the new setting is appended rather
-   * than serializing the complete configuration again.
-   *
-   * @param name Configuration option name.
-   * @param value Configuration option value.
-   * @return True when the option was appended successfully; otherwise, false.
-   */
-  bool persist_config_option_if_missing(std::string_view name, std::string_view value);
-
-  /**
-   * @brief Select all available gamepad drivers when a licensed user has not made a choice.
-   *
-   * @param virtualhid_licensed Whether Virtual HID Driver has an active machine license.
-   * @return True when the `all` preference was persisted and applied; otherwise, false.
-   */
-  bool select_all_gamepad_drivers_if_licensed(bool virtualhid_licensed);
 }  // namespace config

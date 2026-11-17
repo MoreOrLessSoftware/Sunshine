@@ -91,6 +91,16 @@ TEST_F(WindowsDeviceRegistryTest, AnyDeviceWithDriverCounts) {
   EXPECT_TRUE(platf::has_device_with_driver(HKEY_CURRENT_USER, path));
 }
 
+TEST_F(WindowsDeviceRegistryTest, KeyExistsOnlyOnceCreated) {
+  EXPECT_FALSE(platf::registry_key_exists(HKEY_CURRENT_USER, path));
+  add_device(L"0000", false);
+  EXPECT_TRUE(platf::registry_key_exists(HKEY_CURRENT_USER, path));
+}
+
+TEST(WindowsMiscTest, ViGEmBusCheckMatchesTheRegistry) {
+  EXPECT_EQ(platf::vigembus_installed(), platf::registry_key_exists(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\ViGEmBus"));
+}
+
 TEST(WindowsMiscTest, VirtualHidDriverCheckMatchesTheRegistry) {
   EXPECT_EQ(platf::virtualhid_driver_installed(), platf::has_device_with_driver(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Enum\\ROOT\\LIBVIRTUALHID"));
 }

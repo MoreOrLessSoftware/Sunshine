@@ -172,8 +172,9 @@ namespace confighttp {
     output_tree["nvenc_engines"] = nvenc_engines;
   }
 
-  void add_virtual_input_info(nlohmann::json &output_tree, bool virtualhid_driver_installed) {
+  void add_virtual_input_info(nlohmann::json &output_tree, bool virtualhid_driver_installed, bool vigembus_installed) {
     output_tree["virtualhid_driver_installed"] = virtualhid_driver_installed;
+    output_tree["vigembus_installed"] = vigembus_installed;
   }
 
   /**
@@ -1463,7 +1464,7 @@ namespace confighttp {
     }
     add_encoder_info(output_tree, video::probed_encoder_name(), nvenc::last_encoder_engine_count.load());
 #ifdef _WIN32
-    add_virtual_input_info(output_tree, platf::virtualhid_driver_installed());
+    add_virtual_input_info(output_tree, platf::virtualhid_driver_installed(), platf::vigembus_installed());
 #endif
 
     send_response(response, output_tree);

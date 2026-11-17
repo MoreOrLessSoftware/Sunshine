@@ -250,36 +250,6 @@ namespace system_tray {
   }
   #endif
 
-  #ifdef _WIN32
-  /**
-   * @brief Clear notification fields before replacing the tray state.
-   */
-  void clear_tray_notification() {
-    tray.notification_title = nullptr;
-    tray.notification_text = nullptr;
-    tray.notification_cb = nullptr;
-    tray.notification_icon = nullptr;
-  }
-
-  void prepare_tray_gamepad_driver_notice() {
-    if (!config::input.gamepad_driver.empty()) {
-      return;
-    }
-
-    const std::scoped_lock lock(tray_state_mutex());
-    clear_tray_notification();
-    tray.notification_title = "Choose a Gamepad Driver";
-    tray.notification_text = "Choose which virtual gamepad drivers Sunshine may use in the Input settings.";
-    tray.notification_icon = tray.allIconPaths[0];
-    tray.notification_cb = []() {
-      launch_ui("/config#gamepad_driver");
-    };
-    if (tray_initialized_state().load()) {
-      tray_update(&tray);
-    }
-  }
-  #endif
-
   /**
    * @brief Get resource path.
    *

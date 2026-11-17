@@ -105,4 +105,20 @@ namespace platf {
    * @return `true` when the driver's root device exists and has its driver bound.
    */
   bool virtualhid_driver_installed();
+
+  /**
+   * @brief Check whether a registry key exists.
+   *
+   * @param root Registry hive holding the key.
+   * @param path Key to look for.
+   * @return `true` when the key can be opened for reading.
+   */
+  bool registry_key_exists(HKEY root, const std::wstring &path);
+
+  /**
+   * @brief Check whether the ViGEmBus driver is installed.
+   *
+   * @return `true` when its service is registered.
+   */
+  bool vigembus_installed();
 }  // namespace platf
