@@ -27,7 +27,7 @@
       "id": "new_desktop",
       "type": "boolean",
       "label": "Start the stream on a new desktop",
-      "description": "Create a new Windows desktop before setting up the virtual display, and remove it when the stream ends. Default: Off",
+      "description": "Create a new Windows desktop before setting up the virtual display, and remove it when the stream ends.",
       "default": false
     },
     {
