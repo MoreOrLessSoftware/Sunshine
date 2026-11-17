@@ -25,10 +25,10 @@ Bundled plugins:
 - **RTSS Frame Limit**: caps games at the client's frame rate through RivaTuner.
 - **V-Sync Toggle**: sets the driver's global V-Sync for the stream (NVIDIA and AMD).
 - **Nyrna**: a *Suspend* / *Resume* client command, with a notification showing what is suspended.
-- **Stadia Controller**: use a Stadia Controller over Wi-Fi as a virtual Xbox controller, with a live view of its buttons and optional headset audio.
-- **Latency Test**: a test pattern for measuring latency and pacing with a phone camera.
 - **Xbox Series Controller Driver**: light-weight input driver that maps any client controller to an Xbox Series controller on this host.
 - **Virtual HID**: manage the optional Virtual HID driver license and status.
+- **Stadia Controller**: use a Stadia Controller over Wi-Fi as a virtual Xbox controller, with a live view of its buttons and optional headset audio.
+- **Latency Test**: a test pattern for measuring latency and pacing with a phone camera (read more: [ML Latency Analyzer](https://github.com/MoreOrLessSoftware/latency-analyzer))
 
 [![Virtual Display plugin](./screenshots/plugin_virtual_display.webp)](https://raw.githubusercontent.com/MoreOrLessSoftware/Sunshine/mlsoft-custom/screenshots/plugin_virtual_display.webp)
 
@@ -58,7 +58,8 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 ### Latency and Frame Pacing
 
 - Frames are captured as soon as the desktop presents them, instead of on a fixed timer. The client sees steadier timestamps and less apparent jitter. This allows for native-like VRR frame pacing on the client with more minimal frame buffering.
-- Frames are sent in parts while they encode, with a configurable send rate and finer slices, for NVENC and the AMF encoders. The client can ask for a send rate or opt out of sub-frame slices.
+- Frames are sent in parts while they encode, with a configurable send rate and finer slices, for NVENC and the AMF encoders. The client can ask for a send rate or opt out of sub-frame slices.  
+  **NOTE**: For NVENC, you can use either split-frame encoding or sub-frame encoding - not both at the same time. For cards with 2 encoders, split-frame encoding is likely the better choice.
 - When a game renders fewer frames than the stream's frame rate, the bitrate is raised to match, so the stream stays close to the bitrate the client asked for. Repeating frames can be turned off or tuned with `minimum_fps_target`.
 - Frame generation sometimes presents frames unevenly. With the **Frame cadence smoothing** setting, the repeating pattern is detected and each frame is stamped where even spacing would put it, so a client that shows frames by their timestamps shows no judder.  
 *If you're using MFG Unlocker with a 30-series card, set ```Rtx30FlipMetering=0```*
