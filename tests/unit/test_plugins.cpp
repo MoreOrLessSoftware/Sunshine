@@ -181,6 +181,7 @@ protected:
     plugins::reset_fetcher_for_testing();
     plugins::set_choices_timeout_for_testing(plugins::DEFAULT_CHOICES_TIMEOUT);
     plugins::set_change_callback({});
+    plugins::set_activation_callback({});
     plugins::set_stream_check({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
@@ -1374,6 +1375,147 @@ TEST_F(PluginsTest, PrepCmdsIncludeActivePluginsInOrder) {
   EXPECT_EQ(fs::path(cmds[1].log_file), data_dir / "second.log");  // The output goes to the plugin's log
 
   EXPECT_EQ(plugins::prep_cmds({}).size(), 3);
+}
+
+/**
+ * @brief Fixture with two plugins that set up the display, `manager` active and `virtual` installed but inactive.
+ */
+class DisplayConflictTest: public PluginsTest {
+protected:
+  void SetUp() override {
+    PluginsTest::SetUp();
+    write_plugin(builtin_dir, "manager", {{"id", "manager"}, {"order", 10}, {"manages_display", true}});
+    write_plugin(builtin_dir, "virtual", {{"id", "virtual"}, {"order", 20}, {"manages_display", true}, {"scripts", {{"install", "install.ps1"}}}});
+    write_plugin(builtin_dir, "plain", {{"id", "plain"}, {"order", 30}});
+    write_text(state_file, R"({"plugins":{
+      "manager":{"installed":true,"active":true},
+      "virtual":{"installed":true,"active":false},
+      "plain":{"installed":true,"active":false}
+    }})");
+    plugins::load(paths());
+  }
+
+  /**
+   * @brief Applications covering each case: no exclusions, the other plugin excluded, this one excluded.
+   *
+   * @return Contents of an apps.json.
+   */
+  static json apps() {
+    return json::parse(R"({"env":{},"apps":[
+      {"name":"Desktop"},
+      {"name":"Game","exclude-plugins":["plain"]},
+      {"name":"NoManager","exclude-plugins":["manager"]},
+      {"name":"NoVirtual","exclude-plugins":["virtual"]}
+    ]})");
+  }
+};
+
+TEST_F(DisplayConflictTest, ExcludesThePluginWhereAnotherSetsUpTheDisplay) {
+  auto tree = apps();
+  EXPECT_EQ(plugins::exclude_display_conflicts("virtual", tree), (std::vector<std::string> {"Desktop", "Game"}));
+  EXPECT_EQ(tree["apps"][0]["exclude-plugins"], json({"virtual"}));
+  EXPECT_EQ(tree["apps"][1]["exclude-plugins"], json({"plain", "virtual"}));
+  EXPECT_EQ(tree["apps"][2]["exclude-plugins"], json({"manager"}));
+  EXPECT_EQ(tree["apps"][3]["exclude-plugins"], json({"virtual"}));
+}
+
+TEST_F(DisplayConflictTest, LeavesAppsAloneWithoutAnotherActiveDisplayPlugin) {
+  auto tree = apps();
+  const auto original = tree;
+  EXPECT_TRUE(plugins::exclude_display_conflicts("plain", tree).empty());
+  EXPECT_TRUE(plugins::exclude_display_conflicts("missing", tree).empty());
+  // The other plugin that sets up the display, "virtual", isn't active
+  EXPECT_TRUE(plugins::exclude_display_conflicts("manager", tree).empty());
+  EXPECT_EQ(tree, original);
+
+  json not_apps = json::array();
+  EXPECT_TRUE(plugins::exclude_display_conflicts("virtual", not_apps).empty());
+  json bad_entries = json::parse(R"({"apps":[1,{"name":"Bad","exclude-plugins":"manager"}]})");
+  EXPECT_EQ(plugins::exclude_display_conflicts("virtual", bad_entries), (std::vector<std::string> {"Bad"}));
+  EXPECT_EQ(bad_entries["apps"][1]["exclude-plugins"], json({"virtual"}));
+}
+
+TEST_F(DisplayConflictTest, ActivatingCallsTheCallbackOnceAndListsTheApps) {
+  std::vector<std::string> activated;
+  plugins::set_activation_callback([&activated](const std::string &id) {
+    activated.push_back(id);
+    return std::vector<std::string> {"Desktop"};
+  });
+
+  std::string error;
+  ASSERT_EQ(plugins::configure("virtual", true, std::nullopt, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(activated, std::vector<std::string> {"virtual"});
+  EXPECT_EQ(find_plugin(plugins::list(), "virtual")["display_exclusions"], json({"Desktop"}));
+
+  // Already active: saving again doesn't exclude anything more
+  ASSERT_EQ(plugins::configure("virtual", true, std::nullopt, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(activated.size(), 1);
+
+  ASSERT_EQ(plugins::configure("virtual", false, std::nullopt, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(find_plugin(plugins::list(), "virtual")["display_exclusions"], json::array());
+}
+
+TEST_F(DisplayConflictTest, NothingChangedListsNoApps) {
+  plugins::set_activation_callback([](const std::string &) {
+    return std::vector<std::string> {};
+  });
+  std::string error;
+  ASSERT_EQ(plugins::configure("virtual", true, std::nullopt, error), plugins::result_e::ok) << error;
+  EXPECT_EQ(find_plugin(plugins::list(), "virtual")["display_exclusions"], json::array());
+}
+
+TEST_F(DisplayConflictTest, InstallingWithActivateListsTheAppsWhenItFinishes) {
+  write_text(state_file, R"({"plugins":{"manager":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+  plugins::set_activation_callback([](const std::string &id) {
+    return id == "virtual" ? std::vector<std::string> {"Desktop", "Game"} : std::vector<std::string> {};
+  });
+
+  std::string error;
+  ASSERT_EQ(plugins::start_task("virtual", plugins::action_e::install, error, true), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  const auto plugin = find_plugin(plugins::list(), "virtual");
+  EXPECT_EQ(plugin["task"]["status"], "succeeded");
+  EXPECT_TRUE(plugin["active"].get<bool>());
+  EXPECT_EQ(plugin["display_exclusions"], json({"Desktop", "Game"}));
+
+  // Uninstalling forgets them
+  ASSERT_EQ(plugins::start_task("virtual", plugins::action_e::uninstall, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  EXPECT_EQ(find_plugin(plugins::list(), "virtual")["display_exclusions"], json::array());
+}
+
+TEST_F(DisplayConflictTest, InstallingWithoutActivatingCallsNothing) {
+  write_text(state_file, R"({"plugins":{"manager":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+  bool called = false;
+  plugins::set_activation_callback([&called](const std::string &) {
+    called = true;
+    return std::vector<std::string> {};
+  });
+
+  std::string error;
+  ASSERT_EQ(plugins::start_task("virtual", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  EXPECT_FALSE(called);
+  EXPECT_EQ(find_plugin(plugins::list(), "virtual")["task"]["status"], "succeeded");
+}
+
+TEST_F(DisplayConflictTest, ProcessUpdatesTheAppsFile) {
+  std::string error;
+  ASSERT_EQ(plugins::configure("virtual", true, std::nullopt, error), plugins::result_e::ok) << error;
+
+  const auto apps_file = root / "apps.json";
+  write_text(apps_file, apps().dump());
+  EXPECT_EQ(proc::exclude_display_conflicts("virtual", apps_file.string()), (std::vector<std::string> {"Desktop", "Game"}));
+  const auto saved = json::parse(read_text(apps_file));
+  EXPECT_EQ(saved["apps"][0]["exclude-plugins"], json({"virtual"}));
+
+  // Nothing left to change, a plugin that doesn't set up the display, and an unreadable file change nothing
+  EXPECT_TRUE(proc::exclude_display_conflicts("virtual", apps_file.string()).empty());
+  EXPECT_TRUE(proc::exclude_display_conflicts("plain", apps_file.string()).empty());
+  write_text(apps_file, "not json");
+  EXPECT_TRUE(proc::exclude_display_conflicts("virtual", apps_file.string()).empty());
 }
 
 TEST_F(PluginsTest, DisplayPluginIsFirstActiveManagingPlugin) {

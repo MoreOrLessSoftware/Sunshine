@@ -623,7 +623,9 @@ namespace plugins {
   /**
    * @brief Describe every plugin for the web UI.
    *
-   * @return Array of plugin objects with manifest fields, state and the last task.
+   * @return Array of plugin objects with manifest fields, state and the last task. `display_exclusions` lists the
+   *         applications the plugin was turned off for when it was last activated, because another plugin already
+   *         sets up the display for them.
    */
   nlohmann::json list();
 
@@ -663,6 +665,19 @@ namespace plugins {
    * @return true if the plugin exists and its manifest sets `manages_display`.
    */
   bool manages_display(const std::string &id);
+
+  /**
+   * @brief Turn a plugin that sets up the display off for the applications another such plugin already serves.
+   *
+   * Only one plugin sets up the display for a stream, so a newly activated one would otherwise either never run
+   * or replace the one an application already uses. An application keeps the plugin it has.
+   *
+   * @param id ID of the plugin that was just activated.
+   * @param apps_tree Contents of apps.json. The plugin is added to `exclude-plugins` of each application in which
+   *                  another active plugin that sets up the display isn't excluded.
+   * @return Names of the applications changed, empty when the plugin doesn't set up the display.
+   */
+  std::vector<std::string> exclude_display_conflicts(const std::string &id, nlohmann::json &apps_tree);
 
   /**
    * @brief The client commands of one plugin, as offered to clients.
@@ -903,6 +918,18 @@ namespace plugins {
    * @param callback Function to call, or an empty function to call nothing.
    */
   void set_change_callback(std::function<void()> callback);
+
+  /**
+   * @brief Set the function called when a plugin is activated, whether directly or by an install.
+   *
+   * Sunshine uses it to turn a plugin that sets up the display off for applications another such plugin serves.
+   * The applications it returns are listed as the plugin's `display_exclusions` until the plugin is deactivated
+   * or activated again. It's called without the registry lock held, before an install task reports success.
+   *
+   * @param callback Function given the plugin ID that returns the names of the applications it changed, or an
+   *                 empty function to call nothing.
+   */
+  void set_activation_callback(std::function<std::vector<std::string>(const std::string &id)> callback);
 
   /**
    * @brief Set the function that tells whether a stream is running.

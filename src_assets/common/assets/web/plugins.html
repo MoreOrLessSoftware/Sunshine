@@ -315,6 +315,11 @@
               <pre v-if="logs[plugin.id] !== undefined" class="plugin-log border rounded p-2 mb-0">{{ logs[plugin.id] }}</pre>
             </div>
 
+            <!-- Applications this display plugin was turned off for when activated, since another one serves them -->
+            <div v-if="plugin.active && plugin.display_exclusions && plugin.display_exclusions.length" class="alert alert-info py-2 mb-2" role="status">
+              {{ $t('plugins.display_exclusions', {apps: plugin.display_exclusions.join(', ')}) }}
+            </div>
+
             <!-- Options -->
             <div v-if="(plugin.active || !canTurnOff(plugin)) && plugin.options.length > 0 && drafts[plugin.id]" class="border-top pt-3 mt-2">
               <h6>{{ $t('plugins.options') }}</h6>
@@ -598,10 +603,14 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         if (this.currentView !== 'apps' && !this.showingGuide && !this.selectedPlugin) {
           this.showView('apps', true);
         }
+        let exclusionsChanged = false;
         for (const plugin of plugins) {
           const old = previous[plugin.id];
           if (old && this.isApplying(old) && plugin.task && plugin.task.status === 'succeeded') {
             notifyKey.success('plugins.saved');
+          }
+          if (old && JSON.stringify(old.display_exclusions || []) !== JSON.stringify(plugin.display_exclusions || [])) {
+            exclusionsChanged = true;
           }
           if (!this.drafts[plugin.id] || (old && !this.isDirtyAgainst(plugin.id, old.config))) {
             this.drafts[plugin.id] = {...plugin.config};
@@ -609,6 +618,10 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
           if (this.logs[plugin.id] !== undefined) {
             this.loadLog(plugin);
           }
+        }
+        // Activating a display plugin can change the applications' exclusions, so the grid shows them
+        if (exclusionsChanged) {
+          this.loadMatrixApps();
         }
       },
 

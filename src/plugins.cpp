@@ -114,6 +114,8 @@ namespace plugins {
       bool task_running = false;  ///< Whether an install or uninstall is running.
       script_runner_t runner = run_script;  ///< Runs install and uninstall scripts.
       std::function<void()> on_change;  ///< Called after a background operation changes plugin state.
+      std::function<std::vector<std::string>(const std::string &)> on_activate;  ///< Called when a plugin is activated.
+      std::unordered_map<std::string, std::vector<std::string>> display_exclusions;  ///< Applications each plugin was turned off for when last activated.
       std::function<bool()> streaming;  ///< Whether a stream is running, for plugins that are `idle_only`.
       std::jthread worker;  ///< Thread running the current install or uninstall.
       std::function<bool()> session_ready = default_session_ready;  ///< Whether install scripts can run yet.
@@ -966,6 +968,43 @@ namespace plugins {
     }
 
     /**
+     * @brief Return the applications a plugin was turned off for when it was last activated.
+     *
+     * The caller must hold the registry mutex.
+     *
+     * @param reg Registry to read.
+     * @param id Plugin ID.
+     * @return Array of application names, empty when there are none.
+     */
+    json display_exclusions_of(const registry_t &reg, const std::string &id) {
+      const auto it = reg.display_exclusions.find(id);
+      return it == reg.display_exclusions.end() ? json::array() : json(it->second);
+    }
+
+    /**
+     * @brief Call the activation callback for a plugin and remember the applications it changed.
+     *
+     * The caller must not hold the registry mutex, since the callback reads the registry.
+     *
+     * @param reg Registry to update.
+     * @param id ID of the plugin that was just activated.
+     */
+    void notify_activation(registry_t &reg, const std::string &id) {
+      std::function<std::vector<std::string>(const std::string &)> callback;
+      {
+        std::scoped_lock lock {reg.mutex};
+        callback = reg.on_activate;
+      }
+      auto changed = callback ? callback(id) : std::vector<std::string> {};
+      std::scoped_lock lock {reg.mutex};
+      if (changed.empty()) {
+        reg.display_exclusions.erase(id);
+      } else {
+        reg.display_exclusions[id] = std::move(changed);
+      }
+    }
+
+    /**
      * @brief Run an install or uninstall script and record the outcome.
      *
      * @param id Plugin ID.
@@ -1039,6 +1078,7 @@ namespace plugins {
 
       auto &reg = registry();
       std::function<void()> on_change;
+      bool activated = false;
       {
         std::scoped_lock lock {reg.mutex};
         if (success && action != action_e::run) {
@@ -1046,15 +1086,27 @@ namespace plugins {
           if (action == action_e::apply) {
             state.options = *pending_options;
           } else {
+            const bool was_active = state.active;
             state.installed = action == action_e::install;
             state.installed_before = state.installed_before || state.installed;
             state.active = state.installed && (state.active || activate);
             state.installed_version = state.installed ? manifest.version : std::string {};
+            activated = state.active && !was_active;
           }
           save_state(paths.state_file, reg.state);
           on_change = reg.on_change;
         }
-        reg.tasks[id] = {action, success ? task_status_e::succeeded : task_status_e::failed, exit_code, action_id};
+        if (!activated) {
+          reg.tasks[id] = {action, success ? task_status_e::succeeded : task_status_e::failed, exit_code, action_id};
+          reg.task_running = false;
+        }
+      }
+
+      // The task is reported finished only after this, so the web UI sees the applications it changed.
+      if (activated) {
+        notify_activation(reg, id);
+        std::scoped_lock lock {reg.mutex};
+        reg.tasks[id] = {action, task_status_e::succeeded, exit_code, action_id};
         reg.task_running = false;
       }
 
@@ -1676,6 +1728,7 @@ namespace plugins {
     reg.state = load_state(paths.state_file);
     reg.tasks.clear();
     reg.updates.clear();
+    reg.display_exclusions.clear();
 
     // State written before installed versions were recorded: take the current version to be the installed one,
     // rather than run every install script again after an update.
@@ -2656,7 +2709,8 @@ namespace plugins {
         {"update_available", update_available},
         {"active", state.active},
         {"config", effective_options(reg, manifest)},
-        {"task", std::move(task)}
+        {"task", std::move(task)},
+        {"display_exclusions", display_exclusions_of(reg, manifest.id)}
       });
     }
     return result;
@@ -2785,6 +2839,53 @@ namespace plugins {
     std::scoped_lock lock {reg.mutex};
     const auto *manifest = find_manifest(reg, id);
     return manifest && manifest->manages_display;
+  }
+
+  std::vector<std::string> exclude_display_conflicts(const std::string &id, nlohmann::json &apps_tree) {
+    std::vector<std::string> others;
+    {
+      auto &reg = registry();
+      std::scoped_lock lock {reg.mutex};
+      const auto *manifest = find_manifest(reg, id);
+      if (!manifest || !manifest->manages_display) {
+        return {};
+      }
+      for (const auto &other : reg.manifests) {
+        if (other.id != id && other.manages_display && runs_for_streams(reg, other)) {
+          others.push_back(other.id);
+        }
+      }
+    }
+    if (others.empty() || !apps_tree.is_object() || !apps_tree.contains("apps") || !apps_tree["apps"].is_array()) {
+      return {};
+    }
+
+    std::vector<std::string> changed;
+    for (auto &app : apps_tree["apps"]) {
+      if (!app.is_object()) {
+        continue;
+      }
+      std::vector<std::string> excluded;
+      if (const auto it = app.find("exclude-plugins"); it != app.end() && it->is_array()) {
+        for (const auto &entry : *it) {
+          if (entry.is_string()) {
+            excluded.push_back(entry.get<std::string>());
+          }
+        }
+      }
+      const auto is_excluded = [&excluded](const std::string &plugin) {
+        return std::ranges::find(excluded, plugin) != excluded.end();
+      };
+      if (is_excluded(id) || std::ranges::all_of(others, is_excluded)) {
+        continue;
+      }
+      if (!app.contains("exclude-plugins") || !app["exclude-plugins"].is_array()) {
+        app["exclude-plugins"] = json::array();
+      }
+      app["exclude-plugins"].push_back(id);
+      changed.push_back(app.value("name", ""));
+    }
+    return changed;
   }
 
   std::optional<std::map<std::string, std::string>> stream_env(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid) {
@@ -2925,7 +3026,7 @@ namespace plugins {
 
   result_e configure(const std::string &id, std::optional<bool> active, const std::optional<nlohmann::json> &options, std::string &error, bool *applying) {
     auto &reg = registry();
-    std::scoped_lock lock {reg.mutex};
+    std::unique_lock lock {reg.mutex};
 
     const auto *manifest = find_manifest(reg, id);
     if (!manifest) {
@@ -2958,8 +3059,12 @@ namespace plugins {
       return result_e::busy;
     }
 
+    const bool activated = active.value_or(false) && !state.active;
     if (active) {
       state.active = *active;
+      if (!*active) {
+        reg.display_exclusions.erase(id);
+      }
     }
     if (needs_apply) {
       const auto env = script_env(*manifest, *normalized, plugin_data_dir(reg.paths, id));
@@ -2971,6 +3076,11 @@ namespace plugins {
       state.options = std::move(*normalized);
     }
     save_state(reg.paths.state_file, reg.state);
+    lock.unlock();
+
+    if (activated) {
+      notify_activation(reg, id);
+    }
     return result_e::ok;
   }
 
@@ -3009,6 +3119,7 @@ namespace plugins {
 
     if (action == action_e::uninstall) {
       reg.state[id].active = false;
+      reg.display_exclusions.erase(id);
       save_state(reg.paths.state_file, reg.state);
     }
 
@@ -3610,6 +3721,12 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     reg.on_change = std::move(callback);
+  }
+
+  void set_activation_callback(std::function<std::vector<std::string>(const std::string &id)> callback) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.on_activate = std::move(callback);
   }
 
   void set_stream_check(std::function<bool()> check) {

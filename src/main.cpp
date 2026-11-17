@@ -464,6 +464,9 @@ int main(int argc, char *argv[]) {
   plugins::set_change_callback([]() {
     proc::refresh(config::stream.file_apps);
   });
+  plugins::set_activation_callback([](const std::string &id) {
+    return proc::exclude_display_conflicts(id, config::stream.file_apps);
+  });
   plugins::set_stream_check([]() {
     return rtsp_stream::session_count() > 0;
   });

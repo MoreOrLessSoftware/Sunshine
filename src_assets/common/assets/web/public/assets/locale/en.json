@@ -732,6 +732,7 @@
     "default_on": "On",
     "default_value": "Default: {value}",
     "description": "Plugins run scripts before an application starts and after it exits, like preparation commands. Installing a plugin downloads what it needs and activates it, so it runs for every application. Use the Active switch to turn it off without uninstalling.",
+    "display_exclusions": "Turned off for {apps}, since another plugin already sets up the display for them. Change this in the applications grid.",
     "elevated": "Runs as administrator",
     "exit_code": "exit code {code}",
     "guide_agent_intro": "A coding agent such as Claude Code can write a plugin for you. Paste this prompt into your agent and replace the part in square brackets with what you want the plugin to do.",

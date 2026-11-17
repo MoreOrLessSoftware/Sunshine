@@ -306,6 +306,17 @@ namespace proc {
    * @param file_name File name.
    */
   void refresh(const std::string &file_name);
+
+  /**
+   * @brief Turn a just-activated plugin that sets up the display off for applications another such plugin serves.
+   *
+   * Rewrites the applications file and reloads it when anything changed. See `plugins::exclude_display_conflicts()`.
+   *
+   * @param plugin_id ID of the plugin that was just activated.
+   * @param file_name Applications file.
+   * @return Names of the applications changed.
+   */
+  std::vector<std::string> exclude_display_conflicts(const std::string &plugin_id, const std::string &file_name);
   /**
    * @brief Parse serialized text into the corresponding runtime representation.
    *

@@ -473,24 +473,38 @@ export default {
           }));
         }
 
-        if (!allApps) {
-          // The apps are re-read since adding one changes their order
-          const sorted = (await readJson(await fetch('./api/apps'))).apps || [];
-          const entries = sorted
-            .map((app, index) => ({app, index}))
-            .filter(({app}) => app.name !== VIRTUAL_DISPLAY_APP)
-            .map(({app, index}) => ({
-              index,
-              name: app.name,
-              'exclude-plugins': [...new Set([...(app['exclude-plugins'] || []), ...VIRTUAL_DISPLAY_PLUGINS])],
-            }));
-          if (entries.length) {
-            await readJson(await apiFetch('./api/apps/plugins', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({apps: entries}),
-            }));
+        // Only one plugin sets up the display. Activating the virtual display turned it off for the applications
+        // another one serves, so where it should be used, that other plugin is turned off instead.
+        await this.loadPlugins();
+        const virtualDisplay = this.plugins.find((p) => p.id === 'virtual-display');
+        const autoExcluded = (virtualDisplay && virtualDisplay.display_exclusions) || [];
+        const otherDisplays = this.plugins.filter((p) => p.manages_display && p.active && p.id !== 'virtual-display').map((p) => p.id);
+
+        // The apps are re-read since adding one changes their order
+        const sorted = (await readJson(await fetch('./api/apps'))).apps || [];
+        const entries = [];
+        sorted.forEach((app, index) => {
+          const saved = app['exclude-plugins'] || [];
+          let excluded;
+          if (app.name === VIRTUAL_DISPLAY_APP) {
+            excluded = [...new Set([...saved.filter((id) => !VIRTUAL_DISPLAY_PLUGINS.includes(id)), ...otherDisplays])];
+          } else if (!allApps) {
+            excluded = [...new Set([...saved, ...VIRTUAL_DISPLAY_PLUGINS])];
+          } else if (autoExcluded.includes(app.name)) {
+            excluded = [...new Set([...saved.filter((id) => id !== 'virtual-display'), ...otherDisplays])];
+          } else {
+            return;
           }
+          if (excluded.length !== saved.length || excluded.some((id) => !saved.includes(id))) {
+            entries.push({index, name: app.name, 'exclude-plugins': excluded});
+          }
+        });
+        if (entries.length) {
+          await readJson(await apiFetch('./api/apps/plugins', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({apps: entries}),
+          }));
         }
 
         const doneKey = allApps ? 'index.rec_virtual_display_done_all_apps' : 'index.rec_virtual_display_done_app_only';

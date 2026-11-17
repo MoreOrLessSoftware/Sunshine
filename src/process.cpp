@@ -30,6 +30,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "file_handler.h"
 #include "input.h"
 #include "logging.h"
 #include "platform/common.h"
@@ -1054,6 +1055,29 @@ namespace proc {
 
     if (proc_opt) {
       proc = std::move(*proc_opt);
+    }
+  }
+
+  std::vector<std::string> exclude_display_conflicts(const std::string &plugin_id, const std::string &file_name) {
+    if (!plugins::manages_display(plugin_id)) {
+      return {};
+    }
+    try {
+      auto tree = nlohmann::json::parse(file_handler::read_file(file_name.c_str()));
+      auto changed = plugins::exclude_display_conflicts(plugin_id, tree);
+      if (changed.empty()) {
+        return {};
+      }
+      if (file_handler::write_file(file_name.c_str(), tree.dump(4)) != 0) {
+        BOOST_LOG(error) << "Couldn't save "sv << file_name << " after activating the "sv << plugin_id << " plugin"sv;
+        return {};
+      }
+      BOOST_LOG(info) << "Turned the "sv << plugin_id << " plugin off for "sv << changed.size() << " application(s) where another plugin sets up the display"sv;
+      refresh(file_name);
+      return changed;
+    } catch (const std::exception &e) {
+      BOOST_LOG(error) << "Couldn't update "sv << file_name << " after activating the "sv << plugin_id << " plugin: "sv << e.what();
+      return {};
     }
   }
 }  // namespace proc
