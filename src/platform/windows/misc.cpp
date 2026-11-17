@@ -580,6 +580,30 @@ namespace platf {
     }
     return true;
   }
+
+  bool has_device_with_driver(HKEY root, const std::wstring &path) {
+    HKEY key = nullptr;
+    if (RegOpenKeyExW(root, path.c_str(), 0, KEY_READ, &key) != ERROR_SUCCESS) {
+      return false;
+    }
+    bool found = false;
+    WCHAR name[256];
+    for (DWORD index = 0; !found; ++index) {
+      DWORD name_length = ARRAYSIZE(name);
+      if (RegEnumKeyExW(key, index, name, &name_length, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) {
+        break;
+      }
+      found = RegGetValueW(key, name, L"Driver", RRF_RT_REG_SZ, nullptr, nullptr, nullptr) == ERROR_SUCCESS;
+    }
+    RegCloseKey(key);
+    return found;
+  }
+
+  bool virtualhid_driver_installed() {
+    // The same key the Virtual HID Driver plugin's status script reads.
+    return has_device_with_driver(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Enum\\ROOT\\LIBVIRTUALHID");
+  }
+
   // Note: This does NOT append a null terminator
   /**
    * @brief Append a null-terminated string to a Windows environment block.

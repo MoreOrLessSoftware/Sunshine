@@ -6,7 +6,6 @@
   "author": "Sunshine",
   "homepage": "https://github.com/LizardByte/libvirtualhid",
   "order": 60,
-  "default_active": true,
   "scripts": {
     "install": "install.ps1",
     "status": "status.ps1"

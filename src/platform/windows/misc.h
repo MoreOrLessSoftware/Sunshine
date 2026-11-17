@@ -89,4 +89,20 @@ namespace platf {
    * @return `true` when the elevated process started, `false` when the prompt was declined or the launch failed.
    */
   bool relaunch_elevated();
+
+  /**
+   * @brief Check whether a registry key lists a device that has a driver bound to it.
+   *
+   * @param root Registry hive holding the key.
+   * @param path Key whose subkeys are device instances, such as a key under `SYSTEM\CurrentControlSet\Enum`.
+   * @return `true` when a subkey of the key has a `Driver` value.
+   */
+  bool has_device_with_driver(HKEY root, const std::wstring &path);
+
+  /**
+   * @brief Check whether the Virtual HID Driver is installed.
+   *
+   * @return `true` when the driver's root device exists and has its driver bound.
+   */
+  bool virtualhid_driver_installed();
 }  // namespace platf

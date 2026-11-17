@@ -47,6 +47,10 @@
                   {{ $t('index.rec_virtual_display_app_only') }}
                 </button>
               </template>
+              <button v-else-if="item.id === 'virtualhid'" class="btn btn-primary" type="button" :disabled="busy !== null" @click="enableVirtualHid">
+                <refresh-cw v-if="busy === 'virtualhid'" :size="17" class="driver-release-spinning"></refresh-cw>
+                {{ $t('index.rec_virtualhid_action') }}
+              </button>
               <button v-else-if="item.id === 'xgpad'" class="btn btn-primary" type="button" :disabled="busy !== null" @click="installXgpad">
                 <refresh-cw v-if="busy === 'xgpad'" :size="17" class="driver-release-spinning"></refresh-cw>
                 <download v-else :size="17"></download>
@@ -85,7 +89,7 @@ import { apiFetch } from './fetch_utils'
 const DISMISSED_KEY = 'index.dismissedRecommendations';
 
 // Fields of the /api/config response that aren't settings, so they're never written back to the config file
-const RESPONSE_ONLY_KEYS = ['platform', 'status', 'version', 'display_version', 'update_check', 'active_encoder', 'nvenc_engines'];
+const RESPONSE_ONLY_KEYS = ['platform', 'status', 'version', 'display_version', 'update_check', 'active_encoder', 'nvenc_engines', 'virtualhid_driver_installed'];
 
 // Values the config file accepts for an enabled boolean setting
 const TRUTHY_VALUES = ['true', '1', 'enabled', 'enable', 'yes', 'on'];
@@ -168,7 +172,7 @@ export default {
       default: false,
     },
   },
-  emits: ['xgpad-installed'],
+  emits: ['xgpad-installed', 'virtualhid-enabled'],
   data() {
     return {
       busy: null,
@@ -216,6 +220,11 @@ export default {
         if (changes.length || keepResult('amf_direct')) {
           list.push({id: 'amf_direct', href: './config#amd_direct', changes});
         }
+      }
+
+      const virtualhid = this.plugins && this.plugins.find((p) => p.id === 'virtual-hid');
+      if (this.config.platform === 'windows' && this.config.virtualhid_driver_installed && virtualhid && (!virtualhid.active || keepResult('virtualhid'))) {
+        list.push({id: 'virtualhid', href: './plugins'});
       }
 
       if (this.config.platform === 'windows' && (this.suggestXgpad || keepResult('xgpad'))) {
@@ -395,6 +404,29 @@ export default {
         return null;
       }
       return this.$t('index.rec_plugin_install_timeout');
+    },
+
+    /**
+     * Turn on the Virtual HID Driver plugin, which reports driver updates on the home page.
+     */
+    async enableVirtualHid() {
+      this.busy = 'virtualhid';
+      try {
+        const error = await this.activatePlugin('virtual-hid');
+        this.results = {
+          ...this.results,
+          virtualhid: error ? {ok: false, message: error} : {ok: true, message: this.$t('index.rec_virtualhid_done')},
+        };
+        if (!error) {
+          this.$emit('virtualhid-enabled');
+        }
+      } catch (e) {
+        console.error('Failed to turn on the Virtual HID Driver plugin:', e);
+        this.results = {...this.results, virtualhid: {ok: false, message: e.message}};
+      } finally {
+        this.busy = null;
+        await this.loadPlugins();
+      }
     },
 
     /**

@@ -2638,7 +2638,7 @@ TEST(PluginsBundledTest, VirtualHidManifestIsValid) {
   auto manifest = plugins::parse_manifest(json::parse(read_text(dir / "plugin.json")), dir, true, error);
   ASSERT_TRUE(manifest) << error;
   EXPECT_EQ(manifest->id, "virtual-hid");
-  EXPECT_TRUE(manifest->default_active);  // Its notices reach everyone who has the driver
+  EXPECT_FALSE(manifest->default_active);  // The home page recommends it to those who have the driver
   EXPECT_EQ(manifest->scripts.status, "status.ps1");
   EXPECT_EQ(manifest->scripts.install, "install.ps1");  // Lets the status script write to the data folder
   EXPECT_FALSE(plugins::per_stream(*manifest));

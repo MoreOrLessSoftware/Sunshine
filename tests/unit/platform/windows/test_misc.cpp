@@ -43,4 +43,55 @@ TEST(WindowsMiscTest, CommandLineArgumentsAreEmptyWithoutArguments) {
   EXPECT_EQ(platf::command_line_arguments(LR"("C:\unterminated)"), L"");
   EXPECT_EQ(platf::command_line_arguments(L""), L"");
 }
+
+/**
+ * @brief Creates a scratch registry key under HKCU for device lookups and removes it afterwards.
+ */
+class WindowsDeviceRegistryTest: public ::testing::Test {
+protected:
+  const std::wstring path = L"Software\\SunshineTests\\DeviceWithDriver";  ///< Scratch key holding device subkeys.
+
+  void SetUp() override {
+    RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str());
+  }
+
+  void TearDown() override {
+    RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\SunshineTests");
+  }
+
+  /**
+   * @brief Create a device subkey, optionally with a `Driver` value.
+   *
+   * @param device Name of the device subkey.
+   * @param with_driver Whether to give it a `Driver` value.
+   */
+  void add_device(const std::wstring &device, bool with_driver) {
+    HKEY key = nullptr;
+    ASSERT_EQ(RegCreateKeyExW(HKEY_CURRENT_USER, (path + L"\\" + device).c_str(), 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr), ERROR_SUCCESS);
+    if (with_driver) {
+      const std::wstring driver = L"{745a17a0-74d3-11d0-b6fe-00a0c90f57da}\\0001";
+      RegSetValueExW(key, L"Driver", 0, REG_SZ, reinterpret_cast<const BYTE *>(driver.c_str()), static_cast<DWORD>((driver.size() + 1) * sizeof(wchar_t)));
+    }
+    RegCloseKey(key);
+  }
+};
+
+TEST_F(WindowsDeviceRegistryTest, MissingKeyHasNoDevice) {
+  EXPECT_FALSE(platf::has_device_with_driver(HKEY_CURRENT_USER, path));
+}
+
+TEST_F(WindowsDeviceRegistryTest, DeviceWithoutDriverDoesNotCount) {
+  add_device(L"0000", false);
+  EXPECT_FALSE(platf::has_device_with_driver(HKEY_CURRENT_USER, path));
+}
+
+TEST_F(WindowsDeviceRegistryTest, AnyDeviceWithDriverCounts) {
+  add_device(L"0000", false);
+  add_device(L"0001", true);
+  EXPECT_TRUE(platf::has_device_with_driver(HKEY_CURRENT_USER, path));
+}
+
+TEST(WindowsMiscTest, VirtualHidDriverCheckMatchesTheRegistry) {
+  EXPECT_EQ(platf::virtualhid_driver_installed(), platf::has_device_with_driver(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Enum\\ROOT\\LIBVIRTUALHID"));
+}
 #endif

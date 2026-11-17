@@ -71,7 +71,7 @@
     </div>
 
     <!-- Recommendations -->
-    <Recommendations :config="config" :suggest-xgpad="suggestXgpad" @xgpad-installed="loadVirtualInputStatus"></Recommendations>
+    <Recommendations :config="config" :suggest-xgpad="suggestXgpad" @xgpad-installed="loadVirtualInputStatus" @virtualhid-enabled="loadPluginNotices"></Recommendations>
 
     <!-- Resources -->
     <div class="my-4">
@@ -117,7 +117,6 @@
         platform: "",
         controllerEnabled: false,
         gamepadDriver: '',
-        virtualhidInstalled: null,  // Whether Virtual HID Driver is installed, as its plugin reports, or null until known
         xgpad: null,  // The xgpad plugin, which installs the xgpad driver, or null when this build has none
       }
     },
@@ -155,7 +154,7 @@
        * driver is installed, and the selected gamepad driver setting would use xgpad.
        */
       suggestXgpad() {
-        return this.xgpadMightBeUsed && !!this.xgpad && !this.xgpad.installed && this.virtualhidInstalled === false;
+        return this.xgpadMightBeUsed && !!this.xgpad && !this.xgpad.installed && this.config.virtualhid_driver_installed === false;
       },
       /**
        * Whether the gamepad driver setting would use xgpad for controllers.
@@ -188,8 +187,7 @@
         }
       },
       /**
-       * Load whether the xgpad plugin installed its driver and, when that decides whether to recommend it, whether
-       * the Virtual HID Driver plugin reports its driver as installed.
+       * Load the xgpad plugin, which says whether it installed its driver.
        */
       async loadVirtualInputStatus() {
         let plugins = [];
@@ -200,21 +198,6 @@
           return;
         }
         this.xgpad = plugins.find((plugin) => plugin.id === 'xgpad') || null;
-        if (!this.xgpadMightBeUsed || !this.xgpad || this.xgpad.installed) {
-          return;
-        }
-
-        const virtualhid = plugins.find((plugin) => plugin.id === 'virtual-hid');
-        if (!virtualhid || !virtualhid.installed) {
-          this.virtualhidInstalled = false;
-          return;
-        }
-        try {
-          const body = await fetch("./api/plugins/status?id=virtual-hid").then((r) => r.json());
-          this.virtualhidInstalled = body.status ? !!body.result.installed : null;
-        } catch (e) {
-          console.error("Failed to fetch the Virtual HID Driver status:", e);
-        }
       },
     }
   });

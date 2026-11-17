@@ -324,6 +324,17 @@ namespace confighttp {
    */
   void add_encoder_info(nlohmann::json &output_tree, std::string_view encoder_name, int nvenc_engines);
 
+  /**
+   * @brief Add which virtual input drivers are installed to a config response.
+   *
+   * Sets "virtualhid_driver_installed", so the home page can tell whether controllers need another driver and
+   * whether to recommend the Virtual HID Driver plugin.
+   *
+   * @param output_tree Response to add the field to.
+   * @param virtualhid_driver_installed Whether the Virtual HID Driver is installed.
+   */
+  void add_virtual_input_info(nlohmann::json &output_tree, bool virtualhid_driver_installed);
+
   void resetPortalToken(const resp_https_t &response, const req_https_t &request);
 
 #ifdef SUNSHINE_TESTS
