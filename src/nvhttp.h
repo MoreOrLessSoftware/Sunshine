@@ -377,6 +377,17 @@ namespace nvhttp {
    */
   void erase_all_clients();
 
+  /**
+   * @brief End the current streaming session, as a client quitting the app does.
+   *
+   * Disconnects every streaming client, terminates the running app (running its Undo commands),
+   * and reverts the display configuration.
+   * @examples
+   * nvhttp::quit_session();
+   * @examples_end
+   */
+  void quit_session();
+
 #ifdef SUNSHINE_TESTS
   /**
    * @brief Test-only accessors for paired-client authorization state.

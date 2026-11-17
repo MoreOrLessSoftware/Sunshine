@@ -25,6 +25,8 @@
 
   // local includes
   #include <src/config.h>
+  #include <src/process.h>
+  #include <src/rtsp.h>
   #include <src/system_tray.h>
 
   #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
@@ -86,14 +88,12 @@ namespace {
     EXPECT_STREQ(tray_data.menu[1].text, "-");
     EXPECT_EQ(tray_data.menu[1].cb, nullptr);
 
-  #ifdef _WIN32
-    EXPECT_STREQ(tray_data.menu[2].text, "Donate");
-    ASSERT_NE(tray_data.menu[2].submenu, nullptr);
-    EXPECT_STREQ(tray_data.menu[2].submenu[0].text, "GitHub Sponsors");
-    EXPECT_STREQ(tray_data.menu[2].submenu[1].text, "Patreon");
-    EXPECT_STREQ(tray_data.menu[2].submenu[2].text, "PayPal");
-    EXPECT_EQ(tray_data.menu[2].submenu[3].text, nullptr);
+    EXPECT_STREQ(tray_data.menu[2].text, "End Current Session");
+    EXPECT_EQ(tray_data.menu[2].cb, &system_tray::tray_end_session_cb);
+    EXPECT_EQ(tray_data.menu[2].submenu, nullptr);
     EXPECT_STREQ(tray_data.menu[3].text, "-");
+
+  #ifdef _WIN32
     EXPECT_STREQ(tray_data.menu[4].text, "Reset Display Device Config");
     EXPECT_NE(tray_data.menu[4].cb, nullptr);
     EXPECT_STREQ(tray_data.menu[5].text, "Restart");
@@ -102,13 +102,6 @@ namespace {
     EXPECT_NE(tray_data.menu[6].cb, nullptr);
     EXPECT_EQ(tray_data.menu[7].text, nullptr);
   #else
-    EXPECT_STREQ(tray_data.menu[2].text, "Donate");
-    ASSERT_NE(tray_data.menu[2].submenu, nullptr);
-    EXPECT_STREQ(tray_data.menu[2].submenu[0].text, "GitHub Sponsors");
-    EXPECT_STREQ(tray_data.menu[2].submenu[1].text, "Patreon");
-    EXPECT_STREQ(tray_data.menu[2].submenu[2].text, "PayPal");
-    EXPECT_EQ(tray_data.menu[2].submenu[3].text, nullptr);
-    EXPECT_STREQ(tray_data.menu[3].text, "-");
     EXPECT_STREQ(tray_data.menu[4].text, "Restart");
     EXPECT_NE(tray_data.menu[4].cb, nullptr);
     EXPECT_STREQ(tray_data.menu[5].text, "Quit");
@@ -247,6 +240,16 @@ TEST_F(SystemTrayTest, UpdatesAreIgnoredBeforeInitialization) {
 }
 
   #ifdef _WIN32
+TEST_F(SystemTrayTest, EndSessionDoesNothingWithoutASession) {
+  ASSERT_EQ(proc::proc.running(), 0);
+  ASSERT_EQ(rtsp_stream::session_count(), 0);
+
+  system_tray::tray_end_session_cb(nullptr);
+
+  EXPECT_EQ(proc::proc.running(), 0);
+  EXPECT_EQ(rtsp_stream::session_count(), 0);
+}
+
 TEST_F(SystemTrayTest, ResolvesDevelopmentTrayIconsFromExecutableDirectory) {
   EXPECT_EQ(system_tray::resource_path_for_testing(nullptr), nullptr);
   EXPECT_EQ(system_tray::resource_path_for_testing(""), nullptr);

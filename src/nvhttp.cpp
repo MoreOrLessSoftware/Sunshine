@@ -1648,16 +1648,7 @@ namespace nvhttp {
     tree.put("root.cancel", 1);
     tree.put("root.<xmlattr>.status_code", 200);
 
-    // The clients are leaving because the app is quitting, which runs the app's Undo commands instead
-    proc::proc.drop_connection();
-    rtsp_stream::terminate_sessions();
-
-    if (proc::proc.running() > 0) {
-      proc::proc.terminate();
-    }
-
-    // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
-    display_device::revert_configuration();
+    quit_session();
   }
 
   /**
@@ -1932,6 +1923,19 @@ namespace nvhttp {
 
     ssl.join();
     tcp.join();
+  }
+
+  void quit_session() {
+    // The clients are leaving because the app is quitting, which runs the app's Undo commands instead
+    proc::proc.drop_connection();
+    rtsp_stream::terminate_sessions();
+
+    if (proc::proc.running() > 0) {
+      proc::proc.terminate();
+    }
+
+    // The config needs to be reverted regardless of whether "proc::proc.terminate()" was called or not.
+    display_device::revert_configuration();
   }
 
   void erase_all_clients() {

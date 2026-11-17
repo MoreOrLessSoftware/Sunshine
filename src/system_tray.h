@@ -19,22 +19,12 @@ namespace system_tray {
   void tray_open_ui_cb([[maybe_unused]] struct tray_menu *item);
 
   /**
-   * @brief Callback for opening GitHub Sponsors from the system tray.
+   * @brief Callback for ending the current streaming session from the system tray.
+   *
+   * Does nothing when no app or stream is running.
    * @param item The tray menu item.
    */
-  void tray_donate_github_cb([[maybe_unused]] struct tray_menu *item);
-
-  /**
-   * @brief Callback for opening Patreon from the system tray.
-   * @param item The tray menu item.
-   */
-  void tray_donate_patreon_cb([[maybe_unused]] struct tray_menu *item);
-
-  /**
-   * @brief Callback for opening PayPal donation from the system tray.
-   * @param item The tray menu item.
-   */
-  void tray_donate_paypal_cb([[maybe_unused]] struct tray_menu *item);
+  void tray_end_session_cb([[maybe_unused]] struct tray_menu *item);
 
   /**
    * @brief Callback for resetting display device configuration.

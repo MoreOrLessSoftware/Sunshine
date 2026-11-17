@@ -66,9 +66,12 @@
   #include "config.h"
   #include "confighttp.h"
   #include "display_device.h"
+  #include "globals.h"
   #include "logging.h"
+  #include "nvhttp.h"
   #include "platform/common.h"
   #include "process.h"
+  #include "rtsp.h"
   #include "src/entry_handler.h"
   #include "system_tray.h"
   #ifdef _WIN32
@@ -134,18 +137,17 @@ namespace system_tray {
     launch_ui();
   }
 
-  void tray_donate_github_cb([[maybe_unused]] struct tray_menu *item) {
-    platf::open_url("https://github.com/sponsors/LizardByte");
-  }
+  void tray_end_session_cb([[maybe_unused]] struct tray_menu *item) {
+    if (proc::proc.running() <= 0 && rtsp_stream::session_count() == 0) {
+      BOOST_LOG(info) << "No session to end from system tray"sv;
+      return;
+    }
 
-  void tray_donate_patreon_cb([[maybe_unused]] struct tray_menu *item) {
-    platf::open_url("https://www.patreon.com/LizardByte");
-  }
+    BOOST_LOG(info) << "Ending the current session from system tray"sv;
 
-  void tray_donate_paypal_cb([[maybe_unused]] struct tray_menu *item) {
-    platf::open_url("https://www.paypal.com/paypalme/ReenigneArcher");
+    // Ending the session runs the app's Undo commands, which shouldn't block the tray
+    task_pool.push(nvhttp::quit_session);
   }
-
 
   /**
    * @brief Forwards Qt log messages to Sunshine's BOOST_LOG logger.
@@ -209,14 +211,7 @@ namespace system_tray {
         // Tray menu labels currently use the project's English source strings.
         {.text = "Open Sunshine", .cb = tray_open_ui_cb},
         {.text = "-"},
-        {.text = "Donate",
-         .submenu =
-           (struct tray_menu[]) {
-             {.text = "GitHub Sponsors", .cb = tray_donate_github_cb},
-             {.text = "Patreon", .cb = tray_donate_patreon_cb},
-             {.text = "PayPal", .cb = tray_donate_paypal_cb},
-             {.text = nullptr}
-           }},
+        {.text = "End Current Session", .cb = tray_end_session_cb},
         {.text = "-"},
   // Currently display device settings are only supported on Windows
   #ifdef _WIN32
