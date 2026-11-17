@@ -57,7 +57,8 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 
 ### Latency and Frame Pacing
 
-- Frames are captured as soon as the desktop presents them, instead of on a fixed timer. The client sees steadier timestamps and less apparent jitter. This allows for native-like VRR frame pacing on the client with more minimal frame buffering.
+- Frames are captured as soon as the desktop presents them, instead of on a fixed timer. The client sees steadier timestamps and less apparent jitter. This allows for native-like VRR frame pacing on the client with minimal frame buffering.  
+  > **NOTE**: Because capture isn't tied to the display's refresh rate, you can stream at a higher frame rate than your physical display or dummy HDMI plug supports - for example, 4K at 120 FPS from a 4K/60 Hz display, with proper frame pacing. Use the V-Sync Toggle plugin to turn off v-sync so the game isn't held to the display's refresh rate, and the RTSS Frame Limit plugin to cap it at the stream's frame rate.
 - Frames are sent in parts while they encode, with a configurable send rate and finer slices, for NVENC and the AMF encoders. The client can ask for a send rate or opt out of sub-frame slices.  
   **NOTE**: For NVENC, you can use either split-frame encoding or sub-frame encoding - not both at the same time. For cards with 2 encoders, split-frame encoding is likely the better choice.
 - When a game renders fewer frames than the stream's frame rate, the bitrate is raised to match, so the stream stays close to the bitrate the client asked for. Repeating frames can be turned off or tuned with `minimum_fps_target`.
