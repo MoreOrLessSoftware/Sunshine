@@ -1,11 +1,15 @@
 <template>
-  <div class="notification-container" v-if="state.notifications.length > 0">
+  <TransitionGroup name="notification" tag="div" class="notification-container">
     <div
       v-for="n in state.notifications"
       :key="n.id"
       class="alert d-flex align-items-start gap-2 mb-2"
       :class="'alert-' + n.type"
       role="alert"
+      @mouseenter="pauseDismiss(n.id)"
+      @mouseleave="resumeDismiss(n.id)"
+      @focusin="pauseDismiss(n.id)"
+      @focusout="resumeDismiss(n.id)"
     >
       <component :is="iconFor(n.type)" :size="18" class="icon flex-shrink-0 mt-1"></component>
       <div class="flex-grow-1">
@@ -16,7 +20,7 @@
       </div>
       <button type="button" class="btn-close" :aria-label="$t('_common.dismiss')" @click="dismiss(n.id)"></button>
     </div>
-  </div>
+  </TransitionGroup>
 </template>
 
 <script>
@@ -35,6 +39,74 @@ export const state = reactive({
 })
 
 /**
+ * How long each kind of notification stays before it clears itself. Errors stay longest, since they need reading.
+ */
+const DISMISS_AFTER_MS = { success: 5000, info: 6000, warning: 8000, danger: 10000 }
+
+/**
+ * Timers that clear the notifications, by ID: the pending timeout, and the time left when it was paused.
+ */
+const timers = new Map()
+
+/**
+ * Remove a notification and its timer.
+ *
+ * @param {number} id - The notification's ID.
+ */
+function dismiss(id) {
+  clearTimeout(timers.get(id)?.timeout)
+  timers.delete(id)
+  const idx = state.notifications.findIndex(n => n.id === id)
+  if (idx !== -1) state.notifications.splice(idx, 1)
+}
+
+/**
+ * Clear a notification after a delay.
+ *
+ * @param {number} id - The notification's ID.
+ * @param {number} ms - How long to wait.
+ */
+function startDismiss(id, ms) {
+  timers.set(id, { timeout: setTimeout(() => dismiss(id), ms), due: Date.now() + ms, remaining: ms })
+}
+
+/**
+ * Keep a notification while the pointer or keyboard focus is on it.
+ *
+ * @param {number} id - The notification's ID.
+ */
+function pauseDismiss(id) {
+  const timer = timers.get(id)
+  if (timer && timer.timeout !== null) {
+    clearTimeout(timer.timeout)
+    timer.timeout = null
+    timer.remaining = Math.max(timer.due - Date.now(), 0)
+  }
+}
+
+/**
+ * Carry on clearing a notification once the pointer and focus have left it, with at least a moment to spare.
+ *
+ * @param {number} id - The notification's ID.
+ */
+function resumeDismiss(id) {
+  const timer = timers.get(id)
+  if (timer && timer.timeout === null) {
+    startDismiss(id, Math.max(timer.remaining, 2000))
+  }
+}
+
+/**
+ * Show a notification, and clear it after the delay for its kind.
+ *
+ * @param {object} notification - The notification, with its `type`.
+ */
+function add(notification) {
+  state.notifications.push(notification)
+  startDismiss(notification.id, DISMISS_AFTER_MS[notification.type] ?? DISMISS_AFTER_MS.info)
+}
+
+/**
  * Push a notification using raw strings.
  *
  * @param {'danger'|'warning'|'success'|'info'} type - Bootstrap color variant.
@@ -42,7 +114,7 @@ export const state = reactive({
  * @param {string} [title] - Optional bold title prefix.
  */
 function push(type, message, title) {
-  state.notifications.push({ id: state._nextId++, type, message, title: title || null, messageKey: null, titleKey: null })
+  add({ id: state._nextId++, type, message, title: title || null, messageKey: null, titleKey: null })
 }
 
 /**
@@ -53,7 +125,7 @@ function push(type, message, title) {
  * @param {string} [titleKey] - Optional i18n key for the bold title prefix.
  */
 function pushKey(type, messageKey, titleKey) {
-  state.notifications.push({ id: state._nextId++, type, message: null, title: null, messageKey, titleKey: titleKey || null })
+  add({ id: state._nextId++, type, message: null, title: null, messageKey, titleKey: titleKey || null })
 }
 
 /**
@@ -122,12 +194,7 @@ export default {
   components: { AlertCircle, AlertTriangle, CheckCircle, Info },
 
   setup() {
-    function dismiss(id) {
-      const idx = state.notifications.findIndex(n => n.id === id)
-      if (idx !== -1) state.notifications.splice(idx, 1)
-    }
-
-    return { state, dismiss, iconFor }
+    return { state, dismiss, pauseDismiss, resumeDismiss, iconFor }
   },
 }
 </script>
@@ -145,6 +212,29 @@ export default {
   .notification-container {
     left: auto;
     width: 22rem;
+  }
+}
+
+/* An empty container doesn't block clicks on the page under it */
+.notification-container:empty {
+  display: none;
+}
+
+.notification-enter-active,
+.notification-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.notification-enter-from,
+.notification-leave-to {
+  opacity: 0;
+  transform: translateX(1rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification-enter-active,
+  .notification-leave-active {
+    transition: none;
   }
 }
 </style>
