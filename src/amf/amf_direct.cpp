@@ -675,6 +675,7 @@ namespace amf_direct {
     std::size_t incomplete_frames = 0;  ///< AV1 frames sent without all their tiles, since the last timing line.
     std::size_t incomplete_logged = 0;  ///< AV1 frames sent without all their tiles that were described in the log.
     std::size_t joined_tiles = 0;  ///< AV1 tile buffers that held the next tile too, kept, since the last timing line.
+    std::size_t stale_tiles = 0;  ///< AV1 tiles left over in a buffer from an earlier frame, dropped, since the last timing line.
 
     ~impl_t() {
       surface = nullptr;
@@ -964,6 +965,16 @@ namespace amf_direct {
     std::size_t buffers = 0;
     int next_tile = impl->tile_bits >= 0 ? 0 : -1;
 
+    // Tile groups found after a buffer's own tile that carry on from it, held back until the
+    // next buffer shows whether they're real. The bytes after a tile are often left over from
+    // earlier frames, and can hold that frame's copy of the next tile, which AMF then hands
+    // over again in its own buffer. A frame sent with both has the tile twice. FFmpeg's AV1
+    // decoder keeps the later copy, but AMD's own (FFmpeg's av1_amf) decodes the stale one:
+    // corruption that lasts until the next key frame.
+    std::vector<std::uint8_t> held;
+    int held_start = -1;  // The first tile held
+    int held_next = -1;  // The tile expected after the ones held
+
     for (int query = 0; query < max_queries; ++query) {
       amf::AMFDataPtr data;
       const auto res = impl->encoder->QueryOutput(&data);
@@ -990,14 +1001,31 @@ namespace amf_direct {
       // An HEVC slice buffer holds the slice alone, but an AV1 tile buffer is followed by
       // leftover bytes that AV1 decoders don't skip
       auto used = bytes;
+      std::size_t released = 0;  // Held tiles from the buffer before that go in ahead of this one
       if (impl->av1()) {
         used = obu_bytes(native, bytes, impl->part_output);
         if (impl->part_output && used != obu_bytes(native, bytes)) {
           ++impl->leftover_obus;
         }
 
+        const auto own = tile_groups(native, used, impl->tile_bits);
+        if (!held.empty()) {
+          const auto own_start = own.empty() ? -1 : own.front().start;
+          if (own_start == held_start) {
+            // AMF handed the held tile over itself, so the copy held was stale
+            ++impl->stale_tiles;
+          } else {
+            // This buffer carries on after the held tiles, so they were real and go first
+            frame.data.insert(frame.data.end(), held.begin(), held.end());
+            released = held.size();
+            next_tile = held_next;
+            ++impl->joined_tiles;
+          }
+          held.clear();
+        }
+
         if (next_tile >= 0) {
-          for (const auto &group : tile_groups(native, used, impl->tile_bits)) {
+          for (const auto &group : own) {
             if (group.start < 0) {
               next_tile = -1;
               break;
@@ -1008,33 +1036,46 @@ namespace amf_direct {
           }
         }
         if (next_tile >= 0) {
-          // AMF sometimes puts the next tile in the same buffer, right after the first. Keep the
-          // tile groups that carry on from the tiles kept, from the first byte after them, or the
-          // frame is sent without them and the client can't decode it or any frame after it.
+          // Tile groups right after the tiles kept that carry on from them, held for the next
+          // buffer to decide (see held above). If no buffer follows, they are sent.
           const auto rest = tile_groups(native + used, bytes - used, impl->tile_bits);
           std::size_t joined = 0;
+          int after = next_tile;
           for (const auto &group : rest) {
-            if (group.start != next_tile || group.offset != joined) {
+            if (group.start != after || group.offset != joined) {
               break;
             }
             joined = group.offset + group.size;
-            next_tile = group.end + 1;
+            after = group.end + 1;
           }
           if (joined > 0) {
-            used += joined;
-            ++impl->joined_tiles;
+            held.assign(native + used, native + used + joined);
+            held_start = next_tile;
+            held_next = after;
           }
         }
         if (next_tile >= 0 && buffers < buffer_tiles.size()) {
           // Whether the bytes cut off start with the tile that should come next, which would
           // mean AMF put it in this buffer after something the tiles above didn't carry on past
           const auto cut = tile_groups(native + used, bytes - used, impl->tile_bits);
-          const bool next_cut_off = !cut.empty() && cut.front().start == next_tile;
+          const bool next_cut_off = held.empty() && !cut.empty() && cut.front().start == next_tile;
           buffer_tiles[buffers++] = {used, bytes, next_tile, next_cut_off ? cut.front() : tile_group_t {-1, -1, 0, 0}};
         }
       }
       frame.data.insert(frame.data.end(), native, native + used);
-      frame.parts.push_back({std::chrono::steady_clock::now() - submitted, used});
+
+      amf_int64 buffer_type = 0;
+      data->GetProperty(p.output_buffer_type, &buffer_type);
+      const bool last = !impl->part_output || buffer_type != p.output_buffer_part;
+      if (last && !held.empty()) {
+        // No buffer follows to hand the held tiles over, so they were real
+        frame.data.insert(frame.data.end(), held.begin(), held.end());
+        released += held.size();
+        next_tile = held_next;
+        ++impl->joined_tiles;
+        held.clear();
+      }
+      frame.parts.push_back({std::chrono::steady_clock::now() - submitted, released + used});
 
       amf_int64 frame_type = -1;
       if (data->GetProperty(p.output_frame_type, &frame_type) == AMF_OK && frame_type == p.output_key) {
@@ -1043,9 +1084,6 @@ namespace amf_direct {
       data->GetProperty(p.output_marked_ltr, &marked);
       data->GetProperty(p.output_referenced_ltr, &referenced);
 
-      amf_int64 buffer_type = 0;
-      data->GetProperty(p.output_buffer_type, &buffer_type);
-      const bool last = !impl->part_output || buffer_type != p.output_buffer_part;
       if (!last && on_part) {
         // Earlier parts are sent with the key frame flag that was asked for
         const bool idr = frame.idr;
@@ -1058,6 +1096,10 @@ namespace amf_direct {
           ++impl->idr_mismatches;
         }
         if (next_tile >= 0 && next_tile != impl->parts) {
+          // The client can't decode this frame whole. FFmpeg's AV1 decoder drops it and the
+          // client asks for a key frame, but AMD's AV1 decoder decodes what there is without
+          // an error, and nothing ever asks. Recover with the next frame as if it were lost.
+          impl->ltr.invalidate(static_cast<std::int64_t>(frame_index), static_cast<std::int64_t>(frame_index));
           ++impl->incomplete_frames;
           if (impl->incomplete_logged < 20) {
             ++impl->incomplete_logged;
@@ -1067,7 +1109,7 @@ namespace amf_direct {
               notes += std::format(" [{} of {} bytes kept, through tile {}{}]", b.kept, b.size, b.next_tile - 1, b.cut.start >= 0 ? std::format(", cut off tiles {}-{}", b.cut.start, b.cut.end) : std::string {});
             }
             BOOST_LOG(warning) << "AMF direct: frame "sv << frame_index << " was sent with tiles 0-"sv << next_tile - 1 << " of "sv << impl->parts
-                               << " in "sv << frame.parts.size() << " buffers:"sv << notes;
+                               << " in "sv << frame.parts.size() << " buffers, so the next frame recovers from it:"sv << notes;
           }
         }
         if (plan.mark >= 0 && marked != plan.mark) {
@@ -1094,7 +1136,7 @@ namespace amf_direct {
           const auto frames = static_cast<double>(impl->timing.frames());
           auto leftovers = impl->av1() ? std::format("{} tiles followed by bytes that looked like OBUs, ", impl->leftover_obus) : std::string {};
           if (impl->tile_bits >= 0) {
-            leftovers += std::format("{} buffers holding more than one tile, {} frames missing a tile, ", impl->joined_tiles, impl->incomplete_frames);
+            leftovers += std::format("{} buffers holding more than one tile, {} stale tiles from earlier frames dropped, {} frames missing a tile, ", impl->joined_tiles, impl->stale_tiles, impl->incomplete_frames);
           }
           BOOST_LOG(info) << "AMF direct: "sv << p.name << ' ' << impl->timing.summary() << ", "sv << leftovers << impl->idr_mismatches << " key frame flags not as asked, "sv
                           << std::format("{:.3f} ms preparing and {:.3f} ms submitting each frame, ", std::chrono::duration<double, std::milli>(impl->prepare_time).count() / frames, std::chrono::duration<double, std::milli>(impl->submit_time).count() / frames)
@@ -1102,6 +1144,7 @@ namespace amf_direct {
           impl->leftover_obus = 0;
           impl->incomplete_frames = 0;
           impl->joined_tiles = 0;
+          impl->stale_tiles = 0;
           impl->idr_mismatches = 0;
           impl->recoveries = 0;
           impl->recovery_keys = 0;
