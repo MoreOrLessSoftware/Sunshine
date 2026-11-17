@@ -14,9 +14,6 @@ param(
     [switch]$Silent
 )
 
-# Constants
-$DocsUrl = "https://docs.lizardbyte.dev/projects/sunshine"
-
 # Set preference variables for output streams
 $InformationPreference = 'Continue'
 
@@ -440,22 +437,6 @@ if ($Action -eq "install") {
 
     Write-Progress -Activity "Installing Sunshine" -Completed
     Write-FramedText -Message "✓ Sunshine installation completed successfully!" -Level "Success"
-
-    # Open documentation in browser (only if not running silently)
-    if (-not $Silent) {
-        Write-Information ""
-        Write-LogMessage `
-            -Message "📖 Opening documentation in your browser: $DocsUrl" `
-            -Level "Step"
-        try {
-            Start-Process $DocsUrl
-            Write-LogMessage -Message "  ✓ Done" -Level "Success"
-        } catch {
-            Write-LogMessage `
-                -Message "  ⓘ Could not open browser automatically: $($_.Exception.Message)" `
-                -Level "Warning"
-        }
-    }
 
 } elseif ($Action -eq "uninstall") {
     Write-FramedText `
