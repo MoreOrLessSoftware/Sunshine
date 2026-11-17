@@ -205,6 +205,11 @@ export default {
       // A card stays while its action runs, and then to show its result, even once what it recommends is done
       const keepResult = (id) => !!this.results[id] || (typeof this.busy === 'string' && this.busy.startsWith(id));
 
+      // First: without any virtual gamepad driver, controllers from clients don't work at all
+      if (this.config.platform === 'windows' && (this.suggestXgpad || keepResult('xgpad'))) {
+        list.push({id: 'xgpad', href: './plugins'});
+      }
+
       const virtualDisplay = this.plugins && this.plugins.find((p) => p.id === 'virtual-display');
       if (this.config.platform === 'windows' && virtualDisplay && (!virtualDisplay.active || keepResult('virtual_display'))) {
         list.push({id: 'virtual_display', href: './plugins'});
@@ -238,9 +243,6 @@ export default {
         list.push({id: 'virtualhid', href: './plugins'});
       }
 
-      if (this.config.platform === 'windows' && (this.suggestXgpad || keepResult('xgpad'))) {
-        list.push({id: 'xgpad', href: './plugins'});
-      }
 
       return list.filter((item) => !this.dismissed.includes(item.id));
     },
