@@ -2,7 +2,7 @@
   "id": "xgpad",
   "name": "Xbox Series Controller Driver",
   "version": "1.0.0",
-  "description": "Installs the Sunshine xgpad driver, which creates virtual Xbox Series X|S controllers with the Guide and Share buttons and impulse triggers. Uninstalling the plugin removes the driver. To use it, set Windows Gamepad Drivers to All Available Drivers or Sunshine Xbox Series Driver (xgpad) in the Input settings.",
+  "description": "Installs the Sunshine xgpad driver, which creates virtual Xbox Series X|S controllers with the Guide and Share buttons and impulse triggers. Uninstalling the plugin removes the driver. Sunshine uses it with the default Windows Gamepad Drivers setting, All Available Drivers, or with Sunshine Xbox Series Driver (xgpad). Controllers from clients show up in games as Xbox Series controllers, without a touchpad or motion sensors. With All Available Drivers, a licensed Virtual HID Driver takes every controller instead, and ViGEmBus, when installed, takes PlayStation controllers.",
   "author": "Sunshine",
   "notice": "Installing adds a self-signed certificate made for this release to the trusted certificates of this computer; its private key was destroyed after the driver was signed. Restart Sunshine after installing or uninstalling so controllers use the change.",
   "order": 50,

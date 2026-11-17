@@ -636,7 +636,7 @@
     "rec_vrr_minimum_fps_title": "Streaming to a VRR Display?",
     "rec_xgpad_action": "Install xgpad",
     "rec_xgpad_confirm": "Install the Xbox Series Controller Driver plugin? It installs the xgpad driver and trusts a self-signed certificate made for this Sunshine release on this computer. The certificate's private key was destroyed after signing, so it can't sign anything else.",
-    "rec_xgpad_desc": "No virtual gamepad driver is installed, so controllers from clients won't work. The Xbox Series Controller Driver plugin, included with Sunshine, installs the Sunshine Xbox Series Driver (xgpad).",
+    "rec_xgpad_desc": "No virtual gamepad driver is installed, so controllers from clients won't work. The Xbox Series Controller Driver plugin, included with Sunshine, installs the Sunshine Xbox Series Driver (xgpad). Every controller on the client, including PlayStation and Switch controllers, shows up in games as an Xbox Series controller, without a touchpad or motion sensors. Virtual HID Driver, an optional paid upgrade, keeps PlayStation and Switch controllers as they are.",
     "rec_xgpad_done": "The driver is installed. Restart Sunshine so controllers use it.",
     "rec_xgpad_title": "Install a Virtual Gamepad Driver",
     "recommendations": "Recommendations",
