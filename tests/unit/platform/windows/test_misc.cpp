@@ -7,6 +7,10 @@
 #include "../../../tests_common.h"
 
 #ifdef _WIN32
+  // standard includes
+  #include <filesystem>
+  #include <fstream>
+
   // local includes
   #include <src/platform/windows/misc.h>
 
@@ -97,8 +101,28 @@ TEST_F(WindowsDeviceRegistryTest, KeyExistsOnlyOnceCreated) {
   EXPECT_TRUE(platf::registry_key_exists(HKEY_CURRENT_USER, path));
 }
 
-TEST(WindowsMiscTest, ViGEmBusCheckMatchesTheRegistry) {
-  EXPECT_EQ(platf::vigembus_installed(), platf::registry_key_exists(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\ViGEmBus"));
+TEST_F(WindowsDeviceRegistryTest, DriverNeedsBothItsServiceAndItsFile) {
+  const auto file = std::filesystem::temp_directory_path() / "sunshine_test_driver.sys";  // NOSONAR(cpp:S5443): safe for tests
+  std::filesystem::remove(file);
+
+  // A service left registered after the driver was uninstalled, until the next restart
+  add_device(L"0000", false);
+  EXPECT_FALSE(platf::driver_installed(HKEY_CURRENT_USER, path, file));
+
+  std::ofstream {file} << "driver";
+  EXPECT_TRUE(platf::driver_installed(HKEY_CURRENT_USER, path, file));
+
+  // A file without its service
+  RegDeleteTreeW(HKEY_CURRENT_USER, path.c_str());
+  EXPECT_FALSE(platf::driver_installed(HKEY_CURRENT_USER, path, file));
+  std::filesystem::remove(file);
+}
+
+TEST(WindowsMiscTest, ViGEmBusCheckNeedsTheDriverFile) {
+  WCHAR system_dir[MAX_PATH];
+  ASSERT_NE(GetSystemDirectoryW(system_dir, MAX_PATH), 0u);
+  const auto file = std::filesystem::path {system_dir} / L"drivers" / L"ViGEmBus.sys";
+  EXPECT_EQ(platf::vigembus_installed(), platf::driver_installed(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\ViGEmBus", file));
 }
 
 TEST(WindowsMiscTest, VirtualHidDriverCheckMatchesTheRegistry) {

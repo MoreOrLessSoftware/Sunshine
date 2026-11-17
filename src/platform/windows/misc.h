@@ -116,9 +116,22 @@ namespace platf {
   bool registry_key_exists(HKEY root, const std::wstring &path);
 
   /**
+   * @brief Check whether a driver is installed: its service is registered and its file is in place.
+   *
+   * Uninstalling a driver deletes its file right away, but Windows can keep the service registered until the next
+   * restart, so the service alone isn't enough.
+   *
+   * @param root Registry hive holding the service key.
+   * @param service_key The driver's service key, such as the ViGEmBus key under `SYSTEM\CurrentControlSet\Services`.
+   * @param driver_file The driver's `.sys` file.
+   * @return `true` when both the service key and the file exist.
+   */
+  bool driver_installed(HKEY root, const std::wstring &service_key, const std::filesystem::path &driver_file);
+
+  /**
    * @brief Check whether the ViGEmBus driver is installed.
    *
-   * @return `true` when its service is registered.
+   * @return `true` when its service is registered and `ViGEmBus.sys` is in the system drivers folder.
    */
   bool vigembus_installed();
 }  // namespace platf

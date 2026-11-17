@@ -613,9 +613,19 @@ namespace platf {
     return true;
   }
 
+  bool driver_installed(HKEY root, const std::wstring &service_key, const std::filesystem::path &driver_file) {
+    std::error_code ec;
+    return registry_key_exists(root, service_key) && std::filesystem::exists(driver_file, ec);
+  }
+
   bool vigembus_installed() {
-    // The driver's installer registers it as the ViGEmBus service.
-    return registry_key_exists(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\ViGEmBus");
+    WCHAR system_dir[MAX_PATH];
+    const auto length = GetSystemDirectoryW(system_dir, ARRAYSIZE(system_dir));
+    if (length == 0 || length >= ARRAYSIZE(system_dir)) {
+      return false;
+    }
+    // The driver's installer registers it as the ViGEmBus service, with its file in the system drivers folder.
+    return driver_installed(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\ViGEmBus", std::filesystem::path {system_dir} / L"drivers" / L"ViGEmBus.sys");
   }
 
   // Note: This does NOT append a null terminator
