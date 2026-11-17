@@ -598,6 +598,8 @@
   "index": {
     "description": "Sunshine is a self-hosted game stream host for Moonlight.",
     "fix_now": "Fix Now",
+    "rec_video_send_rate_desc": "If both the host and the client are connected at 2.5 Gbps or faster, raise the Video Send Rate so each frame reaches the client sooner at high bitrates. Leave it at 800 Mbps on a gigabit network: a rate faster than the slowest link may lose packets.",
+    "rec_video_send_rate_title": "On a 2.5 Gbps or Faster Network?",
     "startup_errors": "<b>Attention!</b> Sunshine detected these errors during startup. We <b>STRONGLY RECOMMEND</b> fixing them before streaming.",
     "plugin_notice_from": "From the {name} plugin",
     "plugin_notice_open": "Open",

@@ -10,6 +10,7 @@
             <monitor v-if="item.id === 'virtual_display'" :size="21"></monitor>
             <gauge v-else-if="item.id === 'vrr_minimum_fps'" :size="21"></gauge>
             <cpu v-else-if="item.id === 'nvenc_latency' || item.id === 'amf_direct'" :size="21"></cpu>
+            <network v-else-if="item.id === 'video_send_rate'" :size="21"></network>
             <gamepad-2 v-else :size="21"></gamepad-2>
           </div>
           <div class="recommendation-body">
@@ -88,6 +89,7 @@ import {
   Gamepad2,
   Gauge,
   Monitor,
+  Network,
   RefreshCw,
 } from '@lucide/vue'
 import { apiFetch } from './fetch_utils'
@@ -106,6 +108,10 @@ const TRUTHY_VALUES = ['true', '1', 'enabled', 'enable', 'yes', 'on'];
 
 // The plugins a virtual display stream uses, in the order they're set up. RTSS goes last since it needs RTSS installed.
 const VIRTUAL_DISPLAY_PLUGINS = ['virtual-display', 'vsync-toggle', 'rtss-limit'];
+
+// Video Send Rate in Mbps: the default, which suits gigabit networks, and the rate recommended for 2.5 gigabit or faster
+const DEFAULT_VIDEO_SEND_RATE = 800;
+const FAST_NETWORK_VIDEO_SEND_RATE = 2000;
 
 // The application the virtual display recommendation adds
 const VIRTUAL_DISPLAY_APP = 'Virtual Display';
@@ -168,6 +174,7 @@ export default {
     Gamepad2,
     Gauge,
     Monitor,
+    Network,
     RefreshCw,
   },
   props: {
@@ -241,6 +248,16 @@ export default {
       const virtualhid = this.plugins && this.plugins.find((p) => p.id === 'virtual-hid');
       if (this.config.platform === 'windows' && this.config.virtualhid_driver_installed && virtualhid && (!virtualhid.active || keepResult('virtualhid'))) {
         list.push({id: 'virtualhid', href: './plugins'});
+      }
+
+      // Last: only helps on a network faster than gigabit, which the host can't tell
+      const sendRate = `${this.config.video_send_rate ?? ''}`.trim();
+      if (sendRate === '' || sendRate === `${DEFAULT_VIDEO_SEND_RATE}` || keepResult('video_send_rate')) {
+        list.push({
+          id: 'video_send_rate',
+          href: './config#video_send_rate',
+          changes: [{key: 'video_send_rate', value: FAST_NETWORK_VIDEO_SEND_RATE, label: `${FAST_NETWORK_VIDEO_SEND_RATE}`}],
+        });
       }
 
 
