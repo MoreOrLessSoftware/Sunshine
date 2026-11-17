@@ -229,6 +229,9 @@ namespace proc {
     // The running app's connect commands before plugin options were resolved for a client; connect() resolves them again
     std::vector<cmd_t> _connect_cmds_base;
 
+    // The first plugin command that failed while starting or ending the app; terminate() reports it
+    std::optional<cmd_t> _failed_plugin_cmd;
+
     /**
      * @brief Point the client environment variables at a launch session's client.
      *
@@ -317,6 +320,14 @@ namespace proc {
    * @return Names of the applications changed.
    */
   std::vector<std::string> exclude_display_conflicts(const std::string &plugin_id, const std::string &file_name);
+
+  /**
+   * @brief Report that a plugin's command failed with a notification naming the error from its log.
+   *
+   * @param cmd The plugin's command, whose log was closed after it ran.
+   * @return true when the command belongs to a plugin and was reported.
+   */
+  bool notify_plugin_failure(const cmd_t &cmd);
   /**
    * @brief Parse serialized text into the corresponding runtime representation.
    *

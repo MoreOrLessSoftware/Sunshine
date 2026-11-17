@@ -354,6 +354,9 @@ namespace proc {
       }
       if (ret != 0) {
         BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
+        if (!cmd.plugin.empty()) {
+          _failed_plugin_cmd = cmd;
+        }
         return -1;
       }
     }
@@ -443,6 +446,9 @@ namespace proc {
 
     if (ret != 0) {
       BOOST_LOG(error) << '[' << cmd << "] exited with code ["sv << ret << ']';
+      // The stream goes on, so the failure is reported now, once the log has everything the command wrote
+      log.reset();
+      notify_plugin_failure(prep_cmd);
       return false;
     }
 
@@ -541,6 +547,9 @@ namespace proc {
 
       if (!ec && ret != 0) {
         BOOST_LOG(warning) << "Return code ["sv << ret << ']';
+        if (!cmd.plugin.empty() && !_failed_plugin_cmd) {
+          _failed_plugin_cmd = cmd;
+        }
       }
     }
 
@@ -551,11 +560,17 @@ namespace proc {
 
     bool has_run = _app_id > 0;
 
+    // A failed plugin replaces the Stopped notification, which would hide it
+    const bool reported_failure = _failed_plugin_cmd && notify_plugin_failure(*_failed_plugin_cmd);
+    _failed_plugin_cmd.reset();
+
     // Only show the Stopped notification if we actually have an app to stop
     // Since terminate() is always run when a new app has started
     if (proc::proc.get_last_run_app_name().length() > 0 && has_run) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-      system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
+      if (!reported_failure) {
+        system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
+      }
 #endif
 
       display_device::revert_configuration();
@@ -1056,6 +1071,22 @@ namespace proc {
     if (proc_opt) {
       proc = std::move(*proc_opt);
     }
+  }
+
+  bool notify_plugin_failure(const cmd_t &cmd) {
+    if (cmd.plugin.empty()) {
+      return false;
+    }
+#ifdef _WIN32
+    const std::filesystem::path log_file {utf_utils::from_utf8(cmd.log_file)};
+#else
+    const std::filesystem::path log_file {cmd.log_file};
+#endif
+    const auto detail = cmd.log_file.empty() ? std::string {} : plugins::log_error_summary(log_file);
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+    system_tray::update_tray_plugin_failed(cmd.plugin, plugins::plugin_name(cmd.plugin), detail);
+#endif
+    return true;
   }
 
   std::vector<std::string> exclude_display_conflicts(const std::string &plugin_id, const std::string &file_name) {

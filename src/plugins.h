@@ -667,6 +667,35 @@ namespace plugins {
   bool manages_display(const std::string &id);
 
   /**
+   * @brief Return a plugin's name.
+   *
+   * @param id Plugin ID.
+   * @return The name from its manifest, or the ID when the plugin isn't found.
+   */
+  std::string plugin_name(const std::string &id);
+
+  /**
+   * @brief Find the error a plugin's script reported in the last run its log records.
+   *
+   * The last run starts at the last `[YYYY-MM-DD HH:MM:SS] ...` heading, or after the log's first line, which names
+   * the install or other task, when there is none. A PowerShell error is reported on the line before its
+   * `At <script>:<line> char:<column>` line. Otherwise the run's last line is used, other than the line Sunshine
+   * adds with the exit code.
+   *
+   * @param log Contents of the plugin's log.
+   * @return The error, shortened to 200 characters, or empty when the run printed nothing.
+   */
+  std::string error_summary(std::string_view log);
+
+  /**
+   * @brief Find the error a plugin's script reported in the last run of its log file.
+   *
+   * @param log_file Plugin log.
+   * @return The error as `error_summary()` finds it, or empty when the log can't be read.
+   */
+  std::string log_error_summary(const std::filesystem::path &log_file);
+
+  /**
    * @brief Turn a plugin that sets up the display off for the applications another such plugin already serves.
    *
    * Only one plugin sets up the display for a stream, so a newly activated one would otherwise either never run
@@ -939,6 +968,16 @@ namespace plugins {
    * @param check Function returning whether a stream is running, or an empty function for never.
    */
   void set_stream_check(std::function<bool()> check);
+
+  /**
+   * @brief Set the function called when an install Sunshine started by itself fails.
+   *
+   * Installs of plugins that are on by default or changed since they were installed run in the background, where
+   * no one watches the web UI. Sunshine uses this to show a notification.
+   *
+   * @param callback Function given the plugin ID, its name and the error from its log, or an empty function.
+   */
+  void set_failure_callback(std::function<void(const std::string &id, const std::string &name, const std::string &detail)> callback);
 
   /**
    * @brief Block until the running install or uninstall finishes.

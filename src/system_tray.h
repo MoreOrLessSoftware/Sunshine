@@ -95,6 +95,15 @@ namespace system_tray {
    */
   void update_tray_require_pin();
 
+  /**
+   * @brief Spawns a notification that a plugin failed. Clicking it opens the plugin's page in the Web UI.
+   *
+   * @param plugin_id ID of the plugin.
+   * @param plugin_name Name of the plugin.
+   * @param detail The error the plugin's script reported, or empty to point to its log instead.
+   */
+  void update_tray_plugin_failed(const std::string &plugin_id, const std::string &plugin_name, const std::string &detail);
+
 #ifdef _WIN32
   /**
    * @brief Ask the user to choose a gamepad driver when the gamepad driver setting is unset.

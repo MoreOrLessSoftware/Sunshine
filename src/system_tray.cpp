@@ -609,6 +609,32 @@ namespace system_tray {
     tray_update(&tray);
   }
 
+  void update_tray_plugin_failed(const std::string &plugin_id, const std::string &plugin_name, const std::string &detail) {
+    // The tray keeps pointers to these, so they outlive the call
+    static std::string title;
+    static std::string text;
+    static std::string page;
+
+    const std::scoped_lock lock(tray_state_mutex());
+    tray.notification_title = nullptr;
+    tray.notification_text = nullptr;
+    tray.notification_cb = nullptr;
+    tray.notification_icon = nullptr;
+
+    title = std::format("{} Plugin Failed", plugin_name);
+    text = detail.empty() ? "Click here to see its log." : detail;
+    page = std::format("/plugins#plugin-{}", plugin_id);
+    tray.notification_title = title.c_str();
+    tray.notification_text = text.c_str();
+    tray.notification_icon = tray.allIconPaths[0];
+    tray.notification_cb = []() {
+      launch_ui(page);
+    };
+    if (tray_initialized_state().load()) {
+      tray_update(&tray);
+    }
+  }
+
   // Threading functions available on all platforms
   /**
    * @brief Run the managed system tray event loop.

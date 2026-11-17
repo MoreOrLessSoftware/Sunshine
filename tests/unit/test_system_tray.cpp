@@ -281,6 +281,19 @@ TEST_F(SystemTrayTest, PromptsForUnsetGamepadDriver) {
   EXPECT_NE(tray_data.notification_cb, nullptr);
 }
 
+TEST_F(SystemTrayTest, PluginFailureNamesThePluginAndItsError) {
+  system_tray::update_tray_plugin_failed("rtss-limit", "RTSS Frame Limit", "Failed to set the limit");
+
+  const auto &tray_data = system_tray::tray_data_for_testing();
+  EXPECT_STREQ(tray_data.notification_title, "RTSS Frame Limit Plugin Failed");
+  EXPECT_STREQ(tray_data.notification_text, "Failed to set the limit");
+  EXPECT_STREQ(tray_data.notification_icon, tray_data.allIconPaths[0]);
+  EXPECT_NE(tray_data.notification_cb, nullptr);
+
+  system_tray::update_tray_plugin_failed("p", "P", "");
+  EXPECT_STREQ(tray_data.notification_text, "Click here to see its log.");
+}
+
 TEST_F(SystemTrayTest, ChosenGamepadDriverNeedsNoPrompt) {
   config::input.gamepad_driver = config::GAMEPAD_DRIVER_XGPAD;
   system_tray::prepare_tray_gamepad_driver_notice();

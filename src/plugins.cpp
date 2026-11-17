@@ -14,6 +14,7 @@
 #include <future>
 #include <mutex>
 #include <ranges>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -115,6 +116,7 @@ namespace plugins {
       script_runner_t runner = run_script;  ///< Runs install and uninstall scripts.
       std::function<void()> on_change;  ///< Called after a background operation changes plugin state.
       std::function<std::vector<std::string>(const std::string &)> on_activate;  ///< Called when a plugin is activated.
+      std::function<void(const std::string &, const std::string &, const std::string &)> on_failure;  ///< Called when a background install fails.
       std::unordered_map<std::string, std::vector<std::string>> display_exclusions;  ///< Applications each plugin was turned off for when last activated.
       std::function<bool()> streaming;  ///< Whether a stream is running, for plugins that are `idle_only`.
       std::jthread worker;  ///< Thread running the current install or uninstall.
@@ -1016,9 +1018,10 @@ namespace plugins {
      * @param activate Whether to activate the plugin once an install succeeds.
      * @param action_id Action to run when `action` is `action_e::run`.
      * @param pending_options Options to save once an apply succeeds.
+     * @param background Whether Sunshine started the task by itself, so a failure is reported to the failure callback.
      * @param stop Requests the script be terminated early.
      */
-    void run_task(const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, const paths_t &paths, const script_runner_t &runner, bool activate, const std::string &action_id, const std::optional<json> &pending_options, std::stop_token stop) {
+    void run_task(const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, const paths_t &paths, const script_runner_t &runner, bool activate, const std::string &action_id, const std::optional<json> &pending_options, bool background, std::stop_token stop) {
       std::string script;
       std::string heading;
       switch (action) {
@@ -1078,9 +1081,13 @@ namespace plugins {
 
       auto &reg = registry();
       std::function<void()> on_change;
+      std::function<void(const std::string &, const std::string &, const std::string &)> on_failure;
       bool activated = false;
       {
         std::scoped_lock lock {reg.mutex};
+        if (!success && background) {
+          on_failure = reg.on_failure;
+        }
         if (success && action != action_e::run) {
           auto &state = reg.state[id];
           if (action == action_e::apply) {
@@ -1114,6 +1121,9 @@ namespace plugins {
       if (on_change) {
         on_change();
       }
+      if (on_failure) {
+        on_failure(id, manifest.name, log_error_summary(log_file));
+      }
     }
 
     /**
@@ -1129,8 +1139,9 @@ namespace plugins {
      * @param activate Whether to activate the plugin once an install succeeds.
      * @param action_id Action to run when `action` is `action_e::run`.
      * @param pending_options Options to save once an apply succeeds.
+     * @param background Whether Sunshine started the task by itself rather than for the web UI.
      */
-    void launch_task(registry_t &reg, const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, bool activate, const std::string &action_id, std::optional<json> pending_options) {
+    void launch_task(registry_t &reg, const std::string &id, action_e action, const manifest_t &manifest, const std::map<std::string, std::string> &env, bool activate, const std::string &action_id, std::optional<json> pending_options, bool background = false) {
       reg.task_running = true;
       reg.tasks[id] = {action, task_status_e::running, 0, action == action_e::run ? action_id : std::string {}};
 
@@ -1139,8 +1150,8 @@ namespace plugins {
         reg.worker.join();
       }
 
-      reg.worker = std::jthread([id, action, manifest, env, paths = reg.paths, runner = reg.runner, activate, action_id, pending_options = std::move(pending_options)](std::stop_token stop) {
-        run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, action_id, pending_options, stop);
+      reg.worker = std::jthread([id, action, manifest, env, paths = reg.paths, runner = reg.runner, activate, action_id, pending_options = std::move(pending_options), background](std::stop_token stop) {
+        run_task(id, action, manifest, env, paths, runner, activate && action == action_e::install, action_id, pending_options, background, stop);
       });
     }
 
@@ -1271,7 +1282,7 @@ namespace plugins {
                               << find_state(reg, manifest->id)->installed_version << "] to ["sv << manifest->version << ']';
             }
             const auto env = script_env(*manifest, effective_options(reg, *manifest), plugin_data_dir(reg.paths, manifest->id));
-            launch_task(reg, manifest->id, action_e::install, *manifest, env, first_install, {}, std::nullopt);
+            launch_task(reg, manifest->id, action_e::install, *manifest, env, first_install, {}, std::nullopt, true);
           }
         }
         sleep_unless_stopped(stop, 100ms);
@@ -2841,6 +2852,78 @@ namespace plugins {
     return manifest && manifest->manages_display;
   }
 
+  std::string plugin_name(const std::string &id) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    const auto *manifest = find_manifest(reg, id);
+    return manifest ? manifest->name : id;
+  }
+
+  std::string error_summary(std::string_view log) {
+    std::vector<std::string_view> lines;
+    for (std::size_t start = 0; start <= log.size();) {
+      auto end = log.find('\n', start);
+      if (end == std::string_view::npos) {
+        end = log.size();
+      }
+      auto line = log.substr(start, end - start);
+      if (line.ends_with('\r')) {
+        line.remove_suffix(1);
+      }
+      lines.push_back(line);
+      start = end + 1;
+    }
+
+    static const std::regex heading {R"(^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] )"};
+    static const std::regex error_location {R"(^At .+:\d+ char:\d+)"};
+    static const std::regex exit_code {R"(^(Completed|Failed) \(exit code -?\d+\)$)"};
+
+    // The task heading on the first line isn't output, whether or not a run heading follows
+    std::size_t first = std::min<std::size_t>(1, lines.size());
+    for (std::size_t i = lines.size(); i-- > 0;) {
+      if (std::regex_search(lines[i].begin(), lines[i].end(), heading)) {
+        first = i + 1;
+        break;
+      }
+    }
+
+    const auto trim = [](std::string_view text) {
+      const auto begin = text.find_first_not_of(" \t");
+      return begin == std::string_view::npos ? std::string_view {} : text.substr(begin, text.find_last_not_of(" \t") - begin + 1);
+    };
+    std::string_view found;
+    for (auto i = first; i < lines.size(); ++i) {
+      if (std::regex_search(lines[i].begin(), lines[i].end(), error_location)) {
+        for (auto j = i; j-- > first && found.empty();) {
+          found = trim(lines[j]);
+        }
+        break;
+      }
+    }
+    for (auto i = lines.size(); i-- > first && found.empty();) {
+      const auto line = trim(lines[i]);
+      if (!std::regex_match(line.begin(), line.end(), exit_code)) {
+        found = line;
+      }
+    }
+
+    constexpr std::size_t max_length = 200;
+    if (found.size() <= max_length) {
+      return std::string {found};
+    }
+    return std::string {found.substr(0, max_length - 3)} + "...";
+  }
+
+  std::string log_error_summary(const std::filesystem::path &log_file) {
+    std::ifstream file {log_file, std::ios::binary};
+    if (!file) {
+      return {};
+    }
+    std::stringstream contents;
+    contents << file.rdbuf();
+    return error_summary(contents.str());
+  }
+
   std::vector<std::string> exclude_display_conflicts(const std::string &id, nlohmann::json &apps_tree) {
     std::vector<std::string> others;
     {
@@ -3727,6 +3810,12 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     reg.on_activate = std::move(callback);
+  }
+
+  void set_failure_callback(std::function<void(const std::string &id, const std::string &name, const std::string &detail)> callback) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.on_failure = std::move(callback);
   }
 
   void set_stream_check(std::function<bool()> check) {

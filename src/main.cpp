@@ -467,6 +467,11 @@ int main(int argc, char *argv[]) {
   plugins::set_activation_callback([](const std::string &id) {
     return proc::exclude_display_conflicts(id, config::stream.file_apps);
   });
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  plugins::set_failure_callback([](const std::string &id, const std::string &name, const std::string &detail) {
+    system_tray::update_tray_plugin_failed(id, name, detail);
+  });
+#endif
   plugins::set_stream_check([]() {
     return rtsp_stream::session_count() > 0;
   });

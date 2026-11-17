@@ -26,11 +26,17 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/asio.hpp>
 #include <nlohmann/json.hpp>
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  #include <tray.h>
+#endif
 
 // local includes
 #include <src/config.h>
 #include <src/plugins.h>
 #include <src/process.h>
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  #include <src/system_tray.h>
+#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -182,6 +188,7 @@ protected:
     plugins::set_choices_timeout_for_testing(plugins::DEFAULT_CHOICES_TIMEOUT);
     plugins::set_change_callback({});
     plugins::set_activation_callback({});
+    plugins::set_failure_callback({});
     plugins::set_stream_check({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
@@ -1516,6 +1523,57 @@ TEST_F(DisplayConflictTest, ProcessUpdatesTheAppsFile) {
   EXPECT_TRUE(proc::exclude_display_conflicts("plain", apps_file.string()).empty());
   write_text(apps_file, "not json");
   EXPECT_TRUE(proc::exclude_display_conflicts("virtual", apps_file.string()).empty());
+}
+
+TEST(PluginsErrorSummaryTest, PowerShellErrorIsTheLineBeforeItsLocation) {
+  const auto log = "Found RTSS 7.3.7\n\nCompleted (exit code 0)\n\n"
+                   "[2026-11-16 18:30:00] Do Cmd for Virtual Display\n"
+                   "[RTSS profile Global] FPS limit 0/1\n"
+                   "Failed to set FramerateLimitDenominator on RTSS profile 'Global'\n"
+                   "At D:\\Sunshine\\assets\\plugins\\rtss-limit\\rtss.ps1:111 char:13\n"
+                   "+             throw \"Failed to set FramerateLimitDenominator\"\n"
+                   "    + CategoryInfo          : OperationStopped\n"s;
+  EXPECT_EQ(plugins::error_summary(log), "Failed to set FramerateLimitDenominator on RTSS profile 'Global'");
+}
+
+TEST(PluginsErrorSummaryTest, HandlesWindowsLineEndingsAndIndentedErrors) {
+  const auto log = "[2026-11-16 18:35:25] Do Cmd for Desktop\r\n"
+                   "  Set-ItemProperty : Requested registry access is not allowed.  \r\n"
+                   "At D:\\common.ps1:46 char:5\r\n"s;
+  EXPECT_EQ(plugins::error_summary(log), "Set-ItemProperty : Requested registry access is not allowed.");
+}
+
+TEST(PluginsErrorSummaryTest, WithoutAPowerShellErrorTheLastLineIsUsed) {
+  // A task log starts with its heading, and Sunshine ends it with the exit code
+  EXPECT_EQ(plugins::error_summary("Installing Plugin 1.0\nDownloading\nThe driver install failed\n\nFailed (exit code 1)\n"), "The driver install failed");
+  EXPECT_EQ(plugins::error_summary("[2026-11-16 18:30:00] Undo Cmd for Desktop\nstep one\nstep two\n"), "step two");
+}
+
+TEST(PluginsErrorSummaryTest, EmptyWhenTheRunPrintedNothing) {
+  EXPECT_EQ(plugins::error_summary(""), "");
+  EXPECT_EQ(plugins::error_summary("Installing Plugin 1.0\n\nFailed (exit code 1)\n"), "");
+  EXPECT_EQ(plugins::error_summary("old error\n[2026-11-16 18:30:00] Do Cmd for Desktop\n"), "");
+  // An error location with nothing before it in the run
+  EXPECT_EQ(plugins::error_summary("[2026-11-16 18:30:00] Do Cmd for Desktop\nAt C:\\x.ps1:1 char:1\n"), "At C:\\x.ps1:1 char:1");
+}
+
+TEST(PluginsErrorSummaryTest, LongErrorsAreShortened) {
+  const auto summary = plugins::error_summary("Installing Plugin 1.0\n" + std::string(300, 'e') + "\n");
+  EXPECT_EQ(summary.size(), 200);
+  EXPECT_TRUE(summary.ends_with("..."));
+}
+
+TEST_F(PluginsTest, LogErrorSummaryReadsTheLogFile) {
+  write_text(root / "p.log", "Installing Plugin p 1.0\nbad things\n\nFailed (exit code 2)\n");
+  EXPECT_EQ(plugins::log_error_summary(root / "p.log"), "bad things");
+  EXPECT_EQ(plugins::log_error_summary(root / "missing.log"), "");
+}
+
+TEST_F(PluginsTest, PluginNameFallsBackToTheId) {
+  write_plugin(builtin_dir, "p", full_manifest("p"));
+  plugins::load(paths());
+  EXPECT_EQ(plugins::plugin_name("p"), "Plugin p");
+  EXPECT_EQ(plugins::plugin_name("missing"), "missing");
 }
 
 TEST_F(PluginsTest, DisplayPluginIsFirstActiveManagingPlugin) {
@@ -3620,6 +3678,47 @@ TEST_F(PluginsTest, APluginThatNeedsAReinstallSitsOutUntilReinstalled) {
   EXPECT_EQ(plugins::display_plugin({}), "Plugin p");
 }
 
+TEST_F(PluginsTest, FailedBackgroundInstallIsReportedWithItsError) {
+  auto manifest = full_manifest("p");
+  manifest["default_active"] = true;
+  write_plugin(builtin_dir, "p", manifest);
+  plugins::load(paths());
+  plugins::set_script_runner_for_testing([](const std::string &, bool, const std::map<std::string, std::string> &, const fs::path &, const fs::path &log_file, std::stop_token) {
+    std::ofstream {log_file, std::ios::app} << "Driver download failed\n";
+    return 1;
+  });
+  std::mutex mutex;
+  std::vector<std::string> reported;
+  plugins::set_failure_callback([&](const std::string &id, const std::string &name, const std::string &detail) {
+    std::scoped_lock lock {mutex};
+    reported = {id, name, detail};
+  });
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([&] {
+    std::scoped_lock lock {mutex};
+    return !reported.empty();
+  }));
+  plugins::cancel_task();
+  EXPECT_EQ(reported, (std::vector<std::string> {"p", "Plugin p", "Driver download failed"}));
+}
+
+TEST_F(PluginsTest, FailedInstallFromTheWebUiIsNotReported) {
+  write_plugin(builtin_dir, "p", full_manifest("p"));
+  plugins::load(paths());
+  runner_exit_code = 1;
+  bool reported = false;
+  plugins::set_failure_callback([&reported](const std::string &, const std::string &, const std::string &) {
+    reported = true;
+  });
+
+  std::string error;
+  ASSERT_EQ(plugins::start_task("p", plugins::action_e::install, error), plugins::result_e::ok) << error;
+  plugins::wait_for_task();
+  EXPECT_TRUE(task_is("p", "failed"));
+  EXPECT_FALSE(reported);
+}
+
 TEST_F(PluginsTest, UpdatedBundledPluginsAreReinstalledInOrderButCustomOnesAreNot) {
   auto first_manifest = versioned_manifest("first", "2.0.0");
   first_manifest["order"] = 10;
@@ -4605,4 +4704,94 @@ TEST_F(PluginsLaunchTest, AClientThatTurnedThePluginOffDoesNotRunIt) {
   process->connect(*session("tv"));
   process->terminate();
   EXPECT_EQ(take_output(), (std::vector<std::string> {"connect=7"}));
+}
+
+#ifdef _WIN32
+  #define FAILING_COMMAND "cmd /c \"echo The display is busy & exit 1\""
+#else
+  #define FAILING_COMMAND "sh -c \"echo The display is busy; exit 1\""
+#endif
+
+TEST_F(PluginsLaunchTest, AFailedDoCommandIsReportedInsteadOfTheStop) {
+  const auto log = root / "p.log";
+  proc::ctx_t ctx {};
+  ctx.name = "Desktop";
+  ctx.id = "1";
+  ctx.output = output_file.string();
+  auto &cmd = ctx.prep_cmds.emplace_back(FAILING_COMMAND, "", false);
+  cmd.plugin = "p";
+  cmd.log_file = log.string();
+  ctx.exit_timeout = std::chrono::seconds {1};
+  std::vector<proc::ctx_t> apps;
+  apps.emplace_back(std::move(ctx));
+  process->terminate();
+  process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  system_tray::reset_tray_data_for_testing();
+#endif
+
+  EXPECT_NE(0, process->execute(1, session("tv")));
+  EXPECT_EQ(plugins::log_error_summary(log), "The display is busy");
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  const auto &tray = system_tray::tray_data_for_testing();
+  EXPECT_STREQ(tray.notification_title, "Plugin p Plugin Failed");
+  EXPECT_STREQ(tray.notification_text, "The display is busy");
+  EXPECT_NE(tray.notification_cb, nullptr);
+  system_tray::reset_tray_data_for_testing();
+#endif
+}
+
+TEST_F(PluginsLaunchTest, AFailedUndoCommandIsReported) {
+  proc::ctx_t ctx {};
+  ctx.name = "Desktop";
+  ctx.id = "1";
+  ctx.output = output_file.string();
+  ctx.prep_cmds.emplace_back(echo_multiplier("do"), FAILING_COMMAND, false).plugin = "p";
+  ctx.exit_timeout = std::chrono::seconds {1};
+  std::vector<proc::ctx_t> apps;
+  apps.emplace_back(std::move(ctx));
+  process->terminate();
+  process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
+
+  ASSERT_EQ(0, process->execute(1, session("tv")));
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  system_tray::reset_tray_data_for_testing();
+#endif
+  process->terminate();
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  // Without a log there's no error to show, so the notification points to the log
+  const auto &tray = system_tray::tray_data_for_testing();
+  EXPECT_STREQ(tray.notification_title, "Plugin p Plugin Failed");
+  EXPECT_STREQ(tray.notification_text, "Click here to see its log.");
+  system_tray::reset_tray_data_for_testing();
+#endif
+}
+
+TEST_F(PluginsLaunchTest, AFailedConnectCommandIsReportedRightAway) {
+  proc::ctx_t ctx {};
+  ctx.name = "Desktop";
+  ctx.id = "1";
+  ctx.output = output_file.string();
+  ctx.connect_cmds.emplace_back(FAILING_COMMAND, "", false, proc::cmd_t::type_e::connect).plugin = "p";
+  ctx.exit_timeout = std::chrono::seconds {1};
+  std::vector<proc::ctx_t> apps;
+  apps.emplace_back(std::move(ctx));
+  process->terminate();
+  process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
+
+  ASSERT_EQ(0, process->execute(1, session("tv")));
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  system_tray::reset_tray_data_for_testing();
+#endif
+  // The launching client is connected already, so a resume runs the connect commands
+  process->disconnect();
+  process->connect(*session("tv"));
+#if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
+  EXPECT_STREQ(system_tray::tray_data_for_testing().notification_title, "Plugin p Plugin Failed");
+  system_tray::reset_tray_data_for_testing();
+#endif
+}
+
+TEST(PluginsNotifyTest, CommandsThatAreNotFromAPluginAreNotReported) {
+  EXPECT_FALSE(proc::notify_plugin_failure(proc::cmd_t {"do", "undo", false}));
 }
