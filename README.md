@@ -57,9 +57,10 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 ### Latency and Frame Pacing
 
 - Frames are captured as soon as the desktop presents them, instead of on a fixed timer. The client sees steadier timestamps and less apparent jitter. This allows for native-like VRR frame pacing on the client with more minimal frame buffering.
-- Frame generation (DLSS FG, AFMF and the like) sometimes presents frames unevenly. With *Frame cadence smoothing*, the repeating pattern is detected and each frame is stamped where even spacing would put it, so a client that shows frames by their timestamps shows no judder.
 - Frames are sent in parts while they encode, with a configurable send rate and finer slices, for NVENC and the AMF encoders. The client can ask for a send rate or opt out of sub-frame slices.
 - When a game renders fewer frames than the stream's frame rate, the bitrate is raised to match, so the stream stays close to the bitrate the client asked for. Repeating frames can be turned off or tuned with `minimum_fps_target`.
+- Frame generation sometimes presents frames unevenly. With the **Frame cadence smoothing** setting, the repeating pattern is detected and each frame is stamped where even spacing would put it, so a client that shows frames by their timestamps shows no judder.  
+*If you're using MFG Unlocker with a 30-series card, set ```Rtx30FlipMetering=0```*
 - Per-frame latency traces: a log, and a CSV of every sent frame for matching against client logs.
 - The host answers the client's clock sync requests on the video port.
 
