@@ -1,6 +1,7 @@
 # Creates a virtual display matching the client's resolution and frame rate.
 # vdisplay reads the resolution, client name and (by default) HDR from the SUNSHINE_CLIENT_* variables.
 # The monitor identity comes from its name, so a fixed name gives every client the same monitor.
+# The virtual display always becomes the primary display, since that is the display Sunshine streams.
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vdisplay.ps1')
@@ -21,12 +22,28 @@ $vdisplayArgs = @('start', '--fps', $displayFps.ToString($invariant))
 if ($env:SUNSHINE_PLUGIN_OPT_SHARED -eq 'true') {
     $vdisplayArgs += @('--name', 'Sunshine')
 }
-if ($env:SUNSHINE_PLUGIN_OPT_EXCLUSIVE -eq 'true') {
+$exclusive = $env:SUNSHINE_PLUGIN_OPT_EXCLUSIVE -eq 'true'
+if ($exclusive) {
     $vdisplayArgs += '--exclusive'
+}
+else {
+    $vdisplayArgs += '--primary'
 }
 switch ($env:SUNSHINE_PLUGIN_OPT_HDR) {
     'on' { $vdisplayArgs += @('--hdr', 'true') }
     'off' { $vdisplayArgs += '--no-hdr' }
+}
+
+# Windows remembers a display layout for each set of connected monitors and applies it when that set appears again,
+# so a client that once streamed with the other displays off gets them turned off again. Note which displays are on.
+$displaysOn = $null
+if (-not $exclusive) {
+    if (Test-Path $displayHelpers) {
+        $displaysOn = Get-DisplaysOn
+    }
+    else {
+        Write-Output "Can't keep the other displays on: $displayHelpers is missing"
+    }
 }
 
 if ($env:SUNSHINE_PLUGIN_OPT_NEW_DESKTOP -eq 'true') {
@@ -50,6 +67,10 @@ try {
     $code = $process.ExitCode
     if ($code -ne 0) {
         throw "vdisplay start failed with exit code $code; see $(Split-Path $vdisplayExe)\vdisplay.log"
+    }
+
+    if ($null -ne $displaysOn) {
+        Restore-DisplaysOn $displaysOn
     }
 }
 catch {

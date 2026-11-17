@@ -30,7 +30,10 @@ public static class DisplayManager {
     const uint SdcSaveToDatabase = 0x200;
     const uint SdcAllowChanges = 0x400;
     const uint SdcAllowPathOrderChanges = 0x2000;
+    const uint CdsUpdateRegistry = 0x1;
+    const uint CdsNoReset = 0x10000000;
     const int EnumCurrentSettings = -1;
+    const uint DmPosition = 0x20;
     const uint DmPelsWidth = 0x80000;
     const uint DmPelsHeight = 0x100000;
     const uint DmDisplayFrequency = 0x400000;
@@ -121,6 +124,10 @@ public static class DisplayManager {
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern int ChangeDisplaySettingsEx(string device, ref DevMode devMode, IntPtr window, uint flags, IntPtr parameter);
+
+    // Applies the changes earlier calls stored with CdsNoReset.
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "ChangeDisplaySettingsExW")]
+    static extern int ApplyDisplaySettings(string device, IntPtr devMode, IntPtr window, uint flags, IntPtr parameter);
 
     // A display layout as Windows reports it: the paths from sources to displays, and their modes.
     public class Config {
@@ -341,6 +348,101 @@ public static class DisplayManager {
             }
         }
         Check(SetDisplayConfig(config.PathCount, config.Paths, config.ModeCount, config.Modes, SdcApply | SdcUseSuppliedDisplayConfig | SdcAllowChanges), "SetDisplayConfig");
+        return true;
+    }
+
+    // Turns off every display that is on but not wanted, and saves the layout so Windows uses it the next time the same
+    // displays are connected. Returns false when only wanted displays are on.
+    //
+    // It applies the current layout without the unwanted displays, so unlike SetActiveTargets it doesn't need Windows
+    // to have a saved layout for the displays that stay on. The displays left on are placed side by side from the
+    // primary display, so no gap is left where a display was. When Windows refuses that layout, each unwanted display
+    // is detached with ChangeDisplaySettingsEx instead, which lets Windows arrange the rest.
+    public static bool KeepOnly(List<Target> wanted) {
+        Config config = Query(OnlyActivePaths);
+        List<int> keep = new List<int>();
+        List<Target> unwanted = new List<Target>();
+        for (uint i = 0; i < config.PathCount; i++) {
+            Target path = ReadTarget(config, i);
+            if (wanted.Exists(w => w.Is(path))) {
+                keep.Add((int)i);
+            }
+            else {
+                unwanted.Add(path);
+            }
+        }
+        if (unwanted.Count == 0) {
+            return false;
+        }
+        if (keep.Count == 0) {
+            throw new Exception("No wanted display is on");
+        }
+
+        // Copy the kept paths and the source and target modes they use, numbering the modes again
+        List<int> modes = new List<int>();
+        List<int> sourceModes = new List<int>();
+        byte[] paths = new byte[keep.Count * PathSize];
+        for (int i = 0; i < keep.Count; i++) {
+            Array.Copy(config.Paths, keep[i] * PathSize, paths, i * PathSize, PathSize);
+            foreach (int field in new int[] {12, 32}) {
+                uint index = U32(paths, i * PathSize + field);
+                if (index == ModeIdxInvalid || index >= config.ModeCount) {
+                    continue;
+                }
+                int renumbered = modes.IndexOf((int)index);
+                if (renumbered < 0) {
+                    modes.Add((int)index);
+                    renumbered = modes.Count - 1;
+                }
+                Put(paths, i * PathSize + field, (uint)renumbered);
+                if (field == 12 && !sourceModes.Contains(renumbered)) {
+                    sourceModes.Add(renumbered);
+                }
+            }
+        }
+        byte[] modeData = new byte[modes.Count * ModeSize];
+        for (int i = 0; i < modes.Count; i++) {
+            Array.Copy(config.Modes, modes[i] * ModeSize, modeData, i * ModeSize, ModeSize);
+        }
+
+        // Side by side from the primary display at (0,0), in the order they were from left to right
+        sourceModes.RemoveAll(m => U32(modeData, m * ModeSize) != ModeInfoSource);
+        sourceModes.Sort((a, b) => {
+            int ax = I32(modeData, a * ModeSize + 28);
+            int bx = I32(modeData, b * ModeSize + 28);
+            return ax != bx ? ax.CompareTo(bx) : I32(modeData, a * ModeSize + 32).CompareTo(I32(modeData, b * ModeSize + 32));
+        });
+        int primary = sourceModes.FindIndex(m => I32(modeData, m * ModeSize + 28) == 0 && I32(modeData, m * ModeSize + 32) == 0);
+        if (primary > 0) {
+            int first = sourceModes[primary];
+            sourceModes.RemoveAt(primary);
+            sourceModes.Insert(0, first);
+        }
+        int x = 0;
+        foreach (int m in sourceModes) {
+            Put(modeData, m * ModeSize + 28, x);
+            Put(modeData, m * ModeSize + 32, 0);
+            x += (int)U32(modeData, m * ModeSize + 16);
+        }
+
+        int result = SetDisplayConfig((uint)keep.Count, paths, (uint)modes.Count, modeData, SdcApply | SdcUseSuppliedDisplayConfig | SdcAllowChanges | SdcSaveToDatabase);
+        if (result == 0) {
+            return true;
+        }
+
+        // Detach each unwanted display, then apply the stored changes together
+        foreach (Target target in unwanted) {
+            DevMode mode = NewDevMode();
+            mode.Fields = DmPosition | DmPelsWidth | DmPelsHeight;
+            int detach = ChangeDisplaySettingsEx(GetDeviceName(target), ref mode, IntPtr.Zero, CdsUpdateRegistry | CdsNoReset, IntPtr.Zero);
+            if (detach != 0) {
+                throw new Exception(string.Format("SetDisplayConfig failed: {0} ({1}), and ChangeDisplaySettingsEx couldn't turn off {2}: result {3}", new Win32Exception(result).Message, result, target.FriendlyName, detach));
+            }
+        }
+        int applied = ApplyDisplaySettings(null, IntPtr.Zero, IntPtr.Zero, 0, IntPtr.Zero);
+        if (applied != 0) {
+            throw new Exception(string.Format("SetDisplayConfig failed: {0} ({1}), and ChangeDisplaySettingsEx couldn't apply the change: result {2}", new Win32Exception(result).Message, result, applied));
+        }
         return true;
     }
 
