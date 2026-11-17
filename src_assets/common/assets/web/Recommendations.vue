@@ -41,29 +41,32 @@
             </ul>
 
             <div class="recommendation-actions">
-              <template v-if="item.id === 'virtual_display'">
-                <button class="btn btn-primary" type="button" :disabled="busy !== null" @click="setUpVirtualDisplay(true)">
-                  <refresh-cw v-if="busy === 'virtual_display_all'" :size="17" class="driver-release-spinning"></refresh-cw>
-                  {{ $t('index.rec_virtual_display_all_apps') }}
+              <!-- Done: the result above says so, and only Review and Dismiss stay -->
+              <template v-if="!(results[item.id] && results[item.id].ok)">
+                <template v-if="item.id === 'virtual_display'">
+                  <button class="btn btn-primary" type="button" :disabled="busy !== null" @click="setUpVirtualDisplay(true)">
+                    <refresh-cw v-if="busy === 'virtual_display_all'" :size="17" class="driver-release-spinning"></refresh-cw>
+                    {{ $t('index.rec_virtual_display_all_apps') }}
+                  </button>
+                  <button class="btn btn-outline-primary" type="button" :disabled="busy !== null" @click="setUpVirtualDisplay(false)">
+                    <refresh-cw v-if="busy === 'virtual_display_app'" :size="17" class="driver-release-spinning"></refresh-cw>
+                    {{ $t('index.rec_virtual_display_app_only') }}
+                  </button>
+                </template>
+                <button v-else-if="item.id === 'virtualhid'" class="btn btn-primary" type="button" :disabled="busy !== null" @click="enableVirtualHid">
+                  <refresh-cw v-if="busy === 'virtualhid'" :size="17" class="driver-release-spinning"></refresh-cw>
+                  {{ $t('index.rec_virtualhid_action') }}
                 </button>
-                <button class="btn btn-outline-primary" type="button" :disabled="busy !== null" @click="setUpVirtualDisplay(false)">
-                  <refresh-cw v-if="busy === 'virtual_display_app'" :size="17" class="driver-release-spinning"></refresh-cw>
-                  {{ $t('index.rec_virtual_display_app_only') }}
+                <button v-else-if="item.id === 'xgpad'" class="btn btn-primary" type="button" :disabled="busy !== null" @click="installXgpad">
+                  <refresh-cw v-if="busy === 'xgpad'" :size="17" class="driver-release-spinning"></refresh-cw>
+                  <download v-else :size="17"></download>
+                  {{ $t('index.rec_xgpad_action') }}
+                </button>
+                <button v-else class="btn btn-primary" type="button" :disabled="busy !== null" @click="applySettings(item)">
+                  <refresh-cw v-if="busy === item.id" :size="17" class="driver-release-spinning"></refresh-cw>
+                  {{ $t('index.rec_apply_settings') }}
                 </button>
               </template>
-              <button v-else-if="item.id === 'virtualhid'" class="btn btn-primary" type="button" :disabled="busy !== null" @click="enableVirtualHid">
-                <refresh-cw v-if="busy === 'virtualhid'" :size="17" class="driver-release-spinning"></refresh-cw>
-                {{ $t('index.rec_virtualhid_action') }}
-              </button>
-              <button v-else-if="item.id === 'xgpad'" class="btn btn-primary" type="button" :disabled="busy !== null" @click="installXgpad">
-                <refresh-cw v-if="busy === 'xgpad'" :size="17" class="driver-release-spinning"></refresh-cw>
-                <download v-else :size="17"></download>
-                {{ $t('index.rec_xgpad_action') }}
-              </button>
-              <button v-else class="btn btn-primary" type="button" :disabled="busy !== null" @click="applySettings(item)">
-                <refresh-cw v-if="busy === item.id" :size="17" class="driver-release-spinning"></refresh-cw>
-                {{ $t('index.rec_apply_settings') }}
-              </button>
               <a v-if="item.href" class="btn btn-outline-secondary" :href="item.href">{{ $t('index.rec_review') }}</a>
               <button class="btn btn-link text-body-secondary ms-auto" type="button" @click="dismiss(item.id)">
                 {{ $t('index.rec_dismiss') }}
@@ -199,7 +202,8 @@ export default {
         return [];
       }
       const list = [];
-      const keepResult = (id) => !!this.results[id];
+      // A card stays while its action runs, and then to show its result, even once what it recommends is done
+      const keepResult = (id) => !!this.results[id] || (typeof this.busy === 'string' && this.busy.startsWith(id));
 
       const virtualDisplay = this.plugins && this.plugins.find((p) => p.id === 'virtual-display');
       if (this.config.platform === 'windows' && virtualDisplay && (!virtualDisplay.active || keepResult('virtual_display'))) {
