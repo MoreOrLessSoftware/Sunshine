@@ -201,6 +201,7 @@ namespace plugins {
     bool elevated;  ///< Whether the do and undo scripts run elevated.
     bool manages_display;  ///< Whether the plugin sets up the display itself, replacing Sunshine's display device configuration.
     bool idle_only;  ///< Whether the plugin can only be installed or uninstalled while no stream is running.
+    bool restart_after_change;  ///< Whether Sunshine must restart after the plugin is installed or uninstalled for the change to take effect.
     bool default_active;  ///< Whether a bundled plugin is installed and activated the first time Sunshine starts with it.
     scripts_t scripts;  ///< Scripts the plugin provides.
     std::vector<option_t> options;  ///< Configuration options.

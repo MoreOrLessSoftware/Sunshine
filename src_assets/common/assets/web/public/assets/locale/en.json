@@ -816,6 +816,7 @@
     "reinstall_title": "Run the install script again, keeping the plugin's options and whether it's active",
     "reinstalling": "Reinstalling...",
     "rescan": "Rescan",
+    "restart_needed": "Restart Sunshine for this change to take effect.",
     "running": "Running {action}...",
     "save_options": "Save options",
     "saved": "Plugin options saved.",

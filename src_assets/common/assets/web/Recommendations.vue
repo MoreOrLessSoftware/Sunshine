@@ -24,6 +24,10 @@
             <div class="alert alert-success alert-inline mt-2 mb-0" role="status" v-if="results[item.id] && results[item.id].ok">
               <check-circle :size="18" class="icon flex-shrink-0"></check-circle>
               <span>{{ results[item.id].message }}</span>
+              <button v-if="results[item.id].restart" class="btn btn-sm btn-success ms-auto" type="button" @click="restartNow">
+                <refresh-cw :size="15"></refresh-cw>
+                {{ $t('connection.restart_now') }}
+              </button>
             </div>
             <div class="alert alert-danger alert-inline mt-2 mb-0" role="alert" v-else-if="results[item.id]">
               <alert-circle :size="18" class="icon flex-shrink-0"></alert-circle>
@@ -84,6 +88,7 @@ import {
   RefreshCw,
 } from '@lucide/vue'
 import { apiFetch } from './fetch_utils'
+import { notify } from './Notification.vue'
 import { confirmDialog } from './ConfirmDialog.vue'
 import { restartSunshine } from './server_status'
 
@@ -540,6 +545,26 @@ export default {
     },
 
     /**
+     * Restart Sunshine so a change takes effect, such as a driver it looks for when it starts.
+     */
+    async restartNow() {
+      try {
+        if (await restartSunshine()) {
+          // Done: drop the Restart Now button from the result
+          for (const [id, result] of Object.entries(this.results)) {
+            if (result.restart) {
+              this.results = {...this.results, [id]: {ok: true, message: this.$t('connection.restart_done')}};
+            }
+          }
+          this.$emit('restarted');
+        }
+      } catch (e) {
+        console.error('Failed to restart Sunshine:', e);
+        notify.error(e.message);
+      }
+    },
+
+    /**
      * Install the xgpad plugin, whose install script installs the Xbox Series controller driver.
      */
     async installXgpad() {
@@ -559,7 +584,7 @@ export default {
           ...this.results,
           xgpad: error ?
             {ok: false, message: this.$t('index.rec_apply_failed', {error})} :
-            {ok: true, message: this.$t('index.rec_xgpad_done')},
+            {ok: true, message: this.$t('index.rec_xgpad_done'), restart: true},
         };
         if (!error) {
           this.$emit('xgpad-installed');

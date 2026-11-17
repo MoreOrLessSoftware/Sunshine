@@ -119,6 +119,7 @@ namespace {
       {"elevated", true},
       {"manages_display", true},
       {"idle_only", true},
+      {"restart_after_change", true},
       {"default_active", true},
       {"scripts", {{"install", "install.ps1"}, {"uninstall", "uninstall.ps1"}, {"do", "do.ps1"}, {"undo", "undo.ps1"}, {"status", "status.ps1"}}},
       {"options", json::array({
@@ -263,6 +264,7 @@ TEST_F(PluginsTest, ParseManifestAppliesDefaults) {
   EXPECT_FALSE(manifest->elevated);
   EXPECT_FALSE(manifest->manages_display);
   EXPECT_FALSE(manifest->idle_only);
+  EXPECT_FALSE(manifest->restart_after_change);
   EXPECT_FALSE(manifest->default_active);
   EXPECT_TRUE(manifest->scripts.status.empty());
   EXPECT_TRUE(manifest->builtin);
@@ -287,6 +289,7 @@ TEST_F(PluginsTest, ParseManifestReadsEveryField) {
   EXPECT_TRUE(manifest->elevated);
   EXPECT_TRUE(manifest->manages_display);
   EXPECT_TRUE(manifest->idle_only);
+  EXPECT_TRUE(manifest->restart_after_change);
   EXPECT_TRUE(manifest->default_active);
   EXPECT_EQ(manifest->scripts.status, "status.ps1");
   EXPECT_FALSE(manifest->builtin);
@@ -373,6 +376,7 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"ElevatedNotBoolean", R"({"id":"p","elevated":"yes"})", "'elevated' must be a boolean"},
     invalid_manifest_t {"ManagesDisplayNotBoolean", R"({"id":"p","manages_display":1})", "'manages_display' must be a boolean"},
     invalid_manifest_t {"IdleOnlyNotBoolean", R"({"id":"p","idle_only":"yes"})", "'idle_only' must be a boolean"},
+    invalid_manifest_t {"RestartAfterChangeNotBoolean", R"({"id":"p","restart_after_change":1})", "'restart_after_change' must be a boolean"},
     invalid_manifest_t {"DefaultActiveNotBoolean", R"({"id":"p","default_active":1})", "'default_active' must be a boolean"},
     invalid_manifest_t {"StatusScriptMissing", R"({"id":"p","scripts":{"status":"missing.ps1"}})", "script 'missing.ps1' does not exist"},
     invalid_manifest_t {"ScriptsNotObject", R"({"id":"p","scripts":[]})", "'scripts' must be an object"},
@@ -630,6 +634,7 @@ TEST_F(PluginsTest, ListDescribesPlugins) {
   EXPECT_EQ(plugin["elevated"], true);
   EXPECT_EQ(plugin["manages_display"], true);
   EXPECT_EQ(plugin["idle_only"], true);
+  EXPECT_EQ(plugin["restart_after_change"], true);
   EXPECT_EQ(plugin["default_active"], true);
   EXPECT_EQ(plugin["has_status"], true);
   EXPECT_EQ(plugin["per_stream"], true);

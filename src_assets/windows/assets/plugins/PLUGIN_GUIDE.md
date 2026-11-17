@@ -128,6 +128,7 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `elevated`    | No       | Run the do, undo, connect and disconnect scripts as administrator. Defaults to `false`. Install and uninstall always run as administrator. |
 | `manages_display` | No   | `true` when the plugin creates or arranges displays itself. While it is active for an application, Sunshine skips its *Device configuration* setting when a stream starts or resumes. When several such plugins are active for an application, only the first in plugin order runs, and activating one turns it off for the applications another such plugin already serves. Defaults to `false`. |
 | `idle_only`   | No       | `true` when installing or uninstalling the plugin must wait until no stream is running, such as for a plugin that installs a driver a stream may be using. Defaults to `false`. |
+| `restart_after_change` | No | `true` when Sunshine must restart after the plugin is installed or uninstalled for the change to take effect, such as for a driver Sunshine looks for when it starts. The web UI then offers to restart Sunshine. Defaults to `false`. |
 | `default_active` | No    | `true` for a bundled plugin that Sunshine installs and activates the first time it starts with it. A user who uninstalls it keeps it uninstalled, and an install that fails isn't tried again. Custom plugins ignore it. Defaults to `false`. |
 | `scripts`     | No       | Any of `install`, `uninstall`, `do`, `undo`, `connect`, `disconnect`, `apply` and `status`. Each must be a `.ps1` file directly inside the plugin folder. See [Applying options](#applying-options) for `apply` and [Status and notices](#status-and-notices) for `status`. |
 | `options`     | No       | Options shown in the web UI.                                                                                        |
@@ -277,6 +278,17 @@ events.addEventListener('message', (event) => console.log(event.data));
 
 A `text/event-stream` response is passed on as it arrives. Sunshine ends the stream after a few minutes, and
 `EventSource` reconnects on its own; a service can send `retry: 250` to make that reconnect quick.
+
+A panel can offer to restart Sunshine, for example after the user installs something Sunshine looks for when it
+starts. The web UI shows the restart until Sunshine is back, and the promise resolves with `true` once it is, so the
+panel can show what changed:
+
+```js
+const restart = window.parent.sunshine?.restart;
+if (restart) {
+  restart().then((restarted) => restarted && refresh()).catch((error) => console.error(error));
+}
+```
 
 ## Script environment
 Scripts run with `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <script>`. A script fails

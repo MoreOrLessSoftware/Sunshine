@@ -7,6 +7,7 @@
   "notice": "Installing adds a self-signed certificate made for this release to the trusted certificates of this computer; its private key was destroyed after the driver was signed. Restart Sunshine after installing or uninstalling so controllers use the change.",
   "order": 50,
   "idle_only": true,
+  "restart_after_change": true,
   "scripts": {
     "install": "install.ps1",
     "uninstall": "uninstall.ps1"

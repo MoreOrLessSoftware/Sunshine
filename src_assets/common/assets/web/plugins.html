@@ -304,6 +304,10 @@
                   <div class="progress-bar progress-bar-striped progress-bar-animated w-100"></div>
                 </div>
               </div>
+              <div v-else-if="needsRestart(plugin)" class="alert alert-warning py-2 mb-0 d-flex align-items-center gap-2" role="status">
+                <span class="flex-grow-1">{{ $t('plugins.restart_needed') }}</span>
+                <button type="button" class="btn btn-sm btn-warning" @click="restartNow">{{ $t('connection.restart_now') }}</button>
+              </div>
               <div v-else-if="plugin.task.status === 'failed'" class="alert alert-danger py-2 mb-0">
                 {{ taskFailedText(plugin) }}
                 ({{ $t('plugins.exit_code', { code: plugin.task.exit_code }) }})
@@ -385,6 +389,8 @@
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
   import { confirmDialog } from './ConfirmDialog.vue'
+  import { notify } from './Notification.vue'
+  import { restartSunshine } from './server_status'
   import { BookOpen, CloudDownload, Download, FileText, Layers, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
   import { Marked } from 'marked'
 
@@ -756,6 +762,30 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
             return this.i18n.t('plugins.apply_failed');
           default:
             return this.i18n.t('plugins.action_failed', {action: this.actionLabel(plugin)});
+        }
+      },
+
+      /**
+       * Whether an install or uninstall just finished for a plugin that needs Sunshine to restart to use the change.
+       *
+       * @param {object} plugin Plugin from `/api/plugins`.
+       * @returns {boolean} Whether to offer a restart.
+       */
+      needsRestart(plugin) {
+        return plugin.restart_after_change && plugin.task?.status === 'succeeded' && ['install', 'uninstall'].includes(plugin.task.action);
+      },
+
+      /**
+       * Restart Sunshine so a plugin change takes effect.
+       */
+      async restartNow() {
+        try {
+          if (await restartSunshine()) {
+            await this.loadPlugins();
+          }
+        } catch (e) {
+          console.error('Failed to restart Sunshine:', e);
+          notify.error(e.message);
         }
       },
 

@@ -70,6 +70,7 @@
   <div class="actions">
     <a id="download" class="button primary" href="https://github.com/LizardByte/libvirtualhid/releases/latest" target="_blank" rel="noopener noreferrer">Download</a>
     <button id="refresh" class="button" type="button">Refresh</button>
+    <button id="restart" class="button" type="button" hidden>Restart Sunshine</button>
   </div>
 
   <p class="muted">
@@ -222,6 +223,23 @@
     }
 
     $('refresh').addEventListener('click', refresh);
+
+    // The web UI around the panel restarts Sunshine and shows the restart; offer it when that page provides it.
+    function parentRestart() {
+      try {
+        return window.parent.sunshine?.restart || null;
+      } catch (e) {
+        return null;
+      }
+    }
+    if (parentRestart()) {
+      $('restart').hidden = false;
+      $('restart').addEventListener('click', () => {
+        parentRestart()?.()
+          .then((restarted) => restarted && refresh())
+          .catch((e) => console.error('Failed to restart Sunshine:', e));
+      });
+    }
     refresh();
   </script>
 </body>

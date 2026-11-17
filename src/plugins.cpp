@@ -1394,6 +1394,13 @@ namespace plugins {
       }
       manifest.idle_only = node["idle_only"].get<bool>();
     }
+    if (node.contains("restart_after_change")) {
+      if (!node["restart_after_change"].is_boolean()) {
+        error = "'restart_after_change' must be a boolean";
+        return std::nullopt;
+      }
+      manifest.restart_after_change = node["restart_after_change"].get<bool>();
+    }
     if (node.contains("default_active")) {
       if (!node["default_active"].is_boolean()) {
         error = "'default_active' must be a boolean";
@@ -2703,6 +2710,7 @@ namespace plugins {
         {"elevated", manifest.elevated},
         {"manages_display", manifest.manages_display},
         {"idle_only", manifest.idle_only},
+        {"restart_after_change", manifest.restart_after_change},
         {"default_active", manifest.default_active},
         {"has_status", !manifest.scripts.status.empty()},
         {"per_stream", per_stream(manifest)},
