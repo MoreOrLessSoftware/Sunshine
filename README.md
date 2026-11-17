@@ -21,13 +21,14 @@ Bundled plugins:
 
 - **Virtual Display (using SudoVDA)**: a virtual monitor matching the client's resolution and frame rate, optionally at a multiple of it (the default is 4x), shared or per client, with 10-bit SDR and an option to stream on a new Windows desktop.
 - **Display Manager**: sets a physical display to the client's resolution and refresh rate while it streams, and restores your layout afterwards.
-- **HDR Control**: turns HDR on or off for a stream, with a *Toggle HDR* client command.
+- **HDR Control**: sets HDR monitor calibration profiles and HDR mode per-client/per-app, adds a *Toggle HDR* client command.
 - **RTSS Frame Limit**: caps games at the client's frame rate through RivaTuner.
 - **V-Sync Toggle**: sets the driver's global V-Sync for the stream (NVIDIA and AMD).
 - **Nyrna**: a *Suspend* / *Resume* client command, with a notification showing what is suspended.
 - **Stadia Controller**: use a Stadia Controller over Wi-Fi as a virtual Xbox controller, with a live view of its buttons and optional headset audio.
 - **Latency Test**: a test pattern for measuring latency and pacing with a phone camera.
-- **Virtual HID** and **Xbox Series Controller Driver**: the virtual input options below, installable from the web UI.
+- **Xbox Series Controller Driver**: light-weight input driver that maps any client controller to an Xbox Series controller on this host.
+- **Virtual HID**: manage the optional Virtual HID driver license and status.
 
 [![Virtual Display plugin](./screenshots/plugin_virtual_display.webp)](https://raw.githubusercontent.com/MoreOrLessSoftware/Sunshine/mlsoft-custom/screenshots/plugin_virtual_display.webp)
 
