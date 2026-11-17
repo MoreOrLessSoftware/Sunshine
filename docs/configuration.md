@@ -3269,6 +3269,36 @@ supported on the current platform.
     </tr>
 </table>
 
+### amd_ltr_frames
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The number of long-term reference frames kept when [amd_direct](#amd_direct) is enabled. When
+            the client loses frames, the encoder recovers from one of these instead of sending a key
+            frame. 0 turns them off, and lost frames are recovered with key frames.
+            By default HEVC has none, because AMD's own HEVC decoder, which Moonlight uses on AMD
+            GPUs, shows corrupted video for HEVC that marks long-term references. AV1 keeps 4.
+            @note{This option only applies when [amd_direct](#amd_direct) is enabled.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">0 for HEVC, 4 for AV1</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            amd_ltr_frames = 0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Choices</td>
+        <td colspan="2">0-8</td>
+    </tr>
+</table>
+
 ## VideoToolbox Encoder
 
 ### vt_coder

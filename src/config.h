@@ -116,6 +116,7 @@ namespace config {
       bool amd_direct;  ///< Whether AV1 and HEVC are encoded through AMF directly rather than through FFmpeg.
       int amd_av1_tiles;  ///< Tiles each AV1 frame is encoded in through AMF directly. Above 1, AMF hands each tile over as it finishes.
       int amd_hevc_slices;  ///< Slices each HEVC frame is encoded in through AMF directly. Above 1, AMF hands each slice over as it finishes.
+      std::optional<int> amd_ltr_frames;  ///< Long-term references kept through AMF directly, to recover from lost frames without a key frame. 0 turns them off. Unset: none for HEVC, which AMD's own HEVC decoder (hevc_amf) corrupts, and 4 for AV1.
     } amd;  ///< AMD AMF encoder options.
 
     struct {

@@ -1381,17 +1381,20 @@ namespace platf::dxgi {
         }
         settings.max_au_size = amd.amd_max_au_size;
         settings.parts = amd.amd_hevc_slices;
+        // AMD's own HEVC decoder (hevc_amf, which Moonlight uses on AMD GPUs) corrupts HEVC that
+        // marks long-term references, so lost HEVC frames are recovered with key frames instead
+        settings.ltr_frames = amd.amd_ltr_frames.value_or(0);
       } else {
         settings.usage = amd.amd_usage_av1.value_or(settings.usage);
         settings.quality_preset = amd.amd_quality_av1.value_or(settings.quality_preset);
         settings.rate_control = amd.amd_rc_av1.value_or(settings.rate_control);
         settings.parts = amd.amd_av1_tiles;
+        settings.ltr_frames = amd.amd_ltr_frames.value_or(4);
       }
       // A client that can't take more slices or tiles than it asked for gets its own count
       settings.parts = ::video::subframe::encoder_parts(settings.parts, client_config.slicesPerFrame, client_config.exactSlices);
       settings.preanalysis = amd.amd_preanalysis.value_or(0) != 0;
       settings.enforce_hrd = amd.amd_enforce_hrd.value_or(0) != 0;
-      settings.ltr_frames = ltr_frames;
 
       if (!encoder.create(base.device.get(), client_config, colorspace, settings)) {
         return false;
@@ -1446,8 +1449,6 @@ namespace platf::dxgi {
     }
 
   private:
-    static constexpr int ltr_frames = 4;  ///< Long-term references kept to recover from lost frames.
-
     d3d_base_encode_device base;
     amf_direct::encoder_t encoder;
   };

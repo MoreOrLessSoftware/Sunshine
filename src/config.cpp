@@ -757,6 +757,7 @@ namespace config {
       false,  // direct
       1,  // av1_tiles
       1,  // hevc_slices
+      {},  // ltr_frames (none for HEVC, 4 for AV1)
     },  // amd
 
     {
@@ -1654,6 +1655,13 @@ namespace config {
     bool_f(vars, "amd_direct", video.amd.amd_direct);
     int_between_f(vars, "amd_av1_tiles", video.amd.amd_av1_tiles, {1, 64});
     int_between_f(vars, "amd_hevc_slices", video.amd.amd_hevc_slices, {1, 64});
+    {
+      auto ltr_frames = video.amd.amd_ltr_frames;
+      int_f(vars, "amd_ltr_frames", ltr_frames);
+      if (!ltr_frames || (*ltr_frames >= 0 && *ltr_frames <= 8)) {
+        video.amd.amd_ltr_frames = ltr_frames;
+      }
+    }
     bool_f(vars, "amd_enforce_hrd", (bool &) video.amd.amd_enforce_hrd);
     {
       auto max_au_size = video.amd.amd_max_au_size;
