@@ -148,6 +148,8 @@
     import Navbar from './Navbar.vue'
     import VersionBadge from './VersionBadge.vue'
     import { apiFetch } from './fetch_utils'
+    import { notify } from './Notification.vue'
+    import { restartSunshine } from './server_status'
     import {
       AlertCircle,
       Check,
@@ -375,17 +377,15 @@
             console.error('Failed to copy logs:', err);
           });
         },
-        restart() {
+        async restart() {
           this.restartPressed = true;
-          setTimeout(() => {
-            this.restartPressed = false;
-          }, 5000);
-          apiFetch("./api/restart", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            }
-          });
+          try {
+            // Shows the restart until Sunshine is back
+            await restartSunshine();
+          } catch (e) {
+            notify.error(e.message);
+          }
+          this.restartPressed = false;
         },
         resetPortalToken() {
           this.portalResetPressed = true;
@@ -399,12 +399,7 @@
             .then((r) => {
               this.portalResetStatus = r.status;
               if (r.status) {
-                apiFetch("./api/restart", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json"
-                  }
-                });
+                restartSunshine().catch((e) => notify.error(e.message));
               }
               setTimeout(() => {
                 this.portalResetPressed = false;

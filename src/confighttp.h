@@ -75,6 +75,26 @@ namespace confighttp {
   void getAsset(const resp_https_t &response, const req_https_t &request);
   void browseDirectory(const resp_https_t &response, const req_https_t &request);
   void getLocale(const resp_https_t &response, const req_https_t &request);
+
+  /**
+   * @brief Return the ID this Sunshine process made when it started.
+   *
+   * A different ID tells the web UI that Sunshine restarted since it last checked.
+   *
+   * @return Random UUID, the same for the life of the process.
+   */
+  const std::string &boot_id();
+
+  /**
+   * @brief Report that Sunshine is running, and which process answers. This endpoint does not require a login.
+   *
+   * The web UI polls it to notice when Sunshine stops or restarts. It answers only addresses allowed to use the
+   * web UI, and with nothing but the process's boot ID.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   */
+  void getHealth(const resp_https_t &response, const req_https_t &request);
   void getCSRFToken(const resp_https_t &response, const req_https_t &request);
 
   /**

@@ -1,4 +1,5 @@
 import { notifyKey } from './Notification.vue'
+import { reportNetworkError } from './server_status'
 
 /**
  * The set of error messages that indicate a CSRF validation failure.
@@ -7,14 +8,24 @@ const CSRF_ERRORS = new Set(['Missing CSRF token', 'Invalid CSRF token', 'CSRF t
 
 /**
  * Wrapper around the native fetch that automatically detects CSRF errors
- * (HTTP 400 with a known CSRF error message) and displays a notification.
+ * (HTTP 400 with a known CSRF error message) and displays a notification,
+ * and has the connection checked when a request gets no answer.
  *
  * @param {string} url - The URL to fetch.
  * @param {RequestInit} [options] - Standard fetch options.
  * @returns {Promise<Response>} The fetch Response.
  */
 export async function apiFetch(url, options) {
-  const response = await fetch(url, options)
+  let response
+  try {
+    response = await fetch(url, options)
+  } catch (error) {
+    // No answer at all: Sunshine may have stopped or be restarting
+    if (error?.name !== 'AbortError') {
+      reportNetworkError()
+    }
+    throw error
+  }
 
   if (response.status === 400) {
     let body = null

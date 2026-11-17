@@ -581,6 +581,21 @@
     "wan_encryption_mode_2": "Required for all clients",
     "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients."
   },
+  "connection": {
+    "elapsed": "({seconds} s)",
+    "lost": "Lost connection to Sunshine. It may be restarting or stopped. Reconnecting...",
+    "lost_long": "Sunshine isn't responding. It may have been stopped. Still trying to reconnect...",
+    "reload": "Reload",
+    "restart_failed": "Sunshine didn't restart. Check its log for errors.",
+    "restart_done": "Sunshine restarted.",
+    "restart_now": "Restart Now",
+    "restarted": "Sunshine restarted. Reload the page to see its current state.",
+    "restarting_desc": "This page carries on when Sunshine is back.",
+    "restarting_slow": "This is taking longer than usual. If Sunshine doesn't come back, check its log on the host.",
+    "restarting_title": "Restarting Sunshine",
+    "retry": "Retry Now",
+    "stop_waiting": "Stop Waiting"
+  },
   "index": {
     "description": "Sunshine is a self-hosted game stream host for Moonlight.",
     "choose_gamepad_driver": "Choose Gamepad Drivers",
@@ -591,7 +606,8 @@
     "pre_release_available": "Pre-release {version} available",
     "rec_amf_direct_desc": "Sunshine is encoding with AMD AMF. AMF Direct sends AV1 and HEVC through AMD's AMF runtime instead of FFmpeg, and splitting each frame into 4 tiles (AV1) or slices (HEVC) lets Sunshine send each part as soon as AMF finishes it, which lowers latency.",
     "rec_amf_direct_title": "Lower AMD Encoding Latency",
-    "rec_applied_restarting": "Saved. Sunshine is restarting to apply the change.",
+    "rec_applied": "Saved. Restart Sunshine to apply the change.",
+    "rec_applied_restarted": "Saved. Sunshine restarted with the change.",
     "rec_apply_confirm": "Save this change and restart Sunshine? A stream in progress will end.",
     "rec_apply_failed": "The change could not be made: {error}",
     "rec_apply_settings": "Apply and Restart",

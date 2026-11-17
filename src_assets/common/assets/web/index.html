@@ -71,7 +71,7 @@
     </div>
 
     <!-- Recommendations -->
-    <Recommendations :config="config" :suggest-xgpad="suggestXgpad" @xgpad-installed="loadVirtualInputStatus" @virtualhid-enabled="loadPluginNotices"></Recommendations>
+    <Recommendations :config="config" :suggest-xgpad="suggestXgpad" @xgpad-installed="loadVirtualInputStatus" @virtualhid-enabled="loadPluginNotices" @restarted="loadAfterRestart"></Recommendations>
 
     <!-- Resources -->
     <div class="my-4">
@@ -123,19 +123,7 @@
     async created() {
       // Status scripts can take a few seconds, so the notices load on their own
       this.loadPluginNotices();
-      try {
-        let config = await fetch("./api/config").then((r) => r.json());
-        this.config = config;
-        this.platform = config.platform;
-        this.controllerEnabled = config.controller !== "disabled";
-        this.gamepadDriver = config.gamepad_driver || '';
-
-        if (this.platform === 'windows') {
-          await this.loadVirtualInputStatus();
-        }
-      } catch (e) {
-        console.error(e);
-      }
+      await this.loadConfig();
       try {
         this.logs = (await fetch("./api/logs").then(r => r.text()))
       } catch (e) {
@@ -175,6 +163,31 @@
       }
     },
     methods: {
+      /**
+       * Load the settings, and on Windows the virtual input drivers they may use.
+       */
+      async loadConfig() {
+        try {
+          let config = await fetch("./api/config").then((r) => r.json());
+          this.config = config;
+          this.platform = config.platform;
+          this.controllerEnabled = config.controller !== "disabled";
+          this.gamepadDriver = config.gamepad_driver || '';
+
+          if (this.platform === 'windows') {
+            await this.loadVirtualInputStatus();
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      },
+      /**
+       * Load what a restart Sunshine came back from can change, without reloading the page.
+       */
+      async loadAfterRestart() {
+        await this.loadConfig();
+        this.loadPluginNotices();
+      },
       /**
        * Load the notices plugins report through their status scripts.
        */

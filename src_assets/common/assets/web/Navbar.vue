@@ -91,6 +91,7 @@
     </nav>
     <Notification></Notification>
     <ConfirmDialog></ConfirmDialog>
+    <ConnectionStatus></ConnectionStatus>
   </div>
 </template>
 
@@ -99,12 +100,14 @@ import { CircleUserRound, Home, Info, Layers, Lock, LogOut, Puzzle, Settings, Sh
 import ThemeToggle from './ThemeToggle.vue'
 import Notification from './Notification.vue'
 import ConfirmDialog from './ConfirmDialog.vue'
+import ConnectionStatus from './ConnectionStatus.vue'
 
 export default {
   components: {
     ThemeToggle,
     Notification,
     ConfirmDialog,
+    ConnectionStatus,
     Home,
     Lock,
     Layers,

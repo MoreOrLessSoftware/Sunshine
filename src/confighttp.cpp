@@ -1469,6 +1469,40 @@ namespace confighttp {
     send_response(response, output_tree);
   }
 
+  const std::string &boot_id() {
+    static const std::string id = uuid_util::uuid_t::generate().string();
+    return id;
+  }
+
+  /**
+   * @brief Report that Sunshine is running, and which process answers. This endpoint does not require a login.
+   *
+   * The response is `{"status": true, "boot_id": "<uuid>"}` and is never cached.
+   *
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/health| GET| null}
+   */
+  void getHealth(const resp_https_t &response, const req_https_t &request) {
+    const auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
+    if (net::from_address(address) > http::origin_web_ui_allowed) {
+      response->write(SimpleWeb::StatusCode::client_error_forbidden);
+      return;
+    }
+
+    nlohmann::json output_tree;
+    output_tree["status"] = true;
+    output_tree["boot_id"] = boot_id();
+
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "application/json");
+    headers.emplace("Cache-Control", "no-store");
+    headers.emplace("X-Frame-Options", "DENY");
+    headers.emplace("Content-Security-Policy", "frame-ancestors 'none';");
+    response->write(output_tree.dump(), headers);
+  }
+
   /**
    * @brief Get the locale setting. This endpoint does not require authentication.
    * @param response The HTTP response object.
@@ -3166,6 +3200,7 @@ namespace confighttp {
     server.resource["^/api/config$"]["GET"] = getConfig;
     server.resource["^/api/config$"]["POST"] = saveConfig;
     server.resource["^/api/configLocale$"]["GET"] = getLocale;
+    server.resource["^/api/health$"]["GET"] = getHealth;
     server.resource["^/api/covers/([0-9]+)$"]["GET"] = getCover;
     server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
     server.resource["^/api/csrf-token$"]["GET"] = getCSRFToken;

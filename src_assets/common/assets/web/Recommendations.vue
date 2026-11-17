@@ -85,6 +85,7 @@ import {
 } from '@lucide/vue'
 import { apiFetch } from './fetch_utils'
 import { confirmDialog } from './ConfirmDialog.vue'
+import { restartSunshine } from './server_status'
 
 // Where dismissed recommendations are remembered in the browser
 const DISMISSED_KEY = 'index.dismissedRecommendations';
@@ -173,7 +174,7 @@ export default {
       default: false,
     },
   },
-  emits: ['xgpad-installed', 'virtualhid-enabled'],
+  emits: ['xgpad-installed', 'virtualhid-enabled', 'restarted'],
   data() {
     return {
       busy: null,
@@ -357,12 +358,10 @@ export default {
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify(settings),
         }));
-        try {
-          await apiFetch('./api/restart', {method: 'POST', headers: {'Content-Type': 'application/json'}});
-        } catch {
-          // Sunshine stops before it answers, so the request failing just means it's restarting
-        }
-        this.results = {...this.results, [item.id]: {ok: true, message: this.$t('index.rec_applied_restarting')}};
+        // Shows the restart until Sunshine is back, then the home page loads the settings it now uses
+        const restarted = await restartSunshine();
+        this.results = {...this.results, [item.id]: {ok: true, message: this.$t(restarted ? 'index.rec_applied_restarted' : 'index.rec_applied')}};
+        this.$emit('restarted');
       } catch (e) {
         console.error('Failed to apply recommended settings:', e);
         this.results = {...this.results, [item.id]: {ok: false, message: this.$t('index.rec_apply_failed', {error: e.message})}};

@@ -317,6 +317,8 @@ protected:
       confighttp::getLocale(response, request);
     };
 
+    server->resource["^/health-test$"]["GET"] = confighttp::getHealth;
+
     // Add a route to test browseDirectory
     server->resource["^/browse-test$"]["GET"] = [](
                                                   const std::shared_ptr<SimpleWeb::ServerBase<SimpleWeb::HTTPS>::Response> &response,
@@ -1042,6 +1044,28 @@ TEST_F(ConfigHttpTest, GetLocaleReturnsJson) {
   const std::string body = response->content.string();
   ASSERT_TRUE(body.find("\"status\":true") != std::string::npos || body.find("\"status\": true") != std::string::npos);
   ASSERT_TRUE(body.find("\"locale\":\"en\"") != std::string::npos || body.find("\"locale\": \"en\"") != std::string::npos);
+}
+
+// Test: the health check needs no login, names this process and is never cached
+TEST_F(ConfigHttpTest, HealthReportsTheBootIdWithoutLogin) {
+  const auto response = client->request("GET", "/health-test");
+  ASSERT_EQ(response->status_code, "200 OK");
+
+  const auto cache_control = response->header.find("Cache-Control");
+  ASSERT_NE(cache_control, response->header.end());
+  EXPECT_EQ(cache_control->second, "no-store");
+  assert_security_headers(response);
+
+  const auto body = nlohmann::json::parse(response->content.string());
+  EXPECT_TRUE(body["status"].get<bool>());
+  EXPECT_EQ(body["boot_id"].get<std::string>(), confighttp::boot_id());
+  EXPECT_EQ(body.size(), 2);
+}
+
+// Test: the boot ID stays the same for the life of the process
+TEST(ConfigHttpBootIdTest, StaysTheSame) {
+  EXPECT_EQ(confighttp::boot_id(), confighttp::boot_id());
+  EXPECT_EQ(confighttp::boot_id().size(), 36);
 }
 
 /**
