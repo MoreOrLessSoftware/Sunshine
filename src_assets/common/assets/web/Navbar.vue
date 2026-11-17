@@ -90,6 +90,7 @@
       </div>
     </nav>
     <Notification></Notification>
+    <ConfirmDialog></ConfirmDialog>
   </div>
 </template>
 
@@ -97,11 +98,13 @@
 import { CircleUserRound, Home, Info, Layers, Lock, LogOut, Puzzle, Settings, Shield, SquareMenu, Star } from '@lucide/vue'
 import ThemeToggle from './ThemeToggle.vue'
 import Notification from './Notification.vue'
+import ConfirmDialog from './ConfirmDialog.vue'
 
 export default {
   components: {
     ThemeToggle,
     Notification,
+    ConfirmDialog,
     Home,
     Lock,
     Layers,

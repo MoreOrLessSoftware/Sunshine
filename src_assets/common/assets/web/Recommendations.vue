@@ -84,6 +84,7 @@ import {
   RefreshCw,
 } from '@lucide/vue'
 import { apiFetch } from './fetch_utils'
+import { confirmDialog } from './ConfirmDialog.vue'
 
 // Where dismissed recommendations are remembered in the browser
 const DISMISSED_KEY = 'index.dismissedRecommendations';
@@ -330,7 +331,15 @@ export default {
      * @param {object} item The recommendation, with its `changes`.
      */
     async applySettings(item) {
-      if (!item.changes.length || !window.confirm(this.$t('index.rec_apply_confirm'))) {
+      if (!item.changes.length) {
+        return;
+      }
+      const confirmed = await confirmDialog({
+        title: this.$t(`index.rec_${item.id}_title`),
+        message: this.$t('index.rec_apply_confirm'),
+        confirmLabel: this.$t('index.rec_apply_settings'),
+      });
+      if (!confirmed) {
         return;
       }
       this.busy = item.id;
@@ -438,7 +447,12 @@ export default {
      */
     async setUpVirtualDisplay(allApps) {
       const confirmKey = allApps ? 'index.rec_virtual_display_all_apps_confirm' : 'index.rec_virtual_display_app_only_confirm';
-      if (!window.confirm(this.$t(confirmKey))) {
+      const confirmed = await confirmDialog({
+        title: this.$t('index.rec_virtual_display_title'),
+        message: this.$t(confirmKey),
+        confirmLabel: this.$t(allApps ? 'index.rec_virtual_display_all_apps' : 'index.rec_virtual_display_app_only'),
+      });
+      if (!confirmed) {
         return;
       }
 
@@ -530,7 +544,12 @@ export default {
      * Install the xgpad plugin, whose install script installs the Xbox Series controller driver.
      */
     async installXgpad() {
-      if (!window.confirm(this.$t('index.rec_xgpad_confirm'))) {
+      const confirmed = await confirmDialog({
+        title: this.$t('index.rec_xgpad_title'),
+        message: this.$t('index.rec_xgpad_confirm'),
+        confirmLabel: this.$t('index.rec_xgpad_action'),
+      });
+      if (!confirmed) {
         return;
       }
       this.busy = 'xgpad';

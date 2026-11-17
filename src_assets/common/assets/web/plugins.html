@@ -384,6 +384,7 @@
   import PluginChoiceSelect from './PluginChoiceSelect.vue'
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
+  import { confirmDialog } from './ConfirmDialog.vue'
   import { BookOpen, CloudDownload, Download, FileText, Layers, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
   import { Marked } from 'marked'
 
@@ -764,8 +765,16 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
 
       async runTask(plugin, action) {
-        if (action === 'uninstall' && !window.confirm(this.i18n.t('plugins.uninstall_confirm', {name: plugin.name}))) {
-          return;
+        if (action === 'uninstall') {
+          const confirmed = await confirmDialog({
+            title: this.i18n.t('plugins.uninstall_title', {name: plugin.name}),
+            message: this.i18n.t('plugins.uninstall_confirm', {name: plugin.name}),
+            confirmLabel: this.i18n.t('plugins.uninstall'),
+            variant: 'danger',
+          });
+          if (!confirmed) {
+            return;
+          }
         }
         await this.post(plugin, `./api/plugins/${action}`, action === 'install' ? {activate: true} : {});
         await this.loadPlugins();
@@ -986,17 +995,26 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
        * Switch views when the sidebar links, Back or Forward change the URL.
        * Leaving the grid with unsaved changes asks first and stays on the grid if declined.
        */
-      onHashChange() {
+      async onHashChange() {
         const view = this.viewFromHash();
         if (view === this.currentView) {
           return;
         }
         if (this.currentView === 'apps' && this.matrixDirty) {
-          if (!window.confirm(this.i18n.t('plugins.matrix_discard_confirm'))) {
-            window.history.replaceState(null, '', this.hashFor('apps'));
+          // The grid stays in the URL while the question is open
+          window.history.replaceState(null, '', this.hashFor('apps'));
+          const confirmed = await confirmDialog({
+            title: this.i18n.t('plugins.matrix_discard_title'),
+            message: this.i18n.t('plugins.matrix_discard_confirm'),
+            confirmLabel: this.i18n.t('plugins.matrix_discard'),
+            variant: 'danger',
+          });
+          if (!confirmed) {
             return;
           }
           this.resetMatrix();
+          this.showView(view, true);
+          return;
         }
         this.showView(view, false);
       },
