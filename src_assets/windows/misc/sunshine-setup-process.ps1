@@ -207,6 +207,43 @@ function Invoke-ScriptIfExist {
         -FailureTarget $ScriptPath
 }
 
+# Check whether a plugin is installed, from the plugin state Sunshine keeps.
+function Test-PluginInstalled {
+    <#
+    .SYNOPSIS
+    Returns whether Sunshine's plugin state records a plugin as installed.
+
+    .DESCRIPTION
+    Reads config\plugins.json under the install folder. Upgrading Sunshine runs the old version's uninstall, which
+    removes drivers that plugins installed, while the plugin state stays; this tells the install which to put back.
+
+    .PARAMETER Root
+    The Sunshine install folder.
+
+    .PARAMETER Id
+    The plugin id, such as xgpad.
+
+    .OUTPUTS
+    $true when the plugin is recorded as installed; $false when it isn't, or the state is missing or unreadable.
+    #>
+    param(
+        [string]$Root,
+        [string]$Id
+    )
+
+    $statePath = Join-Path $Root "config\plugins.json"
+    if (-not (Test-Path -LiteralPath $statePath)) {
+        return $false
+    }
+    try {
+        $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    $plugin = $state.plugins.$Id
+    return [bool]($plugin -and $plugin.installed -eq $true)
+}
+
 # Execute sunshine.exe with arguments if it exists.
 function Invoke-SunshineIfExist {
     <#

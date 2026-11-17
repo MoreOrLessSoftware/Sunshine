@@ -286,7 +286,7 @@ if ($Action -eq "install") {
         -Color "Yellow"
     Write-Information ""
 
-    $totalSteps = 6
+    $totalSteps = 7
     $currentStep = 0
 
     # Reset permissions on the install directory
@@ -396,7 +396,23 @@ if ($Action -eq "install") {
         -Emoji "🛡️"
     Write-Information ""
 
-    # 4. Install service
+    # 4. Put back the xgpad driver when the xgpad plugin is installed. Upgrading runs the old version's uninstall,
+    #    which removes it, while the plugin stays installed. Before the service starts, so Sunshine finds the driver.
+    $currentStep++
+    Write-Progress `
+        -Activity "Installing Sunshine" `
+        -Status "Installing Xbox Series controller driver" `
+        -PercentComplete (($currentStep / $totalSteps) * 100)
+    if (Test-PluginInstalled -Root $RootDir -Id "xgpad") {
+        $installXgpadScript = Join-Path $RootDir "scripts\install-xgpad-driver.bat"
+        Invoke-ScriptIfExist `
+            -ScriptPath $installXgpadScript `
+            -Description "Installing Xbox Series controller driver (xgpad) for the installed plugin" `
+            -Emoji "🎮"
+    }
+    Write-Information ""
+
+    # 5. Install service
     $currentStep++
     Write-Progress `
         -Activity "Installing Sunshine" `
@@ -409,7 +425,7 @@ if ($Action -eq "install") {
         -Emoji "⚡"
     Write-Information ""
 
-    # 5. Configure autostart
+    # 6. Configure autostart
     $currentStep++
     Write-Progress `
         -Activity "Installing Sunshine" `

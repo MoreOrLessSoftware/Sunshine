@@ -152,8 +152,11 @@ if(SUNSHINE_BUILD_XGPAD_DRIVER)
             DESTINATION "${SUNSHINE_ASSETS_DIR}/plugins/xgpad/driver"
             COMPONENT assets)
 
-    # Removing Sunshine removes the driver too, whether or not the plugin installed it
-    install(FILES "${XGPAD_DRIVER_DIR}/scripts/uninstall-xgpad-driver.bat"
+    # Removing Sunshine removes the driver too, whether or not the plugin installed it. Upgrading runs that removal,
+    # so the install puts the driver back when the plugin is installed.
+    install(FILES
+                "${XGPAD_DRIVER_DIR}/scripts/install-xgpad-driver.bat"
+                "${XGPAD_DRIVER_DIR}/scripts/uninstall-xgpad-driver.bat"
             DESTINATION "scripts"
             COMPONENT application)
 endif()

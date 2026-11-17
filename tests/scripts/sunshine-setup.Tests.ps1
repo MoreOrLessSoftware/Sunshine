@@ -202,6 +202,42 @@ Describe "Invoke-ExecutableIfExist" {
     }
 }
 
+Describe "Test-PluginInstalled" {
+    BeforeEach {
+        $root = Join-Path $TestDrive ([guid]::NewGuid())
+        New-Item -ItemType Directory -Path (Join-Path $root "config") -Force | Out-Null
+        $statePath = Join-Path $root "config\plugins.json"
+    }
+
+    It "is true for a plugin recorded as installed" {
+        Set-Content -LiteralPath $statePath -Value '{"plugins": {"xgpad": {"active": true, "installed": true}}}'
+
+        Test-PluginInstalled -Root $root -Id "xgpad" | Should -BeTrue
+    }
+
+    It "is false for a plugin recorded as not installed" {
+        Set-Content -LiteralPath $statePath -Value '{"plugins": {"xgpad": {"installed": false}}}'
+
+        Test-PluginInstalled -Root $root -Id "xgpad" | Should -BeFalse
+    }
+
+    It "is false for a plugin missing from the state" {
+        Set-Content -LiteralPath $statePath -Value '{"plugins": {"nyrna": {"installed": true}}}'
+
+        Test-PluginInstalled -Root $root -Id "xgpad" | Should -BeFalse
+    }
+
+    It "is false when there is no plugin state" {
+        Test-PluginInstalled -Root $root -Id "xgpad" | Should -BeFalse
+    }
+
+    It "is false when the plugin state can't be read" {
+        Set-Content -LiteralPath $statePath -Value '{ not json'
+
+        Test-PluginInstalled -Root $root -Id "xgpad" | Should -BeFalse
+    }
+}
+
 Describe "Executable wrappers" {
     BeforeEach {
         Mock Invoke-ExecutableIfExist { 0 }
