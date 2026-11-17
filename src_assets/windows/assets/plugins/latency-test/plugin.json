@@ -27,7 +27,8 @@
       "label": "Latency Test",
       "icon": "material:speed",
       "top_level": true,
-      "script": "start.ps1"
+      "script": "start.ps1",
+      "programs": ["explorer"]
     },
     {
       "id": "close",
