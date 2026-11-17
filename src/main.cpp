@@ -52,6 +52,9 @@
   #include "platform/common.h"
   #include "platform/linux/misc.h"
 #endif
+#ifdef _WIN32
+  #include "platform/windows/misc.h"
+#endif
 
 using namespace std::literals;
 
@@ -257,6 +260,19 @@ int main(int argc, char *argv[]) {
   if (config::parse(argc, argv)) {
     return 0;
   }
+
+#ifdef _WIN32
+  // Plugins and display changes need administrator rights. The service already runs elevated, so this
+  // only restarts a manual or portable launch, before logging starts so the log isn't rotated twice.
+  if (config::sunshine.cmd.name.empty() && !platf::is_process_elevated()) {
+    if (platf::relaunch_elevated()) {
+      return 0;
+    }
+    BOOST_LOG(fatal) << "Sunshine needs administrator rights. Accept the UAC prompt, or right-click sunshine.exe and choose Run as administrator."sv;
+    std::this_thread::sleep_for(10s);
+    return 1;
+  }
+#endif
 
   auto log_deinit_guard = logging::init(config::sunshine.min_log_level, config::sunshine.log_file, config::sunshine.latency_log);
   if (!log_deinit_guard) {

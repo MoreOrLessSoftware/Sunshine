@@ -62,4 +62,31 @@ namespace platf {
    * @return `true` when Sunshine isn't running as SYSTEM, or a user is signed in at the console.
    */
   bool user_session_available();
+
+  /**
+   * @brief Check whether the current process runs with a full administrator token.
+   *
+   * @return `true` when the process token is elevated, as it is under the service or after "Run as administrator".
+   */
+  bool is_process_elevated();
+
+  /**
+   * @brief Return the arguments of a Windows command line, without the program name.
+   *
+   * The program name ends at its closing quote when it starts with one, otherwise at the first space or tab,
+   * as the C runtime parses it. The whitespace following it is skipped too.
+   *
+   * @param command_line Full command line, as returned by `GetCommandLineW()`.
+   * @return Arguments following the program name, unchanged.
+   */
+  std::wstring_view command_line_arguments(std::wstring_view command_line);
+
+  /**
+   * @brief Start this executable again with administrator rights and the same arguments.
+   *
+   * Shows the UAC prompt and returns without waiting for the new process.
+   *
+   * @return `true` when the elevated process started, `false` when the prompt was declined or the launch failed.
+   */
+  bool relaunch_elevated();
 }  // namespace platf

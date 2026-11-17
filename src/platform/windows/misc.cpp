@@ -42,6 +42,7 @@
  * @brief Macro for NTDDI VERSION.
  */
 #define NTDDI_VERSION NTDDI_WIN10
+#include <shellapi.h>
 #include <Shlwapi.h>
 
 // local includes
@@ -531,6 +532,54 @@ namespace platf {
     return true;
   }
 
+  bool is_process_elevated() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+      BOOST_LOG(error) << "OpenProcessToken() failed: "sv << GetLastError();
+      return false;
+    }
+    TOKEN_ELEVATION elevation {};
+    DWORD size = 0;
+    const bool queried = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size);
+    if (!queried) {
+      BOOST_LOG(error) << "GetTokenInformation(TokenElevation) failed: "sv << GetLastError();
+    }
+    CloseHandle(token);
+    return queried && elevation.TokenIsElevated != 0;
+  }
+
+  std::wstring_view command_line_arguments(std::wstring_view command_line) {
+    std::size_t pos = 0;
+    if (!command_line.empty() && command_line.front() == L'"') {
+      const auto close = command_line.find(L'"', 1);
+      pos = close == std::wstring_view::npos ? command_line.size() : close + 1;
+    } else {
+      pos = std::min(command_line.find_first_of(L" \t"), command_line.size());
+    }
+    pos = std::min(command_line.find_first_not_of(L" \t", pos), command_line.size());
+    return command_line.substr(pos);
+  }
+
+  bool relaunch_elevated() {
+    WCHAR executable[MAX_PATH];
+    GetModuleFileNameW(nullptr, executable, ARRAYSIZE(executable));
+    const std::wstring arguments {command_line_arguments(GetCommandLineW())};
+    const auto working_dir = std::filesystem::current_path().wstring();
+
+    SHELLEXECUTEINFOW shell_exec_info {};
+    shell_exec_info.cbSize = sizeof(shell_exec_info);
+    shell_exec_info.fMask = SEE_MASK_NOASYNC;
+    shell_exec_info.lpVerb = L"runas";
+    shell_exec_info.lpFile = executable;
+    shell_exec_info.lpParameters = arguments.c_str();
+    shell_exec_info.lpDirectory = working_dir.c_str();
+    shell_exec_info.nShow = SW_NORMAL;
+    if (!ShellExecuteExW(&shell_exec_info)) {
+      BOOST_LOG(error) << "Failed to restart Sunshine as administrator: "sv << GetLastError();
+      return false;
+    }
+    return true;
+  }
   // Note: This does NOT append a null terminator
   /**
    * @brief Append a null-terminated string to a Windows environment block.
