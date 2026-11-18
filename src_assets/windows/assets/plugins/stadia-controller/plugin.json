@@ -39,7 +39,7 @@
       "id": "gamepad",
       "type": "choice",
       "label": "Virtual controller",
-      "description": "The controller games see. The Xbox Series controller uses the xgpad driver (Sunshine's Xbox Series Controller Driver component) and maps Capture to Share. The Xbox 360 controller needs the ViGEmBus driver.",
+      "description": "The controller games see. The Xbox Series controller uses the xgpad driver (Sunshine's Virtual Controllers plugin) and maps Capture to Share. The Xbox 360 controller needs the ViGEmBus driver.",
       "default": "xgpad",
       "choices": [
         {"value": "xgpad", "label": "Xbox Series controller (xgpad)"},

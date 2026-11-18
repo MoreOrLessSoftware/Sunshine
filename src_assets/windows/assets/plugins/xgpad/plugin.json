@@ -1,15 +1,46 @@
 {
   "id": "xgpad",
-  "name": "Xbox Series Controller Driver",
-  "version": "1.0.0",
-  "description": "Installs the Sunshine xgpad driver, which creates virtual Xbox Series X|S controllers with the Guide and Share buttons and impulse triggers. Uninstalling the plugin removes the driver. Sunshine uses it with the default Windows Gamepad Drivers setting, All Available Drivers, or with Sunshine Xbox Series Driver (xgpad). Controllers from clients show up in games as Xbox Series controllers, without a touchpad or motion sensors. With All Available Drivers, a licensed Virtual HID Driver takes every controller instead, and ViGEmBus, when installed, takes PlayStation controllers.",
+  "name": "Virtual Controllers",
+  "version": "1.1.0",
+  "description": "Installs the Sunshine Gamepad Driver (xgpad), which shows the client's controllers to games as Xbox Series X|S or DualSense controllers. Uninstalling the plugin removes the driver.\n\nPlayStation controllers, and controllers with motion sensors or a touchpad, become DualSense controllers; the rest become Xbox Series controllers. Change this with Controller type, or switch during a stream from the Virtual Controllers page of the in-stream menu. Switching reconnects the controllers, so some games need a restart to notice.\n\nGames that only support Xbox controllers see a DualSense only through Steam Input. Used when Windows Gamepad Drivers is All Available Drivers (the default; a licensed Virtual HID Driver takes precedence) or Sunshine Gamepad Driver (xgpad).",
   "author": "Sunshine",
   "notice": "Installing adds a self-signed certificate made for this release to the trusted certificates of this computer; its private key was destroyed after the driver was signed. Restart Sunshine after installing or uninstalling so controllers use the change.",
   "order": 50,
+  "icon": "material:sports_esports",
   "idle_only": true,
   "restart_after_change": true,
   "scripts": {
     "install": "install.ps1",
     "uninstall": "uninstall.ps1"
-  }
+  },
+  "client_commands": [
+    {
+      "id": "controller_xbox",
+      "label": "Xbox",
+      "icon": "material:sports_esports",
+      "action": "xgpad.set_profile",
+      "args": ["xbox"]
+    },
+    {
+      "id": "controller_dualsense",
+      "label": "DualSense",
+      "icon": "material:stadia_controller",
+      "action": "xgpad.set_profile",
+      "args": ["dualsense"]
+    }
+  ],
+  "options": [
+    {
+      "id": "controller",
+      "type": "choice",
+      "label": "Controller type",
+      "description": "What controllers appear as when a stream starts. Automatic picks DualSense for PlayStation controllers and for controllers with motion sensors or a touchpad. Set Xbox for an application that only supports Xbox controllers.",
+      "default": "automatic",
+      "choices": [
+        {"value": "automatic", "label": "Automatic"},
+        {"value": "xbox", "label": "Xbox"},
+        {"value": "dualsense", "label": "DualSense"}
+      ]
+    }
+  ]
 }

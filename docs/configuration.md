@@ -401,8 +401,7 @@ supported on the current platform.
             when it is not installed. It creates DualSense controllers, with motion sensors, touchpad, lightbar and
             adaptive triggers, for the `ds4` and `ds5` choices and for the controllers `auto` makes PlayStation-style
             controllers; every other controller is an Xbox Series X|S controller. Games that only support Xbox
-            controllers see a DualSense only through Steam Input. Install it with the **Xbox Series Controller
-            Driver** plugin.</td>
+            controllers see a DualSense only through Steam Input. Install it with the **Virtual Controllers** plugin.</td>
     </tr>
 </table>
 

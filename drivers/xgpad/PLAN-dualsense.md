@@ -68,7 +68,7 @@ controllers between the two from the in-stream menu. One driver, one plugin, one
   queue, close the device, recreate it with the new profile and a fresh token, publish neutral then the kept state,
   re-request motion (DualSense) or stop rumble (Xbox). Runs on the input thread via `platf::gamepad_set_profile`.
   Pure helpers: `plan_profile_switch(...)`, profile precedence (session override > plugin option > automatic).
-- Commands on a *Controller* page: **Xbox (XInput)** and **DualSense**, the active one with a check icon, hidden when
+- Commands on the *Virtual Controllers* page: **Xbox** and **DualSense**, the active one with a check icon, hidden when
   the client has no xgpad pads or the driver predates DualSense.
 
 ## 5. Plugin (`src_assets/windows/assets/plugins/xgpad/`)

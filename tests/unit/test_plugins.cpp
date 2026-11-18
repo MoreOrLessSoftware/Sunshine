@@ -2973,6 +2973,24 @@ TEST(PluginsBundledTest, XgpadManifestIsValid) {
   EXPECT_EQ(manifest->scripts.uninstall, "uninstall.ps1");
   EXPECT_TRUE(manifest->scripts.do_script.empty());  // It only installs the driver; nothing runs for streams
   EXPECT_TRUE(fs::exists(dir / "xgpad-driver.ps1"));
+
+  // Clients switch their controllers through an action Sunshine handles
+  ASSERT_EQ(manifest->client_commands.size(), 2);
+  for (const auto &command : manifest->client_commands) {
+    EXPECT_EQ(command.action, "xgpad.set_profile");
+    EXPECT_TRUE(command.script.empty());
+    EXPECT_FALSE(command.top_level);
+  }
+  EXPECT_EQ(manifest->client_commands[0].args, (std::vector<std::string> {"xbox"}));
+  EXPECT_EQ(manifest->client_commands[1].args, (std::vector<std::string> {"dualsense"}));
+
+  // The controller type option, read by Sunshine when it creates a pad
+  ASSERT_EQ(manifest->options.size(), 1);
+  EXPECT_EQ(manifest->options[0].id, "controller");
+  EXPECT_EQ(manifest->options[0].default_value, "automatic");
+  ASSERT_EQ(manifest->options[0].choices.size(), 3);
+  EXPECT_EQ(manifest->options[0].choices[1].value, "xbox");
+  EXPECT_EQ(manifest->options[0].choices[2].value, "dualsense");
 }
 
 TEST(PluginsBundledTest, VirtualHidManifestIsValid) {

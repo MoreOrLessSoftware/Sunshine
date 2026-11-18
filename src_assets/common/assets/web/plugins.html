@@ -266,7 +266,7 @@
               <a v-if="plugin.notice_url" :href="plugin.notice_url" target="_blank" rel="noopener noreferrer">{{ $t('plugins.notice_link') }}</a>
             </div>
 
-            <p class="mb-1">{{ plugin.description }}</p>
+            <p class="mb-1 plugin-description">{{ plugin.description }}</p>
             <p class="small text-muted mb-2" v-if="plugin.author || plugin.homepage">
               <span v-if="plugin.author">{{ plugin.author }}</span>
               <span v-if="plugin.author && plugin.homepage"> · </span>
@@ -325,7 +325,7 @@
             </div>
 
             <!-- Options -->
-            <div v-if="(plugin.active || !canTurnOff(plugin)) && plugin.options.length > 0 && drafts[plugin.id]" class="border-top pt-3 mt-2">
+            <div v-if="(plugin.active || !canTurnOff(plugin)) && plugin.options.length > 0 && drafts[plugin.id]" class="border-top pt-3 mt-2 plugin-options">
               <h6>{{ $t('plugins.options') }}</h6>
               <div class="form-text mb-2" v-if="overrideSummary(plugin)">{{ overrideSummary(plugin) }}</div>
               <div class="row g-3">

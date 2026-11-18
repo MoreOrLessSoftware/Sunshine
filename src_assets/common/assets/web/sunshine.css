@@ -1515,6 +1515,17 @@ p {
     color: var(--color-info);
 }
 
+/* Plugin descriptions may use blank lines to split paragraphs; a little tighter than body text. */
+.plugin-description {
+    white-space: pre-line;
+    line-height: 1.35;
+}
+
+/* The help text under each plugin option, as tight as the description. */
+.plugin-options .form-text {
+    line-height: 1.35;
+}
+
 /* On the highlighted row, outline the dot so it stays visible against the primary background. */
 .config-nav-list .nav-link.active .plugin-status {
     box-shadow: 0 0 0 2px var(--color-on-primary);

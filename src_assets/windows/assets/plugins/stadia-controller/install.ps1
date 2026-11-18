@@ -71,7 +71,7 @@ switch ("$env:SUNSHINE_PLUGIN_OPT_GAMEPAD") {
         $inf = Get-ChildItem (Join-Path $env:windir 'INF') -Filter 'oem*.inf' -ErrorAction SilentlyContinue |
             Where-Object { Select-String -Path $_.FullName -Pattern 'SunshineXgpad\' -SimpleMatch -Quiet }
         if (-not $inf) {
-            Write-Output "Warning: the xgpad driver was not found. Install Sunshine's Xbox Series Controller Driver component for the virtual controller."
+            Write-Output "Warning: the xgpad driver was not found. Install Sunshine's Virtual Controllers plugin for the virtual controller."
         }
     }
 }

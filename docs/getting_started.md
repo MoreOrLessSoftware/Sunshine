@@ -594,7 +594,7 @@ Input keyboard and mouse. Activate, check and move the license in **Virtual HID 
 **Virtual HID Driver** plugin, which Sunshine installs by default, shows the installed driver version and the latest
 release on the **Plugins** page, and warns on the Web UI home page when the driver needs an update.
 
-Sunshine also includes the **Xbox Series Controller Driver** plugin. Installing it from the **Plugins** page installs the
+Sunshine also includes the **Virtual Controllers** plugin. Installing it from the **Plugins** page installs the
 Sunshine Gamepad Driver (xgpad), which emulates PlayStation controllers, and controllers with motion sensors or a
 touchpad, as DualSense controllers with motion sensors, touchpad, lightbar and adaptive triggers, and every other
 controller as an Xbox Series X|S controller with the Guide and Share buttons and impulse triggers; uninstalling the plugin
