@@ -1,9 +1,15 @@
-# xgpad: virtual Xbox Series X|S controller driver
+# xgpad: virtual Xbox Series X|S and DualSense controller driver
 
-A UMDF2 HID minidriver that presents an Xbox Series X|S controller (Bluetooth LE report layout,
-`045E:0B13`) underneath the inbox `xinputhid` filter. XInput, Windows.Gaming.Input and GameInput see a real
-Series controller, including Guide, Share (capture) and impulse trigger rumble. No kernel-mode code and no
-Microsoft signature are involved.
+A UMDF2 HID minidriver with two profiles, chosen per device:
+
+* **Xbox Series X|S** (Bluetooth LE report layout, `045E:0B13`) underneath the inbox `xinputhid` filter. XInput,
+  Windows.Gaming.Input and GameInput see a real Series controller, including Guide, Share (capture) and impulse
+  trigger rumble.
+* **DualSense** (USB report layout, `054C:0CE6`). SDL, Steam Input and games with DualSense support see a DualSense
+  with motion sensors, touchpad, lightbar, player LEDs and adaptive triggers. The driver answers the calibration,
+  pairing and firmware feature reports hosts read at start.
+
+No kernel-mode code and no Microsoft signature are involved. `PLAN-dualsense.md` tracks the DualSense work.
 
 Sunshine creates one software device per client controller (`gamepad_driver = xgpad`) and exchanges HID
 reports with the driver through shared memory (`xgpad_shared.h`).
@@ -12,7 +18,7 @@ reports with the driver through shared memory (`xgpad_shared.h`).
 
 | Path | Purpose |
 |---|---|
-| `driver/xgpad.c`, `driver/xgpad.inf` | UMDF2 driver and INF (stack: xinputhid → mshidumdf → WUDFRd → SWD) |
+| `driver/xgpad.c`, `driver/xgpad.inf` | UMDF2 driver and INF (Xbox: xinputhid → mshidumdf → WUDFRd → SWD; DualSense: mshidumdf → WUDFRd → SWD) |
 | `xgpad_shared.h` | Shared-memory contract with Sunshine (`src/platform/windows/xgpad.cpp`) |
 | `build.ps1` | Builds and signs the package with MSVC and the NuGet WDK (cached in `.wdk/`) |
 | `src_assets/windows/assets/plugins/xgpad/` | The xgpad plugin: installing it installs the driver, uninstalling it removes the driver (`xgpad-driver.ps1`) |
@@ -25,7 +31,8 @@ reports with the driver through shared memory (`xgpad_shared.h`).
 ```powershell
 .\build.ps1                    # signs with a reusable test certificate in CurrentUser\My
 .\install-test.ps1             # elevated: trust the test certificate + pnputil /add-driver
-.\out\xgpctl.exe 2 60          # elevated: create two virtual pads and play a test pattern
+.\out\xgpctl.exe 2 60          # elevated: create two virtual Xbox pads and play a test pattern
+.\out\xgpctl.exe 1 60 ds5      # elevated: create a virtual DualSense (buttons, gyro sweep, touch drag)
 .\install-test.ps1 -Uninstall  # elevated: remove devices, driver package and certificate
 ```
 

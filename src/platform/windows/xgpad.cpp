@@ -100,11 +100,17 @@ namespace platf::xgpad {
     };
 
     constexpr ULONG devprop_type_string = 0x12;  ///< DEVPROP_TYPE_STRING
+    constexpr ULONG devprop_type_uint32 = 0x07;  ///< DEVPROP_TYPE_UINT32
 
     /**
      * @brief Custom property carrying the per-device object name token to the driver.
      */
     constexpr DEVPROPKEY token_propkey = {XGPAD_TOKEN_PROPKEY_GUID, XGPAD_TOKEN_PROPKEY_PID};
+
+    /**
+     * @brief Custom property carrying the pad's profile (XGPAD_PROFILE_*) to the driver.
+     */
+    constexpr DEVPROPKEY profile_propkey = {XGPAD_TOKEN_PROPKEY_GUID, XGPAD_PROFILE_PROPKEY_PID};
 
     /**
      * @brief HID device class GUID {745a17a0-74d3-11d0-b6fe-00a0c90f57da}.
@@ -114,7 +120,7 @@ namespace platf::xgpad {
     /**
      * @brief Hardware ID the xgpad INF matches (BLE-style tail, see drivers/xgpad/driver/xgpad.inf).
      */
-    constexpr wchar_t hardware_ids[] = L"SunshineXgpad\\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02045e_PID&0b13\0";
+    constexpr wchar_t hardware_ids[] = XGPAD_HARDWARE_IDS;
 
     /**
      * @brief Prefix shared by all hardware IDs in the xgpad INF.
@@ -262,6 +268,7 @@ namespace platf::xgpad {
     rumble_state_t sent {};  ///< Last rumble state sent to the client.
     thread_pool_util::ThreadPool::task_id_t rumble_stop_task = nullptr;  ///< Pending stop for a finite-duration rumble.
     std::uint32_t rumble_generation = 0;  ///< Incremented per output report; stale stop tasks are ignored.
+    long output_consumed = 0;  ///< Output reports already read from the shared ring.
 
     /**
      * @brief Release all handles; the device must already be closed.
@@ -382,20 +389,26 @@ namespace platf::xgpad {
     }
 
     /**
-     * @brief Read a pad's latest output report and send changed rumble to the client.
+     * @brief Apply a pad's new output reports and send changed rumble to the client.
      * @param pad Pad whose output event fired; the caller holds the lock.
      */
     void forward_rumble(pad_t &pad) {
-      XGPAD_OUTPUT_REPORT report;
-      long seq;
-      do {
-        seq = pad.shared->outputSeq;
-        MemoryBarrier();
-        std::memcpy(&report, const_cast<const XGPAD_OUTPUT_REPORT *>(&pad.shared->output), sizeof(report));
-        MemoryBarrier();
-      } while ((seq & 1) || seq != pad.shared->outputSeq);
-
-      pad.rumble = apply_output_report(report, pad.rumble);
+      long lost = 0;
+      bool any = false;
+      XGPAD_OUTPUT_REPORT report {};
+      for (const auto &entry : read_output_reports(*pad.shared, pad.output_consumed, &lost)) {
+        if (XGPAD_OUTPUT_REPORT rumble; xbox_output_report(entry, rumble)) {
+          pad.rumble = apply_output_report(rumble, pad.rumble);
+          report = rumble;
+          any = true;
+        }
+      }
+      if (lost > 0) {
+        BOOST_LOG(debug) << "xgpad: pad "sv << pad.index << " missed "sv << lost << " output reports"sv;
+      }
+      if (!any) {
+        return;
+      }
 
       // Finite-duration effects (games writing HID rumble directly) must stop on their own
       ++pad.rumble_generation;
@@ -478,14 +491,10 @@ namespace platf::xgpad {
      * @param report Input report payload.
      */
     void write_input(pad_t &pad, const XGPAD_INPUT_REPORT &report) {
-      XGPAD_SHARED *shared = pad.shared;
-      const long count = shared->inputCount + 1;  // single writer (the input thread)
-      std::memcpy(const_cast<XGPAD_INPUT_REPORT *>(&shared->inputRing[(count - 1) % XGPAD_INPUT_RING_SIZE]), &report, sizeof(report));
       LARGE_INTEGER now;
       QueryPerformanceCounter(&now);
-      shared->inputQpc = now.QuadPart;
-      MemoryBarrier();
-      InterlockedExchange(&shared->inputCount, count);  // publish
+      pad.shared->inputQpc = now.QuadPart;
+      publish_input_report(*pad.shared, report);  // single writer (the input thread)
       SetEvent(pad.input_event);
     }
 
@@ -549,6 +558,7 @@ namespace platf::xgpad {
       std::memset(pad.shared, 0, sizeof(*pad.shared));
       pad.shared->magic = XGPAD_SHARED_MAGIC;
       pad.shared->version = XGPAD_SHARED_VERSION;  // the driver starts from a neutral state on its own
+      pad.shared->profile = XGPAD_PROFILE_XBOX_SERIES;
       return true;
     }
 
@@ -568,19 +578,24 @@ namespace platf::xgpad {
       info.CapabilityFlags = sw_cap_removable | sw_cap_silent_install | sw_cap_driver_required;
       info.pszDeviceDescription = L"Sunshine Virtual Xbox Series Controller";
 
-      // Hand the object name token to the driver.
-      devproperty_t token_property {};
-      token_property.CompKey.Key = token_propkey;
-      token_property.Type = devprop_type_string;
-      token_property.BufferSize = static_cast<ULONG>((pad.token.size() + 1) * sizeof(wchar_t));
-      token_property.Buffer = const_cast<wchar_t *>(pad.token.c_str());
+      // Hand the object name token and the profile to the driver.
+      std::array<devproperty_t, 2> properties {};
+      properties[0].CompKey.Key = token_propkey;
+      properties[0].Type = devprop_type_string;
+      properties[0].BufferSize = static_cast<ULONG>((pad.token.size() + 1) * sizeof(wchar_t));
+      properties[0].Buffer = const_cast<wchar_t *>(pad.token.c_str());
+      ULONG profile = XGPAD_PROFILE_XBOX_SERIES;
+      properties[1].CompKey.Key = profile_propkey;
+      properties[1].Type = devprop_type_uint32;
+      properties[1].BufferSize = sizeof(profile);
+      properties[1].Buffer = &profile;
 
       HRESULT result = E_FAIL;
       for (int attempt = 0; attempt < create_retries; ++attempt) {
         ResetEvent(pad.created_event);
         pad.create_result = E_PENDING;
         pad.device = nullptr;
-        result = api.create(XGPAD_SWD_ENUMERATOR, L"HTREE\\ROOT\\0", &info, 1, &token_property, on_device_created, &pad, &pad.device);
+        result = api.create(XGPAD_SWD_ENUMERATOR, L"HTREE\\ROOT\\0", &info, static_cast<ULONG>(properties.size()), properties.data(), on_device_created, &pad, &pad.device);
         if (SUCCEEDED(result)) {
           if (WaitForSingleObject(pad.created_event, static_cast<DWORD>(std::chrono::milliseconds(create_timeout).count())) != WAIT_OBJECT_0) {
             result = HRESULT_FROM_WIN32(ERROR_TIMEOUT);

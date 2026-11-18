@@ -1,8 +1,10 @@
 ;
-; xgpad.inf - Sunshine virtual Xbox Series X|S controller (UMDF2 HID minidriver)
+; xgpad.inf - Sunshine virtual controllers (UMDF2 HID minidriver)
 ;
-; Mirrors the stack Windows builds for a Bluetooth LE Xbox Series controller:
+; Xbox Series X|S profile, mirroring the stack Windows builds for a Bluetooth LE Xbox Series controller:
 ;   xinputhid (upper/bus filter) -> mshidumdf (function) -> WUDFRd (lower filter) -> SWD
+; DualSense profile (no XInput filter):
+;   mshidumdf (function) -> WUDFRd (lower filter) -> SWD
 ;
 
 [Version]
@@ -11,7 +13,7 @@ Class       = HIDClass
 ClassGuid   = {745a17a0-74d3-11d0-b6fe-00a0c90f57da}
 Provider    = %ProviderName%
 CatalogFile = xgpad.cat
-DriverVer   = 10/31/2026,0.3.0.0
+DriverVer   = 11/18/2026,0.4.0.0
 PnpLockdown = 1
 
 [Manufacturer]
@@ -22,6 +24,8 @@ PnpLockdown = 1
 %DeviceDesc% = Xgpad, SunshineXgpad\{00001812-0000-1000-8000-00805f9b34fb}_Dev_VID&02045e_PID&0b13
 ; Variant B: USB-style ID tail -> HID child gets HID\VID_045E&PID_0B13
 %DeviceDesc% = Xgpad, SunshineXgpad\VID_045E&PID_0B13
+; DualSense profile -> HID child gets HID\VID_054C&PID_0CE6&REV_0100
+%DsDeviceDesc% = XgpadDs, SunshineXgpad\VID_054C&PID_0CE6
 
 [SourceDisksNames]
 1 = %DiskName%
@@ -80,6 +84,19 @@ ErrorControl   = 1
 ServiceBinary  = %12%\xinputhid.sys
 LoadOrderGroup = Base
 
+[XgpadDs.NT]
+CopyFiles = UMDriverCopy
+
+[XgpadDs.NT.HW]
+AddReg = XgpadDs_HW_AddReg
+
+[XgpadDs_HW_AddReg]
+HKR,,"LowerFilters",0x00010008,"WUDFRd"
+
+[XgpadDs.NT.Services]
+AddService = WUDFRd,0x000001f8,WUDFRD_ServiceInstall
+AddService = mshidumdf,0x000001fa,MsHidUmdf_ServiceInstall
+
 [Xgpad.NT.Wdf]
 UmdfService                 = xgpad,Xgpad_UmdfInstall
 UmdfServiceOrder            = xgpad
@@ -91,6 +108,16 @@ UmdfHostPriority            = PriorityHigh
 ; Own WUDFHost process: a fault in xgpad can't take down other UMDF drivers (e.g. Bluetooth HID) and vice versa
 UmdfHostProcessSharing      = ProcessSharingDisabled
 
+[XgpadDs.NT.Wdf]
+UmdfService                 = xgpad,Xgpad_UmdfInstall
+UmdfServiceOrder            = xgpad
+UmdfKernelModeClientPolicy  = AllowKernelModeClients
+UmdfFileObjectPolicy        = AllowNullAndUnknownFileObjects
+UmdfMethodNeitherAction     = Copy
+UmdfFsContextUsePolicy      = CanUseFsContext2
+UmdfHostPriority            = PriorityHigh
+UmdfHostProcessSharing      = ProcessSharingDisabled
+
 [Xgpad_UmdfInstall]
 UmdfLibraryVersion = 2.15.0
 ServiceBinary      = %13%\xgpad.dll
@@ -100,6 +127,7 @@ ProviderName         = "Sunshine"
 ManufacturerName     = "Sunshine"
 DiskName             = "Sunshine Virtual Gamepad Installation Disk"
 DeviceDesc           = "Sunshine Virtual Xbox Series Controller"
+DsDeviceDesc         = "Sunshine Virtual DualSense Controller"
 WudfRdDisplayName    = "Windows Driver Foundation - User-mode Driver Framework Reflector"
 MsHidUmdfDisplayName = "MS HID UMDF Pass-Through Driver"
 XInputHidDisplayName = "XINPUT HID Filter Driver"

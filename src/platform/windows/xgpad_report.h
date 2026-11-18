@@ -7,11 +7,15 @@
 #pragma once
 
 // standard includes
+#include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <format>
+#include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // local includes
 #include "drivers/xgpad/xgpad_shared.h"
@@ -272,6 +276,98 @@ namespace platf::xgpad {
       state.right_trigger = motor_from_percent(report.rightTrigger);
     }
     return state;
+  }
+
+  /**
+   * @brief Append an input report to a pad's shared input ring and publish it.
+   *
+   * The ring has a single writer (Sunshine's input thread). The driver reads entries in order and drops any whose
+   * ID or length does not match the pad's profile.
+   *
+   * @param shared Shared section of the pad.
+   * @param id Report ID.
+   * @param payload Report payload, report ID not included; at most XGPAD_MAX_REPORT bytes are used.
+   * @return Number the report was published as (the new inputCount).
+   */
+  inline long publish_input_report(XGPAD_SHARED &shared, const std::uint8_t id, const std::span<const std::uint8_t> payload) {
+    const long count = shared.inputCount + 1;
+    auto &slot = shared.inputRing[(count - 1) % XGPAD_INPUT_RING_SIZE];
+    const auto length = payload.size() < XGPAD_MAX_REPORT ? payload.size() : std::size_t {XGPAD_MAX_REPORT};
+    slot.id = id;
+    slot.length = static_cast<std::uint8_t>(length);
+    std::memcpy(slot.data, payload.data(), length);
+    std::atomic_thread_fence(std::memory_order_release);
+    shared.inputCount = count;  // publish
+    return count;
+  }
+
+  /**
+   * @brief Append an Xbox Series input report to a pad's shared input ring and publish it.
+   * @param shared Shared section of the pad.
+   * @param report Input report payload.
+   * @return Number the report was published as (the new inputCount).
+   */
+  inline long publish_input_report(XGPAD_SHARED &shared, const XGPAD_INPUT_REPORT &report) {
+    return publish_input_report(shared, XGPAD_INPUT_REPORT_ID, std::span {reinterpret_cast<const std::uint8_t *>(&report), sizeof(report)});
+  }
+
+  /**
+   * @brief Copy the output reports the driver published since the last call, oldest first.
+   *
+   * Reports the driver overwrote before they could be read (more than XGPAD_OUTPUT_RING_SIZE behind), or that were
+   * overwritten while being copied, are skipped and counted as lost.
+   *
+   * @param shared Shared section of the pad.
+   * @param consumed Number of output reports already read; updated to the number now read.
+   * @param lost Incremented by the number of reports skipped, if not null.
+   * @return The new reports, oldest first.
+   */
+  inline std::vector<XGPAD_REPORT> read_output_reports(const XGPAD_SHARED &shared, long &consumed, long *lost = nullptr) {
+    std::vector<XGPAD_REPORT> reports;
+    const long available = shared.outputCount;
+    std::atomic_thread_fence(std::memory_order_acquire);
+
+    long next = consumed;
+    if (available < next) {
+      next = available;  // the counter restarted
+    }
+    if (static_cast<unsigned long>(available - next) > XGPAD_OUTPUT_RING_SIZE) {
+      if (lost) {
+        *lost += available - next - static_cast<long>(XGPAD_OUTPUT_RING_SIZE);
+      }
+      next = available - static_cast<long>(XGPAD_OUTPUT_RING_SIZE);
+    }
+
+    while (next < available) {
+      const long n = next + 1;
+      XGPAD_REPORT report;
+      std::memcpy(&report, const_cast<const XGPAD_REPORT *>(&shared.outputRing[(n - 1) % XGPAD_OUTPUT_RING_SIZE]), sizeof(report));
+      std::atomic_thread_fence(std::memory_order_acquire);
+      if (static_cast<unsigned long>(shared.outputCount - n) >= XGPAD_OUTPUT_RING_SIZE) {
+        if (lost) {
+          ++*lost;  // the driver lapped this slot while it was copied
+        }
+      } else {
+        reports.push_back(report);
+      }
+      next = n;
+    }
+    consumed = next;
+    return reports;
+  }
+
+  /**
+   * @brief Extract an Xbox Series rumble report from a ring entry.
+   * @param report Output ring entry.
+   * @param out Receives the rumble payload.
+   * @return True when the entry is an Xbox rumble report (ID 0x03, at least 8 bytes).
+   */
+  inline bool xbox_output_report(const XGPAD_REPORT &report, XGPAD_OUTPUT_REPORT &out) {
+    if (report.id != XGPAD_OUTPUT_REPORT_ID || report.length < sizeof(XGPAD_OUTPUT_REPORT)) {
+      return false;
+    }
+    std::memcpy(&out, report.data, sizeof(out));
+    return true;
   }
 
   /**

@@ -8,6 +8,10 @@
 
 #ifdef _WIN32
   // standard includes
+  #include <cstddef>
+  #include <cstring>
+  #include <memory>
+  #include <vector>
 
   // platform includes
   #include <Windows.h>
@@ -180,6 +184,145 @@ TEST_F(XgpadReportTest, OutputReportKeepsDisabledMotors) {
 
   report.enable = 0;
   EXPECT_EQ(apply_output_report(report, previous), previous);
+}
+
+namespace {
+  /**
+   * @brief Publish an output report the way the driver does.
+   * @param shared Shared section.
+   * @param id Report ID.
+   * @param first First payload byte, to tell reports apart.
+   * @param length Payload length.
+   */
+  void driver_publish_output(XGPAD_SHARED &shared, const std::uint8_t id, const std::uint8_t first, const std::uint8_t length = 8) {
+    const long n = shared.outputCount + 1;
+    auto &slot = shared.outputRing[(n - 1) % XGPAD_OUTPUT_RING_SIZE];
+    slot.id = id;
+    slot.length = length;
+    std::memset(slot.data, 0, sizeof(slot.data));
+    slot.data[0] = first;
+    shared.outputCount = n;
+  }
+}  // namespace
+
+TEST_F(XgpadReportTest, PublishInputReportFillsRingInOrder) {
+  auto shared = std::make_unique<XGPAD_SHARED>();
+
+  XGPAD_INPUT_REPORT report = make_input_report(gamepad_state_t {});
+  report.buttons = XGPAD_BTN_A;
+  EXPECT_EQ(publish_input_report(*shared, report), 1);
+  EXPECT_EQ(shared->inputCount, 1);
+  EXPECT_EQ(shared->inputRing[0].id, XGPAD_INPUT_REPORT_ID);
+  EXPECT_EQ(shared->inputRing[0].length, sizeof(XGPAD_INPUT_REPORT));
+  EXPECT_EQ(std::memcmp(shared->inputRing[0].data, &report, sizeof(report)), 0);
+
+  // The ring wraps: report n lives at (n - 1) % size
+  for (long n = 2; n <= static_cast<long>(XGPAD_INPUT_RING_SIZE) + 1; ++n) {
+    const std::uint8_t payload[] = {static_cast<std::uint8_t>(n)};
+    EXPECT_EQ(publish_input_report(*shared, 0x07, payload), n);
+  }
+  EXPECT_EQ(shared->inputRing[0].id, 0x07);
+  EXPECT_EQ(shared->inputRing[0].length, 1);
+  EXPECT_EQ(shared->inputRing[0].data[0], XGPAD_INPUT_RING_SIZE + 1);
+}
+
+TEST_F(XgpadReportTest, PublishInputReportTruncatesOversizedPayloads) {
+  auto shared = std::make_unique<XGPAD_SHARED>();
+  std::vector<std::uint8_t> payload(XGPAD_MAX_REPORT + 10, 0xAB);
+
+  publish_input_report(*shared, XGPAD_DS_INPUT_REPORT_ID, payload);
+  EXPECT_EQ(shared->inputRing[0].length, XGPAD_MAX_REPORT);
+  EXPECT_EQ(shared->inputRing[0].data[XGPAD_MAX_REPORT - 1], 0xAB);
+}
+
+TEST_F(XgpadReportTest, ReadOutputReportsReturnsNewReportsOnce) {
+  auto shared = std::make_unique<XGPAD_SHARED>();
+  long consumed = 0;
+  long lost = 0;
+
+  EXPECT_TRUE(read_output_reports(*shared, consumed, &lost).empty());
+
+  driver_publish_output(*shared, XGPAD_OUTPUT_REPORT_ID, 1);
+  driver_publish_output(*shared, XGPAD_DS_OUTPUT_REPORT_ID, 2, 47);
+  auto reports = read_output_reports(*shared, consumed, &lost);
+  ASSERT_EQ(reports.size(), 2u);
+  EXPECT_EQ(reports[0].id, XGPAD_OUTPUT_REPORT_ID);
+  EXPECT_EQ(reports[0].data[0], 1);
+  EXPECT_EQ(reports[1].id, XGPAD_DS_OUTPUT_REPORT_ID);
+  EXPECT_EQ(reports[1].length, 47);
+  EXPECT_EQ(consumed, 2);
+  EXPECT_EQ(lost, 0);
+
+  EXPECT_TRUE(read_output_reports(*shared, consumed).empty());
+}
+
+TEST_F(XgpadReportTest, ReadOutputReportsSkipsOverwrittenReports) {
+  auto shared = std::make_unique<XGPAD_SHARED>();
+  long consumed = 0;
+  long lost = 0;
+
+  const long total = static_cast<long>(XGPAD_OUTPUT_RING_SIZE) + 3;
+  for (long n = 1; n <= total; ++n) {
+    driver_publish_output(*shared, XGPAD_OUTPUT_REPORT_ID, static_cast<std::uint8_t>(n));
+  }
+  const auto reports = read_output_reports(*shared, consumed, &lost);
+  ASSERT_EQ(reports.size(), XGPAD_OUTPUT_RING_SIZE);
+  EXPECT_EQ(reports.front().data[0], 4);  // reports 1..3 were overwritten
+  EXPECT_EQ(reports.back().data[0], total);
+  EXPECT_EQ(lost, 3);
+  EXPECT_EQ(consumed, total);
+
+  // Without a counter for lost reports the result is the same
+  long consumed_again = 0;
+  EXPECT_EQ(read_output_reports(*shared, consumed_again).size(), XGPAD_OUTPUT_RING_SIZE);
+}
+
+TEST_F(XgpadReportTest, ReadOutputReportsHandlesARestartedCounter) {
+  auto shared = std::make_unique<XGPAD_SHARED>();
+  long consumed = 5;  // read from an earlier section
+
+  driver_publish_output(*shared, XGPAD_OUTPUT_REPORT_ID, 9);
+  EXPECT_TRUE(read_output_reports(*shared, consumed).empty());
+  EXPECT_EQ(consumed, 1);
+
+  driver_publish_output(*shared, XGPAD_OUTPUT_REPORT_ID, 10);
+  const auto reports = read_output_reports(*shared, consumed);
+  ASSERT_EQ(reports.size(), 1u);
+  EXPECT_EQ(reports[0].data[0], 10);
+}
+
+TEST_F(XgpadReportTest, XboxOutputReportFromRingEntry) {
+  XGPAD_REPORT entry {};
+  entry.id = XGPAD_OUTPUT_REPORT_ID;
+  entry.length = sizeof(XGPAD_OUTPUT_REPORT);
+  entry.data[0] = XGPAD_MOTOR_LEFT;
+  entry.data[3] = 100;
+
+  XGPAD_OUTPUT_REPORT out {};
+  ASSERT_TRUE(xbox_output_report(entry, out));
+  EXPECT_EQ(out.enable, XGPAD_MOTOR_LEFT);
+  EXPECT_EQ(out.leftMotor, 100);
+
+  entry.length = sizeof(XGPAD_OUTPUT_REPORT) - 1;
+  EXPECT_FALSE(xbox_output_report(entry, out));
+
+  entry.length = sizeof(XGPAD_OUTPUT_REPORT);
+  entry.id = XGPAD_DS_OUTPUT_REPORT_ID;
+  EXPECT_FALSE(xbox_output_report(entry, out));
+}
+
+TEST_F(XgpadReportTest, SharedLayout) {
+  EXPECT_EQ(sizeof(XGPAD_DS_INPUT_REPORT), 63u);
+  EXPECT_EQ(sizeof(XGPAD_DS_OUTPUT_REPORT), 47u);
+  EXPECT_EQ(offsetof(XGPAD_DS_INPUT_REPORT, gyro), 15u);
+  EXPECT_EQ(offsetof(XGPAD_DS_INPUT_REPORT, sensorTimestamp), 27u);
+  EXPECT_EQ(offsetof(XGPAD_DS_INPUT_REPORT, points), 32u);
+  EXPECT_EQ(offsetof(XGPAD_DS_INPUT_REPORT, status), 52u);
+  EXPECT_EQ(offsetof(XGPAD_DS_OUTPUT_REPORT, rightTriggerEffect), 10u);
+  EXPECT_EQ(offsetof(XGPAD_DS_OUTPUT_REPORT, leftTriggerEffect), 21u);
+  EXPECT_EQ(offsetof(XGPAD_DS_OUTPUT_REPORT, validFlag2), 38u);
+  EXPECT_EQ(offsetof(XGPAD_DS_OUTPUT_REPORT, playerLeds), 43u);
+  EXPECT_EQ(offsetof(XGPAD_DS_OUTPUT_REPORT, lightbarRed), 44u);
 }
 
 TEST_F(XgpadReportTest, PolicyUsesXgpad) {

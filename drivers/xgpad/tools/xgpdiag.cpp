@@ -41,17 +41,26 @@ int main(int argc, char **argv) {
 
   LARGE_INTEGER f;
   QueryPerformanceFrequency(&f);
-  printf("magic=%08x version=%u\n", s->magic, s->version);
+  printf("magic=%08x version=%u profile=%u\n", s->magic, s->version, s->profile);
   for (int i = 0; i < seconds * 2; i++) {
     LARGE_INTEGER now;
     QueryPerformanceCounter(&now);
     double sinceInput = (now.QuadPart - s->inputQpc) * 1000.0 / f.QuadPart;
     double sinceDelivered = (now.QuadPart - s->deliveredQpc) * 1000.0 / f.QuadPart;
     const long count = s->inputCount;
-    const unsigned btn = count > 0 ? s->inputRing[(count - 1) % XGPAD_INPUT_RING_SIZE].buttons : 0;
-    printf("inputCount=%ld deliveredSeq=%ld readsCompleted=%ld readRequests=%ld wakeups=%ld overruns=%ld outputs=%ld btn=%04x | last write %.0f ms ago, last delivery %.0f ms ago\n",
-           count, s->deliveredSeq, s->readsCompleted, s->readRequests, s->workerWakeups, s->inputOverruns, s->outputsReceived, btn, sinceInput,
-           sinceDelivered);
+    unsigned btn = 0;
+    if (count > 0) {
+      const XGPAD_REPORT &last = s->inputRing[(count - 1) % XGPAD_INPUT_RING_SIZE];
+      if (s->profile == XGPAD_PROFILE_DUALSENSE) {
+        const auto *ds = (const XGPAD_DS_INPUT_REPORT *) last.data;
+        btn = ds->buttons[0] | (ds->buttons[1] << 8) | (ds->buttons[2] << 16);
+      } else {
+        btn = ((const XGPAD_INPUT_REPORT *) last.data)->buttons;
+      }
+    }
+    printf("inputCount=%ld deliveredSeq=%ld readsCompleted=%ld readRequests=%ld wakeups=%ld overruns=%ld rejected=%ld outputs=%ld/%ld features=%ld btn=%06x | last write %.0f ms ago, last delivery %.0f ms ago\n",
+           count, s->deliveredSeq, s->readsCompleted, s->readRequests, s->workerWakeups, s->inputOverruns, s->inputRejected, s->outputsReceived,
+           s->outputCount, s->featureRequests, btn, sinceInput, sinceDelivered);
     Sleep(500);
   }
   return 0;
