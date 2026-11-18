@@ -27,6 +27,7 @@
 
 // local includes
 #include "misc.h"
+#include "playstation_report.h"
 #include "src/config.h"
 #include "src/globals.h"
 #include "src/logging.h"
@@ -105,9 +106,7 @@ namespace platf {
       DS4_REPORT_EX ds4;  ///< Current DualShock 4 controller report.
     } report;  ///< Current HID report for the virtual controller..
 
-    // Map from pointer ID to pointer index
-    std::map<uint32_t, uint8_t> pointer_id_map;  ///< Pointer ID map.
-    uint8_t available_pointers;  ///< Available pointers.
+    playstation::touch_slots_t touch_slots;  ///< Touchpad slot of each active touch pointer.
 
     uint8_t client_relative_index;  ///< Client relative index.
 
@@ -117,19 +116,6 @@ namespace platf {
     gamepad_feedback_msg_t last_rumble;  ///< Last rumble.
     gamepad_feedback_msg_t last_rgb_led;  ///< Last RGB led.
   };
-
-  constexpr float EARTH_G = 9.80665f;  ///< Meters per second squared represented by one gravity unit.
-
-/**
- * @def MPS2_TO_DS4_ACCEL(x)
- * @brief Macro for MPS2 TO DS4 ACCEL.
- */
-#define MPS2_TO_DS4_ACCEL(x) (int32_t) (((x) / EARTH_G) * 8192)
-/**
- * @def DPS_TO_DS4_GYRO(x)
- * @brief Macro for DPS TO DS4 GYRO.
- */
-#define DPS_TO_DS4_GYRO(x) (int32_t) ((x) * (1024 / 64))
 
 /**
  * @def APPLY_CALIBRATION(val, bias, scale)
@@ -189,55 +175,25 @@ namespace platf {
   static void ds4_update_motion(gamepad_context_t &gamepad, uint8_t motion_type, float x, float y, float z) {
     auto &report = gamepad.report.ds4.Report;
 
-    // Use int32 to process this data, so we can clamp if needed.
-    int32_t intX;
-    int32_t intY;
-    int32_t intZ;
-
     switch (motion_type) {
       case LI_MOTION_TYPE_ACCEL:
-        // Convert to the DS4's accelerometer scale
-        intX = MPS2_TO_DS4_ACCEL(x);
-        intY = MPS2_TO_DS4_ACCEL(y);
-        intZ = MPS2_TO_DS4_ACCEL(z);
-
-        // Apply the inverse of ViGEmBus's calibration data
-        intX = APPLY_CALIBRATION(intX, -297, 1.010796f);
-        intY = APPLY_CALIBRATION(intY, -42, 1.014614f);
-        intZ = APPLY_CALIBRATION(intZ, -512, 1.024768f);
-        break;
+        {
+          // Convert to the DS4's accelerometer scale, then apply the inverse of ViGEmBus's calibration data
+          const auto counts = playstation::accel_counts(x, y, z);
+          report.wAccelX = playstation::clamp_i16(APPLY_CALIBRATION(counts.x, -297, 1.010796f));
+          report.wAccelY = playstation::clamp_i16(APPLY_CALIBRATION(counts.y, -42, 1.014614f));
+          report.wAccelZ = playstation::clamp_i16(APPLY_CALIBRATION(counts.z, -512, 1.024768f));
+          break;
+        }
       case LI_MOTION_TYPE_GYRO:
-        // Convert to the DS4's gyro scale
-        intX = DPS_TO_DS4_GYRO(x);
-        intY = DPS_TO_DS4_GYRO(y);
-        intZ = DPS_TO_DS4_GYRO(z);
-
-        // Apply the inverse of ViGEmBus's calibration data
-        intX = APPLY_CALIBRATION(intX, 1, 0.977596f);
-        intY = APPLY_CALIBRATION(intY, 0, 0.972370f);
-        intZ = APPLY_CALIBRATION(intZ, 0, 0.971550f);
-        break;
-      default:
-        return;
-    }
-
-    // Clamp the values to the range of the data type
-    intX = std::clamp(intX, INT16_MIN, INT16_MAX);
-    intY = std::clamp(intY, INT16_MIN, INT16_MAX);
-    intZ = std::clamp(intZ, INT16_MIN, INT16_MAX);
-
-    // Populate the report
-    switch (motion_type) {
-      case LI_MOTION_TYPE_ACCEL:
-        report.wAccelX = (int16_t) intX;
-        report.wAccelY = (int16_t) intY;
-        report.wAccelZ = (int16_t) intZ;
-        break;
-      case LI_MOTION_TYPE_GYRO:
-        report.wGyroX = (int16_t) intX;
-        report.wGyroY = (int16_t) intY;
-        report.wGyroZ = (int16_t) intZ;
-        break;
+        {
+          // Convert to the DS4's gyro scale, then apply the inverse of ViGEmBus's calibration data
+          const auto counts = playstation::gyro_counts(x, y, z);
+          report.wGyroX = playstation::clamp_i16(APPLY_CALIBRATION(counts.x, 1, 0.977596f));
+          report.wGyroY = playstation::clamp_i16(APPLY_CALIBRATION(counts.y, 0, 0.972370f));
+          report.wGyroZ = playstation::clamp_i16(APPLY_CALIBRATION(counts.z, 0, 0.971550f));
+          break;
+        }
       default:
         return;
     }
@@ -307,15 +263,15 @@ namespace platf {
         gamepad.report.ds4 = ds4_report_init_ex;
 
         // Set initial accelerometer and gyro state
-        ds4_update_motion(gamepad, LI_MOTION_TYPE_ACCEL, 0.0f, EARTH_G, 0.0f);
+        ds4_update_motion(gamepad, LI_MOTION_TYPE_ACCEL, 0.0f, playstation::earth_g, 0.0f);
         ds4_update_motion(gamepad, LI_MOTION_TYPE_GYRO, 0.0f, 0.0f, 0.0f);
 
         // Request motion events from the client at 100 Hz
         feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(gamepad.client_relative_index, LI_MOTION_TYPE_ACCEL, 100));
         feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(gamepad.client_relative_index, LI_MOTION_TYPE_GYRO, 100));
 
-        // We support pointer index 0 and 1
-        gamepad.available_pointers = 0x3;
+        // Both touch point slots start free
+        gamepad.touch_slots.clear();
       }
 
       auto status = vigem_target_add(client.get(), gamepad.gp.get());
@@ -1122,60 +1078,36 @@ namespace platf {
 
     auto &report = gamepad.report.ds4.Report;
 
-    uint8_t pointerIndex;
+    uint8_t pointerIndex = 0;
     if (touch.eventType == LI_TOUCH_EVENT_DOWN) {
-      if (gamepad.available_pointers & 0x1) {
-        // Reserve pointer index 0 for this touch
-        gamepad.pointer_id_map[touch.pointerId] = pointerIndex = 0;
-        gamepad.available_pointers &= ~(1 << pointerIndex);
-
-        // Set pointer 0 down
-        report.sCurrentTouch.bIsUpTrackingNum1 &= ~0x80;
-        report.sCurrentTouch.bIsUpTrackingNum1++;
-      } else if (gamepad.available_pointers & 0x2) {
-        // Reserve pointer index 1 for this touch
-        gamepad.pointer_id_map[touch.pointerId] = pointerIndex = 1;
-        gamepad.available_pointers &= ~(1 << pointerIndex);
-
-        // Set pointer 1 down
-        report.sCurrentTouch.bIsUpTrackingNum2 &= ~0x80;
-        report.sCurrentTouch.bIsUpTrackingNum2++;
-      } else {
+      const auto slot = gamepad.touch_slots.down(touch.pointerId);
+      if (!slot) {
         BOOST_LOG(warning) << "No more free pointer indices! Did the client miss an touch up event?"sv;
         return;
       }
+      pointerIndex = *slot;
+
+      // Set the pointer down with a new tracking number
+      auto &tracking = pointerIndex == 0 ? report.sCurrentTouch.bIsUpTrackingNum1 : report.sCurrentTouch.bIsUpTrackingNum2;
+      tracking &= ~0x80;
+      tracking++;
     } else if (touch.eventType == LI_TOUCH_EVENT_CANCEL_ALL) {
-      // Raise both pointers
+      // Raise both pointers and free their slots
       report.sCurrentTouch.bIsUpTrackingNum1 |= 0x80;
       report.sCurrentTouch.bIsUpTrackingNum2 |= 0x80;
-
-      // Remove all pointer index mappings
-      gamepad.pointer_id_map.clear();
-
-      // All pointers are now available
-      gamepad.available_pointers = 0x3;
+      gamepad.touch_slots.clear();
     } else {
-      auto i = gamepad.pointer_id_map.find(touch.pointerId);
-      if (i == gamepad.pointer_id_map.end()) {
+      const auto slot = gamepad.touch_slots.find(touch.pointerId);
+      if (!slot) {
         BOOST_LOG(warning) << "Pointer ID not found! Did the client miss a touch down event?"sv;
         return;
       }
-
-      pointerIndex = (*i).second;
+      pointerIndex = *slot;
 
       if (touch.eventType == LI_TOUCH_EVENT_UP || touch.eventType == LI_TOUCH_EVENT_CANCEL) {
-        // Remove the pointer index mapping
-        gamepad.pointer_id_map.erase(i);
-
-        // Set pointer up
-        if (pointerIndex == 0) {
-          report.sCurrentTouch.bIsUpTrackingNum1 |= 0x80;
-        } else {
-          report.sCurrentTouch.bIsUpTrackingNum2 |= 0x80;
-        }
-
-        // Free the pointer index
-        gamepad.available_pointers |= (1 << pointerIndex);
+        // Set the pointer up and free its slot
+        gamepad.touch_slots.up(touch.pointerId);
+        (pointerIndex == 0 ? report.sCurrentTouch.bIsUpTrackingNum1 : report.sCurrentTouch.bIsUpTrackingNum2) |= 0x80;
       } else if (touch.eventType != LI_TOUCH_EVENT_MOVE) {
         BOOST_LOG(warning) << "Unsupported touch event for gamepad: "sv << (uint32_t) touch.eventType;
         return;
@@ -1183,20 +1115,14 @@ namespace platf {
     }
 
     // Touchpad is 1920x943 according to ViGEm
-    uint16_t x = touch.x * 1920;
-    uint16_t y = touch.y * 943;
-    uint8_t touchData[] = {
-      (uint8_t) (x & 0xFF),  // Low 8 bits of X
-      (uint8_t) ((x >> 8 & 0x0F) | (y & 0x0F) << 4),  // High 4 bits of X and low 4 bits of Y
-      (uint8_t) (y >> 4 & 0xFF)  // High 8 bits of Y
-    };
+    const auto touchData = playstation::pack_touch(playstation::touch_coordinate(touch.x, 1920), playstation::touch_coordinate(touch.y, 943));
 
     report.sCurrentTouch.bPacketCounter++;
     if (touch.eventType != LI_TOUCH_EVENT_CANCEL_ALL) {
       if (pointerIndex == 0) {
-        memcpy(report.sCurrentTouch.bTouchData1, touchData, sizeof(touchData));
+        memcpy(report.sCurrentTouch.bTouchData1, touchData.data(), touchData.size());
       } else {
-        memcpy(report.sCurrentTouch.bTouchData2, touchData, sizeof(touchData));
+        memcpy(report.sCurrentTouch.bTouchData2, touchData.data(), touchData.size());
       }
     }
 
