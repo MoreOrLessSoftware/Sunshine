@@ -238,7 +238,11 @@
                       <span class="badge bg-light text-dark border ms-1" v-if="!command.close_menu">{{ $t('client_commands.keeps_menu_open') }}</span>
                       <span class="badge bg-light text-dark border ms-1" v-if="isPluginCommandCustomized(command)">{{ $t('client_commands.customized') }}</span>
                     </div>
-                    <div class="command-summary text-muted">
+                    <div class="command-summary text-muted" v-if="command.action">
+                      <puzzle :size="14" class="icon"></puzzle>
+                      {{ $t('client_commands.plugin_action') }}
+                    </div>
+                    <div class="command-summary text-muted" v-else>
                       <square-terminal :size="14" class="icon" v-if="command.script"></square-terminal>
                       <keyboard :size="14" class="icon" v-else></keyboard>
                       {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}

@@ -2385,8 +2385,13 @@ TEST_F(PluginsTest, InvalidClientCommandsAreRejected) {
     {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","elevated":"no"}]})", "'elevated' must be a boolean"},
     {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","args":"x"}]})", "'args' must be an array of strings"},
     {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","args":[1]}]})", "'args' must be an array of strings"},
-    {R"({"id":"p","client_commands":[{"id":"a"}]})", "needs either a script or steps"},
-    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","steps":[[27]]}]})", "needs either a script or steps"},
+    {R"({"id":"p","client_commands":[{"id":"a"}]})", "needs exactly one of a script, steps or an action"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","steps":[[27]]}]})", "needs exactly one of a script, steps or an action"},
+    {R"({"id":"p","client_commands":[{"id":"a","script":"exists.ps1","action":"x.y"}]})", "needs exactly one of a script, steps or an action"},
+    {R"({"id":"p","client_commands":[{"id":"a","steps":[[27]],"action":"x.y"}]})", "needs exactly one of a script, steps or an action"},
+    {R"({"id":"p","client_commands":[{"id":"a","action":5}]})", "'action' must be a string"},
+    {R"({"id":"p","client_commands":[{"id":"a","action":""}]})", "invalid action ''"},
+    {R"({"id":"p","client_commands":[{"id":"a","action":"Bad.Name"}]})", "invalid action 'Bad.Name'"},
     {R"({"id":"p","client_commands":[{"id":"a","steps":[[0]]}]})", "key codes"},
     {R"({"id":"p","client_commands":[{"id":"a","script":"missing.ps1"}]})", "does not exist"},
     {R"({"id":"p","client_commands":[{"id":"a","label":5,"script":"exists.ps1"}]})", "'label' must be a string"},
@@ -2598,6 +2603,139 @@ TEST_F(PluginsTest, ActivePluginsOfferTheirClientCommands) {
   EXPECT_EQ(listed["client_commands"][0]["top_level"], true);
   EXPECT_EQ(listed["client_commands"][0]["script"], "toggle.ps1");
   EXPECT_EQ(listed["client_commands"][1]["steps"], json::parse("[[27]]"));
+}
+
+TEST_F(PluginsTest, ActionCommandsAreOnlyForBundledPlugins) {
+  const auto manifest = json::parse(R"({"id":"p","client_commands":[{"id":"pad","action":"test.switch","args":["dualsense"]}]})");
+
+  std::string error;
+  const auto bundled = plugins::parse_manifest(manifest, builtin_dir, true, error);
+  ASSERT_TRUE(bundled) << error;
+  ASSERT_EQ(bundled->client_commands.size(), 1);
+  EXPECT_EQ(bundled->client_commands[0].action, "test.switch");
+  EXPECT_EQ(bundled->client_commands[0].args, (std::vector<std::string> {"dualsense"}));
+  EXPECT_TRUE(bundled->client_commands[0].script.empty());
+
+  EXPECT_FALSE(plugins::parse_manifest(manifest, custom_dir, false, error));
+  EXPECT_TRUE(error.contains("only plugins that come with Sunshine can run an action")) << error;
+}
+
+TEST_F(PluginsTest, ActionCommandsAreOfferedAsActions) {
+  write_plugin(builtin_dir, "pad", {
+                                     {"id", "pad"},
+                                     {"name", "Pad"},
+                                     {"client_commands", json::parse(R"([
+                                       {"id": "xbox", "label": "Xbox", "action": "test.switch", "args": ["xbox"], "close_menu": false}
+                                     ])")},
+                                   });
+  write_text(state_file, R"({"plugins":{"pad":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto offered = plugins::offered_client_commands({});
+  ASSERT_EQ(offered.size(), 1);
+  ASSERT_EQ(offered[0].grouped.size(), 1);
+  const auto &command = offered[0].grouped[0];
+  EXPECT_EQ(command.id, "plugin:pad/xbox");
+  EXPECT_EQ(command.type, client_commands::type_e::action);
+  EXPECT_EQ(command.action, "test.switch");
+  EXPECT_EQ(command.args, (std::vector<std::string> {"xbox"}));
+  EXPECT_FALSE(command.close_menu);
+  EXPECT_TRUE(command.cmd.empty());
+  EXPECT_TRUE(command.env.empty());
+
+  const auto listed = find_plugin(plugins::list(), "pad");
+  EXPECT_EQ(listed["client_commands"][0]["action"], "test.switch");
+  EXPECT_EQ(listed["client_commands"][0]["script"], "");
+}
+
+TEST_F(PluginsTest, CurrentOfferAppliesActionStatus) {
+  write_plugin(builtin_dir, "pad", {
+                                     {"id", "pad"},
+                                     {"name", "Pad"},
+                                     {"client_commands", json::parse(R"([
+                                       {"id": "xbox", "label": "Xbox", "action": "test.switch", "args": ["xbox"]},
+                                       {"id": "ds", "label": "DualSense", "action": "test.switch", "args": ["dualsense"]},
+                                       {"id": "top", "label": "Top", "top_level": true, "action": "test.other"}
+                                     ])")},
+                                   });
+  write_text(state_file, R"({"plugins":{"pad":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  // Without handlers the action commands are not offered at all
+  auto offer = client_commands::current_offer("client-1");
+  EXPECT_FALSE(client_commands::find(offer, "plugin:pad/xbox"));
+  EXPECT_FALSE(client_commands::find(offer, "plugin:pad/top"));
+  EXPECT_TRUE(offer.groups.empty());
+
+  std::string status_client;
+  client_commands::register_action(
+    "test.switch",
+    [](const client_commands::run_context_t &, const std::vector<std::string> &) {
+      return client_commands::action_result_t {};
+    },
+    [&status_client](const client_commands::run_context_t &context, const std::vector<std::string> &args) {
+      status_client = context.client_uuid;
+      client_commands::action_display_t display;
+      if (args.at(0) == "xbox") {
+        display.icon = "material:check";
+        display.label = "Xbox (active)";
+      } else {
+        display.hidden = context.client_uuid == "client-2";
+      }
+      return display;
+    }
+  );
+  client_commands::register_action("test.other", [](const client_commands::run_context_t &, const std::vector<std::string> &) {
+    return client_commands::action_result_t {};
+  });
+
+  offer = client_commands::current_offer("client-1");
+  EXPECT_EQ(status_client, "client-1");
+  ASSERT_EQ(offer.groups.size(), 1);
+  ASSERT_EQ(offer.groups[0].commands.size(), 2);
+  EXPECT_EQ(offer.groups[0].commands[0].label, "Xbox (active)");
+  EXPECT_EQ(offer.groups[0].commands[0].icon, "material:check");
+  EXPECT_EQ(offer.groups[0].commands[1].label, "DualSense");
+  const auto top = client_commands::find(offer, "plugin:pad/top");
+  ASSERT_TRUE(top);
+  EXPECT_EQ(top->label, "Top");  // no status callback: shown as defined
+
+  // A status can hide a command for one client
+  offer = client_commands::current_offer("client-2");
+  ASSERT_EQ(offer.groups.size(), 1);
+  EXPECT_EQ(offer.groups[0].commands.size(), 1);
+  EXPECT_FALSE(client_commands::find(offer, "plugin:pad/ds"));
+
+  client_commands::unregister_action("test.switch");
+  client_commands::unregister_action("test.other");
+}
+
+TEST_F(PluginsTest, ResolvedOptionsCombineOverrides) {
+  write_plugin(builtin_dir, "pad", {
+                                     {"id", "pad"},
+                                     {"options", json::parse(R"([
+                                       {"id": "controller", "type": "choice", "default": "automatic", "choices": ["automatic", "xbox", "dualsense"]},
+                                       {"id": "level", "type": "number", "default": 1}
+                                     ])")},
+                                   });
+  write_plugin(builtin_dir, "off", {{"id", "off"}});
+  write_text(state_file, R"({"plugins":{
+    "pad":{"installed":true,"active":true,"options":{"level":2}},
+    "off":{"installed":true,"active":false}
+  }})");
+  plugins::load(paths());
+
+  auto options = plugins::resolved_options("pad", nullptr, {});
+  ASSERT_TRUE(options);
+  EXPECT_EQ((*options)["controller"], "automatic");
+  EXPECT_EQ((*options)["level"], 2);
+
+  options = plugins::resolved_options("pad", json::parse(R"({"pad":{"controller":"xbox"}})"), {});
+  ASSERT_TRUE(options);
+  EXPECT_EQ((*options)["controller"], "xbox");
+
+  EXPECT_FALSE(plugins::resolved_options("off", nullptr, {}));
+  EXPECT_FALSE(plugins::resolved_options("missing", nullptr, {}));
 }
 
 #ifdef _WIN32

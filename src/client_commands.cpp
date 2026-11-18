@@ -66,6 +66,48 @@ namespace client_commands {
     }
 
     /**
+     * @brief A registered action.
+     */
+    struct registered_action_t {
+      action_handler_t handler;  ///< Runs the action.
+      action_status_t status;  ///< Decides how its commands show, or empty.
+    };
+
+    /**
+     * @brief The registered actions.
+     */
+    struct action_registry_t {
+      std::mutex mutex;  ///< Guards `actions`.
+      std::map<std::string, registered_action_t, std::less<>> actions;  ///< Actions by name.
+    };
+
+    /**
+     * @brief Return the action registry.
+     *
+     * @return Registry shared by every caller.
+     */
+    action_registry_t &action_registry() {
+      static action_registry_t instance;
+      return instance;
+    }
+
+    /**
+     * @brief Look up a registered action.
+     *
+     * @param name Action name.
+     * @return A copy of the action, or `std::nullopt` when it has no handler. Copies let handlers run unlocked.
+     */
+    std::optional<registered_action_t> find_action(std::string_view name) {
+      auto &registry = action_registry();
+      std::scoped_lock lock {registry.mutex};
+      const auto it = registry.actions.find(name);
+      if (it == registry.actions.end()) {
+        return std::nullopt;
+      }
+      return it->second;
+    }
+
+    /**
      * @brief Read an optional string member.
      *
      * @param json Object to read.
@@ -906,8 +948,13 @@ namespace client_commands {
       }
     }
 
-    // The active plugins' commands: some with the menu's own, the rest in a group for each plugin
+    // The active plugins' commands: some with the menu's own, the rest in a group for each plugin. Actions decide
+    // here, outside the plugin registry's lock, whether and how their commands show.
+    run_context_t action_context;
+    action_context.client_uuid = client_uuid;
     for (auto &plugin : plugins::offered_client_commands(excluded_plugins, load_plugin_overrides(file()), plugin_options, client_uuid)) {
+      apply_action_status(plugin.top_level, action_context);
+      apply_action_status(plugin.grouped, action_context);
       for (auto &command : plugin.top_level) {
         offer.commands.push_back(std::move(command));
       }
@@ -1001,9 +1048,75 @@ namespace client_commands {
     return events;
   }
 
+  void register_action(const std::string &name, action_handler_t handler, action_status_t status) {
+    auto &registry = action_registry();
+    std::scoped_lock lock {registry.mutex};
+    registry.actions[name] = {std::move(handler), std::move(status)};
+  }
+
+  void unregister_action(const std::string &name) {
+    auto &registry = action_registry();
+    std::scoped_lock lock {registry.mutex};
+    registry.actions.erase(name);
+  }
+
+  bool has_action(const std::string &name) {
+    return find_action(name).has_value();
+  }
+
+  bool is_valid_action_name(std::string_view name) {
+    if (name.empty() || name.size() > 64 || name.front() < 'a' || name.front() > 'z') {
+      return false;
+    }
+    return std::ranges::all_of(name, [](const char c) {
+      return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
+    });
+  }
+
+  void apply_action_status(std::vector<command_t> &commands, const run_context_t &context) {
+    std::erase_if(commands, [&context](command_t &command) {
+      if (command.type != type_e::action) {
+        return false;
+      }
+      const auto action = find_action(command.action);
+      if (!action) {
+        return true;  // nothing handles it here, for example while its driver is not in use
+      }
+      if (!action->status) {
+        return false;
+      }
+      const auto display = action->status(context, command.args);
+      if (display.hidden) {
+        return true;
+      }
+      if (!display.label.empty()) {
+        command.label = display.label;
+      }
+      if (!display.icon.empty()) {
+        command.icon = display.icon;
+      }
+      return false;
+    });
+  }
+
   run_result_e run(const command_t &command, std::string &error, const run_context_t &context) {
     if (command.type == type_e::script) {
       return start_script(command, context, error) ? run_result_e::ok : run_result_e::failed;
+    }
+    if (command.type == type_e::action) {
+      const auto action = find_action(command.action);
+      if (!action) {
+        error = "This command isn't available now";
+        return run_result_e::failed;
+      }
+      BOOST_LOG(info) << "Running client command ["sv << command.label << "] for ["sv << context.client_name << ']';
+      const auto result = action->handler(context, command.args);
+      if (!result.ok) {
+        error = result.message.empty() ? "The command failed" : result.message;
+        BOOST_LOG(warning) << "Client command ["sv << command.label << "] failed: "sv << error;
+        return run_result_e::failed;
+      }
+      return run_result_e::ok;
     }
 
     auto &state = typist();

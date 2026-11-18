@@ -243,7 +243,8 @@ plugin; a command with `"top_level": true` is shown with the menu's own commands
 | `label`      | No       | The button's text. Defaults to `id`.                                                               |
 | `icon`       | No       | The button's icon, such as `material:pause_circle`.                                                |
 | `script`     | One of   | A `.ps1` file directly inside the plugin folder, run with the [script environment](#script-environment) in the plugin folder, without a console window, and left running. |
-| `args`       | No       | Arguments passed to `script`.                                                                      |
+| `action`     | One of   | Reserved for plugins that come with Sunshine: an action Sunshine itself runs, such as the xgpad plugin's switch between Xbox and DualSense controllers. Imported plugins can't use it. |
+| `args`       | No       | Arguments passed to `script` or `action`.                                                          |
 | `steps`      | One of   | Key chords to type instead of running a script: an array of chords, each an array of Windows virtual-key codes, such as `[[162, 160, 27]]` for Ctrl+Shift+Esc. Each chord's keys are pressed in order, 50 ms apart, then released in reverse; the next chord starts 100 ms later. |
 | `elevated`   | No       | Whether `script` runs as administrator. Defaults to the plugin's `elevated`.                       |
 | `top_level`  | No       | Show the command with the menu's own commands rather than on the plugin's page. Defaults to `false`. |

@@ -926,3 +926,114 @@ TEST_F(ClientCommandsTest, LoadsAndSavesPluginOverridesKeepingTheRest) {
   ASSERT_TRUE(client_commands::save(file, std::vector<client_commands::command_t> {}, std::nullopt, error)) << error;
   EXPECT_EQ(client_commands::load_plugin_overrides(file).size(), 1);
 }
+
+TEST(ClientCommandsActions, ValidActionNames) {
+  EXPECT_TRUE(client_commands::is_valid_action_name("xgpad.set_profile"));
+  EXPECT_TRUE(client_commands::is_valid_action_name("a"));
+  EXPECT_TRUE(client_commands::is_valid_action_name("a-b_c.d9"));
+  EXPECT_TRUE(client_commands::is_valid_action_name(std::string(64, 'a')));
+  EXPECT_FALSE(client_commands::is_valid_action_name(""));
+  EXPECT_FALSE(client_commands::is_valid_action_name(std::string(65, 'a')));
+  EXPECT_FALSE(client_commands::is_valid_action_name("9lives"));
+  EXPECT_FALSE(client_commands::is_valid_action_name(".hidden"));
+  EXPECT_FALSE(client_commands::is_valid_action_name("Upper"));
+  EXPECT_FALSE(client_commands::is_valid_action_name("with space"));
+  EXPECT_FALSE(client_commands::is_valid_action_name("slash/name"));
+}
+
+TEST(ClientCommandsActions, RegisterReplaceAndUnregister) {
+  EXPECT_FALSE(client_commands::has_action("test.registry"));
+
+  int calls = 0;
+  client_commands::register_action("test.registry", [&calls](const client_commands::run_context_t &, const std::vector<std::string> &) {
+    ++calls;
+    return client_commands::action_result_t {};
+  });
+  EXPECT_TRUE(client_commands::has_action("test.registry"));
+
+  // Registering again replaces the handler
+  client_commands::register_action("test.registry", [&calls](const client_commands::run_context_t &, const std::vector<std::string> &) {
+    calls += 10;
+    return client_commands::action_result_t {};
+  });
+  client_commands::command_t command {.id = "x", .label = "X", .type = client_commands::type_e::action};
+  command.action = "test.registry";
+  std::string error;
+  EXPECT_EQ(client_commands::run(command, error), client_commands::run_result_e::ok);
+  EXPECT_EQ(calls, 10);
+
+  client_commands::unregister_action("test.registry");
+  EXPECT_FALSE(client_commands::has_action("test.registry"));
+  client_commands::unregister_action("test.registry");  // removing a missing action is harmless
+}
+
+TEST(ClientCommandsActions, RunPassesContextAndArgs) {
+  client_commands::run_context_t seen_context;
+  std::vector<std::string> seen_args;
+  client_commands::register_action("test.run", [&](const client_commands::run_context_t &context, const std::vector<std::string> &args) {
+    seen_context = context;
+    seen_args = args;
+    return client_commands::action_result_t {};
+  });
+
+  client_commands::command_t command {.id = "x", .label = "Switch", .type = client_commands::type_e::action};
+  command.action = "test.run";
+  command.args = {"dualsense"};
+  const client_commands::run_context_t context {.client_name = "Deck", .app_id = "7", .app_name = "Desktop", .client_uuid = "uuid-1"};
+
+  std::string error;
+  EXPECT_EQ(client_commands::run(command, error, context), client_commands::run_result_e::ok);
+  EXPECT_TRUE(error.empty());
+  EXPECT_EQ(seen_context.client_name, "Deck");
+  EXPECT_EQ(seen_context.client_uuid, "uuid-1");
+  EXPECT_EQ(seen_context.app_id, "7");
+  EXPECT_EQ(seen_args, (std::vector<std::string> {"dualsense"}));
+
+  client_commands::unregister_action("test.run");
+}
+
+TEST(ClientCommandsActions, FailuresReachTheClient) {
+  client_commands::command_t command {.id = "x", .label = "Switch", .type = client_commands::type_e::action};
+  command.action = "test.fail";
+  std::string error;
+
+  // No handler
+  EXPECT_EQ(client_commands::run(command, error), client_commands::run_result_e::failed);
+  EXPECT_EQ(error, "This command isn't available now");
+
+  // A handler that fails with a message, and one without
+  client_commands::register_action("test.fail", [](const client_commands::run_context_t &, const std::vector<std::string> &) {
+    return client_commands::action_result_t {false, "No controllers to switch"};
+  });
+  EXPECT_EQ(client_commands::run(command, error), client_commands::run_result_e::failed);
+  EXPECT_EQ(error, "No controllers to switch");
+
+  client_commands::register_action("test.fail", [](const client_commands::run_context_t &, const std::vector<std::string> &) {
+    return client_commands::action_result_t {false, {}};
+  });
+  EXPECT_EQ(client_commands::run(command, error), client_commands::run_result_e::failed);
+  EXPECT_EQ(error, "The command failed");
+
+  client_commands::unregister_action("test.fail");
+}
+
+TEST(ClientCommandsActions, ApplyActionStatusKeepsOtherCommands) {
+  client_commands::command_t keys {.id = "keys", .label = "Keys"};
+  client_commands::command_t missing {.id = "missing", .label = "Missing", .type = client_commands::type_e::action};
+  missing.action = "test.nothing";
+  client_commands::command_t plain {.id = "plain", .label = "Plain", .icon = "material:star", .type = client_commands::type_e::action};
+  plain.action = "test.plain";
+  client_commands::register_action("test.plain", [](const client_commands::run_context_t &, const std::vector<std::string> &) {
+    return client_commands::action_result_t {};
+  });
+
+  std::vector<client_commands::command_t> commands {keys, missing, plain};
+  client_commands::apply_action_status(commands, {});
+  ASSERT_EQ(commands.size(), 2);
+  EXPECT_EQ(commands[0].id, "keys");
+  EXPECT_EQ(commands[1].id, "plain");
+  EXPECT_EQ(commands[1].label, "Plain");
+  EXPECT_EQ(commands[1].icon, "material:star");
+
+  client_commands::unregister_action("test.plain");
+}

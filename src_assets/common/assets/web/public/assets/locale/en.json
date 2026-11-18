@@ -177,6 +177,7 @@
     "no_icon": "None",
     "no_key": "(no other key)",
     "no_keys": "No keys yet.",
+    "plugin_action": "Handled by Sunshine",
     "plugin_desc": "Commands that come with this plugin. The menu shows those marked \"Top level\" with its own commands, and the rest on a page of their own named after the plugin.",
     "plugin_note": "They're shown while the plugin is active and not turned off for the application being streamed. What they do comes with the plugin, but their labels, icons and programs can be customized here.",
     "plugin_programs": "Show for",

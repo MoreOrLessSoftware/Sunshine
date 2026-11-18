@@ -576,11 +576,12 @@ namespace plugins {
      * @param node Array of command objects.
      * @param dir Plugin directory.
      * @param elevated Whether a script runs elevated when its command doesn't say.
+     * @param builtin Whether the plugin ships with Sunshine; only those may run actions.
      * @param out Receives the parsed commands.
      * @param error Receives the reason when the list is invalid.
      * @return `false` when the list is invalid.
      */
-    bool parse_client_commands(const json &node, const fs::path &dir, bool elevated, std::vector<client_command_t> &out, std::string &error) {
+    bool parse_client_commands(const json &node, const fs::path &dir, bool elevated, bool builtin, std::vector<client_command_t> &out, std::string &error) {
       if (!node.is_array()) {
         error = "'client_commands' must be an array";
         return false;
@@ -596,6 +597,7 @@ namespace plugins {
             !read_string(entry, "label", command.label, error) ||
             !read_string(entry, "icon", command.icon, error) ||
             !read_string(entry, "script", command.script, error) ||
+            !read_string(entry, "action", command.action, error) ||
             !read_string(entry, "status_file", command.status_file, error)) {
           return false;
         }
@@ -651,11 +653,21 @@ namespace plugins {
         }
 
         const bool has_steps = entry.contains("steps");
-        if (command.script.empty() == !has_steps) {
-          error = std::format("client command '{}' needs either a script or steps", command.id);
+        const bool has_action = entry.contains("action");
+        if (static_cast<int>(!command.script.empty()) + static_cast<int>(has_steps) + static_cast<int>(has_action) != 1) {
+          error = std::format("client command '{}' needs exactly one of a script, steps or an action", command.id);
           return false;
         }
-        if (has_steps) {
+        if (has_action) {
+          if (!builtin) {
+            error = std::format("client command '{}': only plugins that come with Sunshine can run an action", command.id);
+            return false;
+          }
+          if (!client_commands::is_valid_action_name(command.action)) {
+            error = std::format("client command '{}': invalid action '{}'", command.id, command.action);
+            return false;
+          }
+        } else if (has_steps) {
           // Checked as a command of the host's own would be
           std::string reason;
           auto keys = client_commands::parse_command({{"id", command.id}, {"label", command.label}, {"type", "keys"}, {"steps", entry["steps"]}}, command.id, reason);
@@ -1463,7 +1475,7 @@ namespace plugins {
     if (node.contains("actions") && !parse_actions(node["actions"], dir, manifest.actions, error)) {
       return std::nullopt;
     }
-    if (node.contains("client_commands") && !parse_client_commands(node["client_commands"], dir, manifest.elevated, manifest.client_commands, error)) {
+    if (node.contains("client_commands") && !parse_client_commands(node["client_commands"], dir, manifest.elevated, builtin, manifest.client_commands, error)) {
       return std::nullopt;
     }
     if (!read_string(node, "icon", manifest.icon, error)) {
@@ -2679,6 +2691,7 @@ namespace plugins {
           {"close_menu", command.close_menu},
           {"top_level", command.top_level},
           {"script", command.script},
+          {"action", command.action},
           {"args", command.args},
           {"steps", command.steps},
           {"elevated", command.elevated},
@@ -2807,7 +2820,11 @@ namespace plugins {
         if (!source.status_file.empty()) {
           apply_status_file(data_dir / source.status_file, command);
         }
-        if (source.script.empty()) {
+        if (!source.action.empty()) {
+          command.type = client_commands::type_e::action;
+          command.action = source.action;
+          command.args = source.args;
+        } else if (source.script.empty()) {
           command.type = client_commands::type_e::keys;
           command.steps = source.steps;
         } else {
@@ -2988,6 +3005,17 @@ namespace plugins {
       return std::nullopt;
     }
     return script_env(*manifest, stream_options(reg, *manifest, app_overrides, client_uuid), plugin_data_dir(reg.paths, id));
+  }
+
+  std::optional<nlohmann::json> resolved_options(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+
+    const auto *manifest = find_manifest(reg, id);
+    if (!manifest || !runs_for_streams(reg, *manifest) || off_for_client(reg, id, client_uuid)) {
+      return std::nullopt;
+    }
+    return stream_options(reg, *manifest, app_overrides, client_uuid);
   }
 
   bool disabled_for_client(const std::string &id, const std::string &client_uuid) {

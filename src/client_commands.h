@@ -3,7 +3,8 @@
  * @brief Declarations for commands the host offers in a client's in-stream overlay menu.
  *
  * A client command is defined on the host and run on the host when a streaming client picks it
- * from its overlay menu. It either types a sequence of key chords or starts a command line.
+ * from its overlay menu. It either types a sequence of key chords or starts a command line; commands of bundled
+ * plugins can also run an action that Sunshine itself handles.
  *
  * Commands come in groups. Global commands, from `client_commands.json` in the config directory,
  * always appear. An application's own commands, from its `client-commands` entry in `apps.json`,
@@ -35,7 +36,8 @@ namespace client_commands {
    */
   enum class type_e {
     keys,  ///< Types a sequence of key chords.
-    script  ///< Starts a command line.
+    script,  ///< Starts a command line.
+    action  ///< Runs a handler inside Sunshine (see `register_action()`); only bundled plugins offer these.
   };
 
   /**
@@ -53,6 +55,8 @@ namespace client_commands {
     bool elevated = false;  ///< Whether a `script` command runs elevated.
     std::map<std::string, std::string> env;  ///< Variables added to a `script` command's environment, such as a plugin's.
     std::filesystem::path log_file;  ///< File a `script` command's output is added to, or empty to discard it.
+    std::string action;  ///< Name of the registered handler an `action` command runs.
+    std::vector<std::string> args;  ///< Arguments passed to an `action` command's handler.
     bool enabled = true;  ///< Whether clients are offered the command; a disabled one is kept but not offered.
     std::vector<std::string> programs;  ///< Programs the command is only offered with (see `matches()`), or empty for any.
   };
@@ -122,6 +126,76 @@ namespace client_commands {
     busy,  ///< Another key sequence is still being typed.
     failed  ///< The command could not start.
   };
+
+  /**
+   * @brief Outcome of an `action` command's handler.
+   */
+  struct action_result_t {
+    bool ok = true;  ///< Whether the action did what was asked.
+    std::string message;  ///< Why it failed, shown by the client on the command's button.
+  };
+
+  /**
+   * @brief How an `action` command shows in the menu right now.
+   */
+  struct action_display_t {
+    bool hidden = false;  ///< Leave the command out of the menu.
+    std::string label;  ///< Label to show instead of the command's, or empty to keep it.
+    std::string icon;  ///< Icon to show instead of the command's, or empty to keep it.
+  };
+
+  /**
+   * @brief Runs an `action` command.
+   *
+   * Called on the HTTPS server thread that received the request; it may block for a few seconds.
+   */
+  using action_handler_t = std::function<action_result_t(const run_context_t &context, const std::vector<std::string> &args)>;
+
+  /**
+   * @brief Decides how an `action` command shows when a client opens its menu.
+   *
+   * Only `client_uuid` is set in the context: the menu is built before the client picks anything.
+   */
+  using action_status_t = std::function<action_display_t(const run_context_t &context, const std::vector<std::string> &args)>;
+
+  /**
+   * @brief Make an action available to `action` commands, replacing any handler registered under the same name.
+   *
+   * Commands naming an action that has no handler are not offered.
+   *
+   * @param name Action name, as plugin manifests give it, such as `xgpad.set_profile`.
+   * @param handler Runs the action.
+   * @param status Decides how its commands show, or empty to always show them as defined.
+   */
+  void register_action(const std::string &name, action_handler_t handler, action_status_t status = {});
+
+  /**
+   * @brief Remove an action; its commands are no longer offered.
+   * @param name Action name.
+   */
+  void unregister_action(const std::string &name);
+
+  /**
+   * @brief Check whether an action has a handler.
+   * @param name Action name.
+   * @return True when `register_action()` registered it.
+   */
+  bool has_action(const std::string &name);
+
+  /**
+   * @brief Check whether a string is a valid action name.
+   * @param name Candidate: 1 to 64 lowercase letters, digits, `.`, `_` or `-`, starting with a letter.
+   * @return True when it is valid.
+   */
+  bool is_valid_action_name(std::string_view name);
+
+  /**
+   * @brief Apply the actions' current display to offered commands: drop hidden ones and those without a handler,
+   *        and change labels and icons.
+   * @param commands Commands to update in place; commands of other types are kept as they are.
+   * @param context Who the menu is for; only `client_uuid` is used.
+   */
+  void apply_action_status(std::vector<command_t> &commands, const run_context_t &context);
 
   /**
    * @brief Parse one command definition.
@@ -496,11 +570,12 @@ namespace client_commands {
    * @brief Run a command.
    *
    * A `keys` command is typed in the background; only one sequence is typed at a time. A `script` command is
-   * started and left to run.
+   * started and left to run. An `action` command runs its registered handler and waits for it.
    *
    * @param command Command to run.
-   * @param error Receives the reason when the command does not start.
-   * @param context Who the command runs for; a `script` command gets each non-empty value in its environment.
+   * @param error Receives the reason when the command does not start or its action fails.
+   * @param context Who the command runs for; a `script` command gets each non-empty value in its environment, an
+   *                `action` command's handler gets all of it.
    * @return Outcome of the request.
    */
   run_result_e run(const command_t &command, std::string &error, const run_context_t &context = {});

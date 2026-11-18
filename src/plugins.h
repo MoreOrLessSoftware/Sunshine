@@ -156,7 +156,8 @@ namespace plugins {
   /**
    * @brief A command the plugin adds to clients' in-stream overlay menus (see `client_commands`).
    *
-   * It either runs one of the plugin's scripts, with the plugin's environment, or types key chords.
+   * It either runs one of the plugin's scripts, with the plugin's environment, types key chords, or, for a plugin that
+   * ships with Sunshine, runs an action Sunshine handles itself (see `client_commands::register_action()`).
    */
   struct client_command_t {
     std::string id;  ///< Identifier, unique within the plugin.
@@ -164,8 +165,9 @@ namespace plugins {
     std::string icon;  ///< Icon for the client's button, such as `material:<name>`, or empty for none.
     bool close_menu = true;  ///< Whether the client closes its menu after running the command.
     bool top_level = false;  ///< Whether the command is shown with the menu's own commands rather than in the plugin's group.
-    std::string script;  ///< Script file relative to the plugin directory, or empty for a command that types keys.
-    std::vector<std::string> args;  ///< Arguments passed to the script.
+    std::string script;  ///< Script file relative to the plugin directory, or empty for a command that types keys or runs an action.
+    std::string action;  ///< Action Sunshine runs, or empty; only plugins that ship with Sunshine may set it.
+    std::vector<std::string> args;  ///< Arguments passed to the script or the action.
     std::vector<std::vector<std::uint16_t>> steps;  ///< Key chords a command without a script types.
     bool elevated = false;  ///< Whether the script runs elevated; defaults to the plugin's `elevated`.
     std::string status_file;  ///< JSON file in the plugin's data directory whose `label` and `icon` replace the command's while it exists, or empty for none.
@@ -383,6 +385,19 @@ namespace plugins {
    *         when the plugin no longer exists or the client turned it off.
    */
   std::optional<std::map<std::string, std::string>> stream_env(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid);
+
+  /**
+   * @brief Get a plugin's option values for an application and a client, as its stream scripts get them.
+   *
+   * For Sunshine's own code that acts on a plugin's options, such as the xgpad plugin's controller type.
+   *
+   * @param id Plugin ID.
+   * @param app_overrides The application's `plugin-options`, keyed by plugin ID, or `null`.
+   * @param client_uuid Client UUID, or empty for none.
+   * @return An object holding a value for every declared option, or `std::nullopt` when the plugin doesn't exist, is
+   *         not installed and active, needs its install script to run again, or the client turned it off.
+   */
+  std::optional<nlohmann::json> resolved_options(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid);
 
   /**
    * @brief Check whether a client turned a plugin off for its streams.
