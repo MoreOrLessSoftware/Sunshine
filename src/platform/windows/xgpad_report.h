@@ -210,7 +210,23 @@ namespace platf::xgpad {
     bool motion_as_ds4;  ///< config::input.motion_as_ds4
     bool touchpad_as_ds4;  ///< config::input.touchpad_as_ds4
     bool dualsense_supported;  ///< Whether the installed xgpad driver has the DualSense profile.
+    std::optional<profile_e> preferred = std::nullopt;  ///< Profile the client switched to or the xgpad plugin's option asks for, if any.
   };
+
+  /**
+   * @brief Read the xgpad plugin's "controller" option.
+   * @param value Option value: "automatic", "xbox" or "dualsense".
+   * @return The profile it asks for, or empty for "automatic" and unknown values.
+   */
+  constexpr std::optional<profile_e> profile_from_option(const std::string_view value) {
+    if (value == "xbox") {
+      return profile_e::xbox_series;
+    }
+    if (value == "dualsense") {
+      return profile_e::dualsense;
+    }
+    return std::nullopt;
+  }
 
   /**
    * @brief Check whether a controller should be a PlayStation controller when its type is chosen automatically.
@@ -235,13 +251,21 @@ namespace platf::xgpad {
    * installed driver predates the DualSense profile. Under "all", xgpad covers the Xbox profiles and the DualSense,
    * while ViGEmBus keeps an explicit DualShock 4 or Xbox 360 choice, and what xgpad cannot present.
    *
-   * @param choice Policy, profile, client metadata and driver availability.
+   * A preferred profile (the client's switch, or the xgpad plugin's option) wins over all of that whenever the policy
+   * lets xgpad create controllers; a preferred DualSense is an Xbox Series controller on a driver without it.
+   *
+   * @param choice Policy, profile, client metadata, preference and driver availability.
    * @return Profile to allocate through xgpad, or empty to use the remaining drivers.
    */
   constexpr std::optional<profile_e> choose_xgpad_profile(const allocation_choice_t &choice) {
     const auto &gamepad = choice.gamepad;
     const bool playstation_profile = gamepad == "ds5" || gamepad == "ds4";
     const auto dualsense_or_xbox = choice.dualsense_supported ? profile_e::dualsense : profile_e::xbox_series;
+
+    const bool xgpad_allowed = choice.driver_policy == "xgpad" || choice.driver_policy == "all" || choice.driver_policy.empty();
+    if (xgpad_allowed && choice.preferred) {
+      return *choice.preferred == profile_e::dualsense ? dualsense_or_xbox : profile_e::xbox_series;
+    }
 
     if (choice.driver_policy == "xgpad") {
       if (playstation_profile) {
@@ -281,6 +305,67 @@ namespace platf::xgpad {
       }
     }
     return profile_e::xbox_series;
+  }
+
+  /**
+   * @brief One occupied xgpad slot, as a switch between profiles sees it.
+   */
+  struct pad_slot_t {
+    int nr;  ///< Global gamepad index.
+    std::string_view client_uuid;  ///< Client the pad belongs to.
+    profile_e profile;  ///< Controller the pad presents.
+  };
+
+  /**
+   * @brief Pick the pads a client's switch to a profile recreates.
+   * @param slots Occupied xgpad slots.
+   * @param client_uuid Client that asked for the switch.
+   * @param target Profile to switch to.
+   * @return Global indices of that client's pads that present another profile, in slot order.
+   */
+  inline std::vector<int> plan_profile_switch(const std::vector<pad_slot_t> &slots, const std::string_view client_uuid, const profile_e target) {
+    std::vector<int> recreate;
+    for (const auto &slot : slots) {
+      if (slot.client_uuid == client_uuid && slot.profile != target) {
+        recreate.push_back(slot.nr);
+      }
+    }
+    return recreate;
+  }
+
+  /**
+   * @brief How a "switch to profile" command shows in a client's menu.
+   */
+  enum class switch_menu_e {
+    hidden,  ///< Not offered: the client has no xgpad pads, or the driver can't present the profile.
+    available,  ///< Offered: at least one of the client's pads presents another profile.
+    active,  ///< Offered and marked: all of the client's pads already present the profile.
+  };
+
+  /**
+   * @brief Decide how a "switch to profile" command shows for a client.
+   * @param slots Occupied xgpad slots.
+   * @param client_uuid Client opening its menu.
+   * @param target Profile the command switches to.
+   * @param dualsense_supported Whether the installed driver has the DualSense profile.
+   * @return Menu state of the command.
+   */
+  inline switch_menu_e switch_menu_state(const std::vector<pad_slot_t> &slots, const std::string_view client_uuid, const profile_e target, const bool dualsense_supported) {
+    if (client_uuid.empty() || (target == profile_e::dualsense && !dualsense_supported)) {
+      return switch_menu_e::hidden;
+    }
+    bool any = false;
+    bool all_match = true;
+    for (const auto &slot : slots) {
+      if (slot.client_uuid == client_uuid) {
+        any = true;
+        all_match &= slot.profile == target;
+      }
+    }
+    if (!any) {
+      return switch_menu_e::hidden;
+    }
+    return all_match ? switch_menu_e::active : switch_menu_e::available;
   }
 
   /**

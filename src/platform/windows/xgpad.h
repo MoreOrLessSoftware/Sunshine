@@ -10,6 +10,7 @@
 
 // standard includes
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -97,9 +98,23 @@ namespace platf::xgpad {
    * @param id Global and client-relative identifiers of the controller.
    * @param profile Controller the pad presents.
    * @param feedback_queue Queue used to send rumble, lightbar, player LEDs and trigger effects back to the client.
+   * @param client_uuid Client the controller belongs to, so the client can switch its pads; empty when unknown.
    * @return 0 on success, -1 on failure (the caller may fall back to another driver).
    */
-  int alloc(context_t &context, const gamepad_id_t &id, profile_e profile, feedback_queue_t feedback_queue);
+  int alloc(context_t &context, const gamepad_id_t &id, profile_e profile, feedback_queue_t feedback_queue, const std::string &client_uuid = {});
+
+  /**
+   * @brief Get the profile a client switched its pads to from its in-stream menu.
+   *
+   * The `xgpad.set_profile` client command action, registered while an xgpad context exists, recreates the
+   * client's pads with the chosen profile. The choice also applies to pads the client connects later, until the
+   * client's last pad is removed.
+   *
+   * @param context xgpad context.
+   * @param client_uuid Client UUID.
+   * @return The profile, or empty when the client hasn't switched (or the UUID is empty).
+   */
+  std::optional<profile_e> session_profile(context_t &context, std::string_view client_uuid);
 
   /**
    * @brief Check whether a global gamepad index is backed by an xgpad virtual pad.

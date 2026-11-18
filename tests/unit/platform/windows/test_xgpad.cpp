@@ -448,6 +448,76 @@ TEST_F(XgpadReportTest, MotionAndTouchpadOptionsPickPlayStation) {
   EXPECT_EQ(choose_xgpad_profile(choice), xbox);
 }
 
+TEST_F(XgpadReportTest, ProfileFromOption) {
+  EXPECT_EQ(profile_from_option("xbox"), xbox);
+  EXPECT_EQ(profile_from_option("dualsense"), dualsense);
+  EXPECT_EQ(profile_from_option("automatic"), none);
+  EXPECT_EQ(profile_from_option(""), none);
+  EXPECT_EQ(profile_from_option("DualSense"), none);
+}
+
+TEST_F(XgpadReportTest, PreferredProfileWins) {
+  for (const auto policy : {"xgpad", "all", ""}) {
+    for (const bool vigem : {false, true}) {
+      // Preferred Xbox, even for a PlayStation client with an explicit DualShock 4 choice
+      auto choice = make_choice(policy, "ds4", 0x02, vigem, true);
+      choice.preferred = profile_e::xbox_series;
+      EXPECT_EQ(choose_xgpad_profile(choice), xbox) << policy;
+
+      // Preferred DualSense, even for an Xbox client with an explicit Xbox 360 choice
+      choice = make_choice(policy, "x360", 0x01, vigem, true);
+      choice.preferred = profile_e::dualsense;
+      EXPECT_EQ(choose_xgpad_profile(choice), dualsense) << policy;
+
+      // A driver without the DualSense profile still gives the client a working controller
+      choice.dualsense_supported = false;
+      EXPECT_EQ(choose_xgpad_profile(choice), xbox) << policy;
+    }
+  }
+
+  // Policies that don't use xgpad ignore the preference
+  for (const auto policy : {"vigembus", "virtualhid"}) {
+    auto choice = make_choice(policy, "auto", 0x01, true, true);
+    choice.preferred = profile_e::dualsense;
+    EXPECT_EQ(choose_xgpad_profile(choice), none) << policy;
+  }
+}
+
+TEST_F(XgpadReportTest, PlanProfileSwitch) {
+  const std::vector<pad_slot_t> slots {
+    {0, "a", profile_e::xbox_series},
+    {1, "b", profile_e::xbox_series},
+    {2, "a", profile_e::dualsense},
+    {5, "a", profile_e::xbox_series},
+  };
+  EXPECT_EQ(plan_profile_switch(slots, "a", profile_e::dualsense), (std::vector<int> {0, 5}));
+  EXPECT_EQ(plan_profile_switch(slots, "a", profile_e::xbox_series), (std::vector<int> {2}));
+  EXPECT_EQ(plan_profile_switch(slots, "b", profile_e::xbox_series), (std::vector<int> {}));
+  EXPECT_EQ(plan_profile_switch(slots, "c", profile_e::dualsense), (std::vector<int> {}));
+  EXPECT_EQ(plan_profile_switch({}, "a", profile_e::dualsense), (std::vector<int> {}));
+}
+
+TEST_F(XgpadReportTest, SwitchMenuState) {
+  const std::vector<pad_slot_t> slots {
+    {0, "mixed", profile_e::xbox_series},
+    {1, "mixed", profile_e::dualsense},
+    {2, "xbox", profile_e::xbox_series},
+    {3, "ds", profile_e::dualsense},
+  };
+  using enum switch_menu_e;
+  EXPECT_EQ(switch_menu_state(slots, "mixed", profile_e::xbox_series, true), available);
+  EXPECT_EQ(switch_menu_state(slots, "mixed", profile_e::dualsense, true), available);
+  EXPECT_EQ(switch_menu_state(slots, "xbox", profile_e::xbox_series, true), active);
+  EXPECT_EQ(switch_menu_state(slots, "xbox", profile_e::dualsense, true), available);
+  EXPECT_EQ(switch_menu_state(slots, "ds", profile_e::dualsense, true), active);
+
+  // No pads, no client, or a driver that can't present the target
+  EXPECT_EQ(switch_menu_state(slots, "other", profile_e::xbox_series, true), hidden);
+  EXPECT_EQ(switch_menu_state(slots, "", profile_e::xbox_series, true), hidden);
+  EXPECT_EQ(switch_menu_state(slots, "xbox", profile_e::dualsense, false), hidden);
+  EXPECT_EQ(switch_menu_state(slots, "ds", profile_e::xbox_series, false), available);
+}
+
 TEST_F(XgpadReportTest, MatchesOwnInstanceIds) {
   EXPECT_TRUE(is_xgpad_instance_id(L"SWD\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&02045E_PID&0B13_REV&0509\\PAD0"));
   EXPECT_TRUE(is_xgpad_instance_id(L"swd\\{00001812-0000-1000-8000-00805f9b34fb}_dev_vid&02045e_pid&0b13_rev&0509\\pad15"));

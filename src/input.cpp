@@ -292,6 +292,7 @@ namespace input {
 
     std::vector<gamepad_t> gamepads;  ///< Virtual gamepad slots tracked for the stream.
     std::unique_ptr<platf::client_input_t> client_context;  ///< Client context.
+    std::string client_uuid;  ///< UUID of the paired client streaming, or empty when it's unknown.
 
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event;  ///< Touch port event.
     platf::feedback_queue_t feedback_queue;  ///< Queue used to deliver controller feedback to the platform backend.
@@ -1303,7 +1304,10 @@ namespace input {
       return -1;
     }
 
-    if (platf::alloc_gamepad(platf_input, {id, static_cast<std::uint8_t>(client_index)}, arrival, input->feedback_queue)) {
+    // The platform backend may choose the controller type by client
+    auto owned = arrival;
+    owned.client_uuid = input->client_uuid;
+    if (platf::alloc_gamepad(platf_input, {id, static_cast<std::uint8_t>(client_index)}, owned, input->feedback_queue)) {
       free_id(gamepadMask, id);
       return -1;
     }
@@ -2330,7 +2334,7 @@ namespace input {
   /**
    * @brief Allocate and initialize platform input state for a stream.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id) {
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::string client_uuid) {
     std::shared_ptr<input_t> input;
     bool resumed = false;
     {
@@ -2345,6 +2349,7 @@ namespace input {
           mail->event<input::touch_port_t>(mail::touch_port),
           mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback)
         );
+        input->client_uuid = std::move(client_uuid);
         state.inputs.try_emplace(std::move(session_id), input);
       }
     }

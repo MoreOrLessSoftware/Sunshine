@@ -445,6 +445,7 @@ namespace platf {
     std::uint8_t type;  ///< Protocol or controller type discriminator.
     std::uint16_t capabilities;  ///< Capability flags advertised by the controller.
     std::uint32_t supportedButtons;  ///< Button mask supported by the connected controller.
+    std::string client_uuid;  ///< UUID of the paired client the controller belongs to, or empty when it's unknown.
   };
 
   /**

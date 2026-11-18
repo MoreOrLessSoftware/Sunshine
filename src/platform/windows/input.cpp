@@ -14,6 +14,8 @@
 #endif
 
 // platform includes
+// WinSock2.h before Windows.h: src/process.h brings in Boost.Asio, which refuses the older WinSock.h
+#include <WinSock2.h>
 #include <Windows.h>
 
 // standard includes
@@ -33,6 +35,8 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/virtualhid_input.h"
+#include "src/plugins.h"
+#include "src/process.h"
 #include "xgpad.h"
 #include "xgpad_report.h"
 
@@ -640,6 +644,37 @@ namespace platf {
     return static_cast<client_input_raw_t *>(input)->virtualhid;
   }
 
+  /**
+   * @brief Find the controller type a client's xgpad pads should have, when one is set.
+   *
+   * The client's switch from its in-stream menu comes first, then the xgpad plugin's "controller" option for the
+   * application being streamed and the client.
+   *
+   * @param context xgpad context.
+   * @param client_uuid Client the controller belongs to, or empty when it's unknown.
+   * @return The profile, or empty to choose automatically.
+   */
+  std::optional<xgpad::profile_e> preferred_xgpad_profile(xgpad::context_t &context, const std::string &client_uuid) {
+    if (const auto switched = xgpad::session_profile(context, client_uuid)) {
+      return switched;
+    }
+
+    nlohmann::json app_options;
+    if (const int running_id = proc::proc.running(); running_id > 0) {
+      for (const auto &app : proc::proc.get_apps()) {
+        if (app.id == std::to_string(running_id)) {
+          app_options = app.plugin_options;
+          break;
+        }
+      }
+    }
+    const auto options = plugins::resolved_options("xgpad", app_options, client_uuid);
+    if (!options || !options->contains("controller") || !(*options)["controller"].is_string()) {
+      return std::nullopt;
+    }
+    return xgpad::profile_from_option((*options)["controller"].get<std::string>());
+  }
+
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
@@ -653,8 +688,9 @@ namespace platf {
         .motion_as_ds4 = config::input.motion_as_ds4,
         .touchpad_as_ds4 = config::input.touchpad_as_ds4,
         .dualsense_supported = xgpad::driver_supports_dualsense(),
+        .preferred = preferred_xgpad_profile(*raw->xgpad, metadata.client_uuid),
       });
-      if (profile && xgpad::alloc(*raw->xgpad, id, *profile, feedback_queue) == 0) {
+      if (profile && xgpad::alloc(*raw->xgpad, id, *profile, feedback_queue, metadata.client_uuid) == 0) {
         return 0;
       }
     }

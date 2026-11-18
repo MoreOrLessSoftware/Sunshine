@@ -88,9 +88,11 @@ namespace input {
    *
    * @param mail Mailbox used to exchange messages with worker threads.
    * @param session_id Stable paired-client identity shared by launch and resume connections.
+   * @param client_uuid UUID of the paired client, or empty when it's unknown. A resumed session keeps the UUID it was
+   *                    created with, since the same client resumes it.
    * @return Shared input state bound to the stream mailbox.
    */
-  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id);
+  std::shared_ptr<input_t> alloc(safe::mail_t mail, std::string session_id, std::string client_uuid = {});
 
   /**
    * @brief Press or release a key on the host on behalf of Sunshine itself, such as for a client command.

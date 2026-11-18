@@ -21,6 +21,9 @@
 #include <condition_variable>
 #include <cstring>
 #include <cwchar>
+#include <format>
+#include <future>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -29,6 +32,7 @@
 
 // local includes
 #include "playstation_report.h"
+#include "src/client_commands.h"
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/utility.h"
@@ -266,6 +270,8 @@ namespace platf::xgpad {
   struct pad_t {
     unsigned index = 0;  ///< Global gamepad index; also the device instance number.
     profile_e profile = profile_e::xbox_series;  ///< Controller the pad presents.
+    std::string client_uuid;  ///< Client the pad belongs to, or empty when it's unknown.
+    gamepad_state_t state {};  ///< Last buttons, sticks and triggers from the client, kept across a profile switch.
     std::wstring token;  ///< Unique token naming this device's shared objects.
     HANDLE section = nullptr;  ///< Shared memory section.
     XGPAD_SHARED *shared = nullptr;  ///< Mapped view of the section.
@@ -316,6 +322,7 @@ namespace platf::xgpad {
     sw_api_t api;  ///< Software device API.
     std::mutex mutex;  ///< Guards pad slots and per-pad feedback state.
     std::array<std::unique_ptr<pad_t>, MAX_GAMEPADS> pads;  ///< Pads indexed by global gamepad index.
+    std::map<std::string, profile_e, std::less<>> session_profiles;  ///< Profile each client switched to, until its last pad is removed.
     HANDLE wake_event = nullptr;  ///< Wakes the feedback thread when slots change or on shutdown.
     std::atomic<bool> stopping {false};  ///< Set when the feedback thread must exit.
     std::thread feedback_thread;  ///< Thread forwarding rumble from the driver to clients.
@@ -888,9 +895,253 @@ namespace platf::xgpad {
     return removed;
   }
 
+  namespace {
+    constexpr auto set_profile_action = "xgpad.set_profile";  ///< Client command action that switches a client's pads.
+    constexpr auto switch_timeout = 10s;  ///< Longest time a client command waits for its pads to be recreated.
+
+    /**
+     * @brief The context client command actions work on.
+     */
+    struct action_target_t {
+      std::mutex mutex;  ///< Held while an action uses the context, and while the context goes away.
+      context_t *context = nullptr;  ///< Context created last, or null.
+    };
+
+    /**
+     * @brief Return the context client command actions work on.
+     * @return Shared state.
+     */
+    action_target_t &action_target() {
+      static action_target_t target;
+      return target;
+    }
+
+    /**
+     * @brief Describe the occupied slots for switch_menu_state() and plan_profile_switch().
+     * @param context xgpad context; the caller holds its mutex while the result is in use.
+     * @return One entry per pad.
+     */
+    std::vector<pad_slot_t> occupied_slots(const context_t &context) {
+      std::vector<pad_slot_t> slots;
+      for (int nr = 0; nr < MAX_GAMEPADS; ++nr) {
+        if (const auto &pad = context.pads[nr]) {
+          slots.push_back({nr, pad->client_uuid, pad->profile});
+        }
+      }
+      return slots;
+    }
+
+    /**
+     * @brief Take a pad out of its slot and close its device.
+     *
+     * Runs on the input thread. The device nodes are deleted once PnP has removed the device.
+     *
+     * @param context xgpad context.
+     * @param nr Global gamepad index.
+     * @return The removed pad, or null when the slot was empty.
+     */
+    std::unique_ptr<pad_t> remove_pad(context_t &context, const int nr) {
+      std::unique_ptr<pad_t> pad;
+      {
+        std::lock_guard lock {context.mutex};
+        if (!has(&context, nr)) {
+          return nullptr;
+        }
+        pad = std::move(context.pads[nr]);
+        if (pad->rumble_stop_task) {
+          task_pool.cancel(pad->rumble_stop_task);
+          pad->rumble_stop_task = nullptr;
+        }
+        if (pad->repeat_task) {
+          task_pool.cancel(pad->repeat_task);
+          pad->repeat_task = nullptr;
+        }
+      }
+      SetEvent(context.wake_event);
+      if (pad->device) {
+        context.api.close(pad->device);
+        pad->device = nullptr;
+      }
+      BOOST_LOG(info) << "xgpad: removed virtual "sv << profile_name(pad->profile) << " controller "sv << nr;
+
+      // Delete the device nodes once PnP has finished removing the device, so none are left in Device Manager.
+      if (!pad->instance_id.empty()) {
+        {
+          std::lock_guard lock {context.cleanup_mutex};
+          context.cleanup_pending.push_back(pad->instance_id);
+        }
+        context.cleanup_cv.notify_one();
+      }
+      return pad;
+    }
+
+    /**
+     * @brief Replace a pad with one presenting another profile, keeping its slot, client and state.
+     *
+     * Runs on the input thread. Games see the controller disconnect and a new one connect. When the new pad can't be
+     * created, the old profile is put back.
+     *
+     * @param context xgpad context.
+     * @param nr Global gamepad index.
+     * @param target Profile to switch to.
+     * @return True when the pad now presents the target profile.
+     */
+    bool recreate_pad(context_t &context, const int nr, const profile_e target) {
+      auto old = remove_pad(context, nr);
+      if (!old) {
+        return false;
+      }
+
+      // Stop what the old controller asked of the client controller
+      if (old->feedback_queue) {
+        old->feedback_queue->raise(gamepad_feedback_msg_t::make_rumble(old->client_relative_index, 0, 0));
+        old->feedback_queue->raise(gamepad_feedback_msg_t::make_rumble_triggers(old->client_relative_index, 0, 0));
+        if (old->profile == profile_e::dualsense) {
+          old->feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(old->client_relative_index, LI_MOTION_TYPE_ACCEL, 0));
+          old->feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(old->client_relative_index, LI_MOTION_TYPE_GYRO, 0));
+        }
+      }
+
+      const gamepad_id_t id {nr, old->client_relative_index};
+      for (const auto profile : {target, old->profile}) {
+        if (alloc(context, id, profile, old->feedback_queue, old->client_uuid) == 0) {
+          update(context, nr, old->state);
+          return profile == target;
+        }
+      }
+      BOOST_LOG(error) << "xgpad: controller "sv << nr << " could not be recreated"sv;
+      return false;
+    }
+
+    /**
+     * @brief Switch all of a client's pads to a profile and remember it for pads the client connects later.
+     *
+     * Runs on the input thread, like every other change to the pads.
+     *
+     * @param context xgpad context.
+     * @param client_uuid Client that asked.
+     * @param target Profile to switch to.
+     * @return Outcome for the client's menu.
+     */
+    client_commands::action_result_t switch_client_pads(context_t &context, const std::string &client_uuid, const profile_e target) {
+      if (target == profile_e::dualsense && !driver_supports_dualsense()) {
+        return {false, "The installed xgpad driver can't create DualSense controllers"};
+      }
+
+      std::vector<int> recreate;
+      {
+        std::lock_guard lock {context.mutex};
+        const auto slots = occupied_slots(context);
+        if (switch_menu_state(slots, client_uuid, target, true) == switch_menu_e::hidden) {
+          return {false, "This client's controllers don't use the xgpad driver"};
+        }
+        recreate = plan_profile_switch(slots, client_uuid, target);
+        context.session_profiles[client_uuid] = target;
+      }
+
+      int failed = 0;
+      for (const auto nr : recreate) {
+        failed += recreate_pad(context, nr, target) ? 0 : 1;
+      }
+      BOOST_LOG(info) << "xgpad: switched "sv << static_cast<int>(recreate.size()) - failed << " controller(s) to "sv << profile_name(target);
+      if (failed > 0) {
+        return {false, std::format("{} controller(s) couldn't be switched", failed)};
+      }
+      return {};
+    }
+
+    /**
+     * @brief Run the `xgpad.set_profile` client command action.
+     *
+     * Called on the HTTPS server thread. The switch runs on the input thread, and this waits for it.
+     *
+     * @param run Who picked the command.
+     * @param args Profile to switch to: "xbox" or "dualsense".
+     * @return Outcome for the client's menu.
+     */
+    client_commands::action_result_t run_set_profile(const client_commands::run_context_t &run, const std::vector<std::string> &args) {
+      const auto target = args.empty() ? std::nullopt : profile_from_option(args.front());
+      if (!target) {
+        return {false, "Unknown controller type"};
+      }
+      if (run.client_uuid.empty()) {
+        return {false, "This client's controllers can't be told apart from other clients'"};
+      }
+
+      context_t *context;
+      {
+        std::scoped_lock lock {action_target().mutex};
+        context = action_target().context;
+      }
+      if (!context) {
+        return {false, "The xgpad driver isn't in use"};
+      }
+
+      auto promise = std::make_shared<std::promise<client_commands::action_result_t>>();
+      auto future = promise->get_future();
+      auto work = [context, client_uuid = run.client_uuid, target = *target, promise]() {
+        // The context may have gone away while this waited for the input thread
+        auto &shared = action_target();
+        std::scoped_lock lock {shared.mutex};
+        if (shared.context != context) {
+          promise->set_value({false, "The xgpad driver isn't in use"});
+          return;
+        }
+        promise->set_value(switch_client_pads(*context, client_uuid, target));
+      };
+      if (task_pool.running()) {
+        task_pool.push(std::move(work));
+      } else {
+        work();
+      }
+      if (future.wait_for(switch_timeout) != std::future_status::ready) {
+        return {false, "Switching the controllers took too long"};
+      }
+      return future.get();
+    }
+
+    /**
+     * @brief Decide how an `xgpad.set_profile` command shows in a client's menu.
+     * @param run Who is opening the menu; only the client UUID is set.
+     * @param args Profile the command switches to.
+     * @return Hidden without pads to switch, marked for the profile all of the client's pads have.
+     */
+    client_commands::action_display_t set_profile_status(const client_commands::run_context_t &run, const std::vector<std::string> &args) {
+      client_commands::action_display_t display;
+      const auto target = args.empty() ? std::nullopt : profile_from_option(args.front());
+      auto &shared = action_target();
+      std::scoped_lock lock {shared.mutex};
+      if (!target || !shared.context) {
+        display.hidden = true;
+        return display;
+      }
+      std::scoped_lock pads_lock {shared.context->mutex};
+      switch (switch_menu_state(occupied_slots(*shared.context), run.client_uuid, *target, driver_supports_dualsense())) {
+        case switch_menu_e::hidden:
+          display.hidden = true;
+          break;
+        case switch_menu_e::active:
+          display.icon = "material:check_circle";
+          break;
+        case switch_menu_e::available:
+          break;
+      }
+      return display;
+    }
+  }  // namespace
+
   void destroy(context_t *context) {
     if (!context) {
       return;
+    }
+    {
+      // Wait for a running switch, and keep later ones off this context
+      auto &shared = action_target();
+      std::scoped_lock lock {shared.mutex};
+      if (shared.context == context) {
+        shared.context = nullptr;
+        client_commands::unregister_action(set_profile_action);
+      }
     }
     {
       std::lock_guard lock {context->cleanup_mutex};
@@ -937,10 +1188,24 @@ namespace platf::xgpad {
     }
     context->feedback_thread = std::thread {&context_t::feedback_loop, context.get()};
     context->cleanup_thread = std::thread {&context_t::cleanup_loop, context.get()};
+    {
+      std::scoped_lock lock {action_target().mutex};
+      action_target().context = context.get();
+    }
+    client_commands::register_action(set_profile_action, run_set_profile, set_profile_status);
     return context;
   }
 
-  int alloc(context_t &context, const gamepad_id_t &id, const profile_e profile, feedback_queue_t feedback_queue) {
+  std::optional<profile_e> session_profile(context_t &context, const std::string_view client_uuid) {
+    std::lock_guard lock {context.mutex};
+    const auto it = context.session_profiles.find(client_uuid);
+    if (client_uuid.empty() || it == context.session_profiles.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
+  int alloc(context_t &context, const gamepad_id_t &id, const profile_e profile, feedback_queue_t feedback_queue, const std::string &client_uuid) {
     if (id.globalIndex < 0 || id.globalIndex >= MAX_GAMEPADS) {
       return -1;
     }
@@ -948,6 +1213,7 @@ namespace platf::xgpad {
     auto pad = std::make_unique<pad_t>();
     pad->index = static_cast<unsigned>(id.globalIndex);
     pad->profile = profile;
+    pad->client_uuid = client_uuid;
     pad->ds5.back_as_touchpad = config::input.ds4_back_as_touchpad_click;
     pad->token = make_token(pad->index);
     pad->client_relative_index = id.clientRelativeIndex;
@@ -1020,6 +1286,7 @@ namespace platf::xgpad {
     }
     auto &pad = *context.pads[nr];
     check_driver_attached(pad);
+    pad.state = state;
     if (pad.profile == profile_e::dualsense) {
       pad.ds5.gamepad = state;
       write_ds5_input(context, pad);
@@ -1056,35 +1323,18 @@ namespace platf::xgpad {
   }
 
   void free(context_t &context, const int nr) {
-    std::unique_ptr<pad_t> pad;
-    {
-      std::lock_guard lock {context.mutex};
-      if (!has(&context, nr)) {
-        return;
-      }
-      pad = std::move(context.pads[nr]);
-      if (pad->rumble_stop_task) {
-        task_pool.cancel(pad->rumble_stop_task);
-        pad->rumble_stop_task = nullptr;
-      }
-      if (pad->repeat_task) {
-        task_pool.cancel(pad->repeat_task);
-        pad->repeat_task = nullptr;
-      }
+    const auto pad = remove_pad(context, nr);
+    if (!pad || pad->client_uuid.empty()) {
+      return;
     }
-    SetEvent(context.wake_event);
-    if (pad->device) {
-      context.api.close(pad->device);
-    }
-    BOOST_LOG(info) << "xgpad: removed virtual "sv << profile_name(pad->profile) << " controller "sv << nr;
 
-    // Delete the device nodes once PnP has finished removing the device, so none are left in Device Manager.
-    if (!pad->instance_id.empty()) {
-      {
-        std::lock_guard lock {context.cleanup_mutex};
-        context.cleanup_pending.push_back(pad->instance_id);
-      }
-      context.cleanup_cv.notify_one();
+    // A client's switch lasts until its last pad goes, normally when its stream ends
+    std::lock_guard lock {context.mutex};
+    const auto slots = occupied_slots(context);
+    if (std::ranges::none_of(slots, [&pad](const pad_slot_t &slot) {
+          return slot.client_uuid == pad->client_uuid;
+        })) {
+      context.session_profiles.erase(pad->client_uuid);
     }
   }
 
