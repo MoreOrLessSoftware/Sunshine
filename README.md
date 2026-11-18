@@ -67,7 +67,7 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 - The host answers the client's clock sync requests on the video port.
 
 > [!TIP]
-> Because frames are captured when they're presented rather than on the display's refresh, you can stream at a higher frame rate than your physical display or dummy HDMI plug supports - for example, 4K at 120 FPS from a 4K/60 Hz display, with proper frame pacing. Use the V-Sync Toggle plugin to turn off v-sync so the game isn't held to the display's refresh rate, and the RTSS Frame Limit plugin to cap it at the stream's frame rate.
+> Because frames are captured when they're presented rather than on the display's refresh, you can stream at a higher frame rate than your physical display or dummy HDMI plug supports - for example, 4K at 120 FPS from a 4K/60 Hz display, with proper frame pacing. Use the V-Sync Toggle plugin to turn off v-sync so the game isn't held to the display's refresh rate, and the RTSS Frame Limit plugin to cap it at the stream's frame rate. *Windows 11 hosts only*.
 
 ### AMF Direct Encoding
 
