@@ -383,8 +383,9 @@ supported on the current platform.
     <tr>
         <td rowspan="4">Choices</td>
         <td>all</td>
-        <td>Prefer Virtual HID Driver when it is available and licensed. Otherwise use the Sunshine Xbox Series Driver
-            (xgpad) for Xbox controllers when it is installed, and ViGEmBus as a limited fallback.</td>
+        <td>Prefer Virtual HID Driver when it is available and licensed. Otherwise use the Sunshine Gamepad Driver
+            (xgpad) when it is installed, and ViGEmBus as a limited fallback for what xgpad does not cover, such as an
+            explicit `x360` or `ds4` choice.</td>
     </tr>
     <tr>
         <td>virtualhid</td>
@@ -396,8 +397,11 @@ supported on the current platform.
     </tr>
     <tr>
         <td>xgpad</td>
-        <td>Emulate every controller as an Xbox Series X|S controller with the Sunshine Xbox Series Driver (xgpad),
-            falling back to the other drivers when it is not installed. Install it with the **Xbox Series Controller
+        <td>Emulate every controller with the Sunshine Gamepad Driver (xgpad), falling back to the other drivers
+            when it is not installed. It creates DualSense controllers, with motion sensors, touchpad, lightbar and
+            adaptive triggers, for the `ds4` and `ds5` choices and for the controllers `auto` makes PlayStation-style
+            controllers; every other controller is an Xbox Series X|S controller. Games that only support Xbox
+            controllers see a DualSense only through Steam Input. Install it with the **Xbox Series Controller
             Driver** plugin.</td>
     </tr>
 </table>
@@ -436,7 +440,7 @@ supported on the current platform.
     </tr>
     <tr>
         <td>ds5</td>
-        <td>DualShock 5 controller (PS5)</td>
+        <td>DualSense controller (PS5)</td>
     </tr>
     <tr>
         <td>switch</td>

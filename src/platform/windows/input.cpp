@@ -643,17 +643,20 @@ namespace platf {
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
-    if (raw->xgpad && xgpad::should_allocate_xgpad({
-                        .driver_policy = config::input.gamepad_driver,
-                        .gamepad = config::input.gamepad,
-                        .client_type = metadata.type,
-                        .client_capabilities = metadata.capabilities,
-                        .vigem_available = raw->vigem != nullptr,
-                        .motion_as_ds4 = config::input.motion_as_ds4,
-                        .touchpad_as_ds4 = config::input.touchpad_as_ds4,
-                      }) &&
-        xgpad::alloc(*raw->xgpad, id, feedback_queue) == 0) {
-      return 0;
+    if (raw->xgpad) {
+      const auto profile = xgpad::choose_xgpad_profile({
+        .driver_policy = config::input.gamepad_driver,
+        .gamepad = config::input.gamepad,
+        .client_type = metadata.type,
+        .client_capabilities = metadata.capabilities,
+        .vigem_available = raw->vigem != nullptr,
+        .motion_as_ds4 = config::input.motion_as_ds4,
+        .touchpad_as_ds4 = config::input.touchpad_as_ds4,
+        .dualsense_supported = xgpad::driver_supports_dualsense(),
+      });
+      if (profile && xgpad::alloc(*raw->xgpad, id, *profile, feedback_queue) == 0) {
+        return 0;
+      }
     }
 
     const auto use_virtualhid = should_use_virtualhid_gamepads(*raw);
@@ -1051,7 +1054,8 @@ namespace platf {
   void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
     auto raw = (input_raw_t *) input.get();
     if (xgpad::has(raw->xgpad.get(), touch.id.globalIndex)) {
-      return;  // The Xbox Series controller has no touchpad
+      xgpad::touch(*raw->xgpad, touch);  // ignored by Xbox Series pads, which have no touchpad
+      return;
     }
 
     if (virtualhid::has_gamepad(raw->virtualhid, touch.id.globalIndex)) {
@@ -1137,7 +1141,8 @@ namespace platf {
   void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
     auto raw = (input_raw_t *) input.get();
     if (xgpad::has(raw->xgpad.get(), motion.id.globalIndex)) {
-      return;  // The Xbox Series controller has no motion sensors
+      xgpad::motion(*raw->xgpad, motion);  // ignored by Xbox Series pads, which have no motion sensors
+      return;
     }
 
     if (virtualhid::has_gamepad(raw->virtualhid, motion.id.globalIndex)) {
@@ -1174,7 +1179,8 @@ namespace platf {
   void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
     auto raw = (input_raw_t *) input.get();
     if (xgpad::has(raw->xgpad.get(), battery.id.globalIndex)) {
-      return;  // Battery reporting is not part of the xgpad path
+      xgpad::battery(*raw->xgpad, battery);  // ignored by Xbox Series pads
+      return;
     }
 
     if (virtualhid::has_gamepad(raw->virtualhid, battery.id.globalIndex)) {

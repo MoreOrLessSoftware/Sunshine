@@ -28,10 +28,12 @@
 #include <vector>
 
 // local includes
+#include "playstation_report.h"
 #include "src/globals.h"
 #include "src/logging.h"
 #include "src/utility.h"
 #include "xgpad.h"
+#include "xgpad_ds5_report.h"
 #include "xgpad_report.h"
 
 using namespace std::literals;
@@ -118,9 +120,17 @@ namespace platf::xgpad {
     constexpr GUID hid_class_guid = {0x745a17a0, 0x74d3, 0x11d0, {0xb6, 0xfe, 0x00, 0xa0, 0xc9, 0x0f, 0x57, 0xda}};
 
     /**
-     * @brief Hardware ID the xgpad INF matches (BLE-style tail, see drivers/xgpad/driver/xgpad.inf).
+     * @brief Hardware ID of Xbox Series pads (BLE-style tail, see drivers/xgpad/driver/xgpad.inf).
      */
     constexpr wchar_t hardware_ids[] = XGPAD_HARDWARE_IDS;
+
+    /**
+     * @brief Hardware ID of DualSense pads, matched only by drivers that have the DualSense profile.
+     */
+    constexpr wchar_t dualsense_hardware_ids[] = XGPAD_HARDWARE_IDS_DUALSENSE;
+
+    constexpr auto ds5_repeat_interval = 100ms;  ///< Longest gap between DualSense reports, so the sensor timestamp keeps moving.
+    constexpr std::uint16_t motion_report_rate = 100;  ///< Motion events per second requested from clients for DualSense pads.
 
     /**
      * @brief Prefix shared by all hardware IDs in the xgpad INF.
@@ -155,11 +165,16 @@ namespace platf::xgpad {
     /**
      * @brief Instance ID prefixes of xgpad device nodes (upper case).
      *
-     * The HID child prefix ends in "&IG_00\": a real Bluetooth pad has its address before "&IG_00" and never matches.
+     * The Xbox HID child prefix ends in "&IG_00\": a real Bluetooth pad has its address before "&IG_00" and never
+     * matches. The DualSense prefixes carry "&REV_0100", which a real DualSense's instance IDs never have (USB:
+     * HID\VID_054C&PID_0CE6&MI_03\..., Bluetooth: HID\{00001124-...}_VID&0002054C_PID&0CE6\...).
      */
     constexpr std::wstring_view xgpad_instance_prefixes[] = {
       L"SWD\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&02045E_PID&0B13_REV&0509\\",
       L"HID\\{00001812-0000-1000-8000-00805F9B34FB}&DEV&VID_045E&PID_0B13&REV_0509&IG_00\\",
+      L"SWD\\VID_054C&PID_0CE6&REV_0100\\",
+      L"HID\\VID_054C&PID_0CE6&REV_0100\\",
+      L"HID\\VID_054C&PID_0CE6&REV_0100&IG_",
       // Naming used by earlier xgpad test builds.
       L"SWD\\SUNSHINEXGPAD\\",
       L"HID\\SUNSHINEXGPAD&IG_00\\",
@@ -250,6 +265,7 @@ namespace platf::xgpad {
    */
   struct pad_t {
     unsigned index = 0;  ///< Global gamepad index; also the device instance number.
+    profile_e profile = profile_e::xbox_series;  ///< Controller the pad presents.
     std::wstring token;  ///< Unique token naming this device's shared objects.
     HANDLE section = nullptr;  ///< Shared memory section.
     XGPAD_SHARED *shared = nullptr;  ///< Mapped view of the section.
@@ -269,6 +285,13 @@ namespace platf::xgpad {
     thread_pool_util::ThreadPool::task_id_t rumble_stop_task = nullptr;  ///< Pending stop for a finite-duration rumble.
     std::uint32_t rumble_generation = 0;  ///< Incremented per output report; stale stop tasks are ignored.
     long output_consumed = 0;  ///< Output reports already read from the shared ring.
+
+    ds5_state_t ds5;  ///< DualSense state kept between client events.
+    playstation::touch_slots_t touch_slots;  ///< DualSense touch slot of each active touch pointer.
+    std::uint8_t ds5_seq = 0;  ///< DualSense report counter.
+    thread_pool_util::ThreadPool::task_id_t repeat_task = nullptr;  ///< Pending repeat of the DualSense report.
+    std::optional<std::array<std::uint8_t, 3>> sent_lightbar;  ///< Last lightbar color sent to the client.
+    std::optional<std::uint8_t> sent_player_leds;  ///< Last player LED mask sent to the client.
 
     /**
      * @brief Release all handles; the device must already be closed.
@@ -394,17 +417,23 @@ namespace platf::xgpad {
      */
     void forward_rumble(pad_t &pad) {
       long lost = 0;
+      const auto reports = read_output_reports(*pad.shared, pad.output_consumed, &lost);
+      if (lost > 0) {
+        BOOST_LOG(debug) << "xgpad: pad "sv << pad.index << " missed "sv << lost << " output reports"sv;
+      }
+      if (pad.profile == profile_e::dualsense) {
+        forward_ds5_output(pad, reports);
+        return;
+      }
+
       bool any = false;
       XGPAD_OUTPUT_REPORT report {};
-      for (const auto &entry : read_output_reports(*pad.shared, pad.output_consumed, &lost)) {
+      for (const auto &entry : reports) {
         if (XGPAD_OUTPUT_REPORT rumble; xbox_output_report(entry, rumble)) {
           pad.rumble = apply_output_report(rumble, pad.rumble);
           report = rumble;
           any = true;
         }
-      }
-      if (lost > 0) {
-        BOOST_LOG(debug) << "xgpad: pad "sv << pad.index << " missed "sv << lost << " output reports"sv;
       }
       if (!any) {
         return;
@@ -427,6 +456,40 @@ namespace platf::xgpad {
                                  .task_id;
       }
 
+      send_rumble(pad);
+    }
+
+    /**
+     * @brief Send what a DualSense pad's output reports changed to the client; the caller holds the lock.
+     * @param pad DualSense pad.
+     * @param reports Output reports from the driver, oldest first.
+     */
+    static void forward_ds5_output(pad_t &pad, const std::vector<XGPAD_REPORT> &reports) {
+      for (const auto &entry : reports) {
+        const auto output = parse_ds5_output(entry);
+        if (!output) {
+          continue;
+        }
+        if (output->rumble) {
+          pad.rumble.low_freq = (*output->rumble)[0];
+          pad.rumble.high_freq = (*output->rumble)[1];
+        }
+        if (!pad.feedback_queue) {
+          continue;
+        }
+        if (const auto &triggers = output->triggers) {
+          pad.feedback_queue->raise(gamepad_feedback_msg_t::make_adaptive_triggers(pad.client_relative_index, triggers->flags, triggers->type_left, triggers->type_right, triggers->left, triggers->right));
+        }
+        if (output->lightbar && output->lightbar != pad.sent_lightbar) {
+          const auto &color = *output->lightbar;
+          pad.feedback_queue->raise(gamepad_feedback_msg_t::make_rgb_led(pad.client_relative_index, color[0], color[1], color[2]));
+          pad.sent_lightbar = output->lightbar;
+        }
+        if (output->player_leds && output->player_leds != pad.sent_player_leds) {
+          pad.feedback_queue->raise(gamepad_feedback_msg_t::make_player_leds(pad.client_relative_index, *output->player_leds, 0));
+          pad.sent_player_leds = output->player_leds;
+        }
+      }
       send_rumble(pad);
     }
 
@@ -499,6 +562,92 @@ namespace platf::xgpad {
     }
 
     /**
+     * @brief Convert a QueryPerformanceCounter value to the DualSense sensor timestamp (0.33 us units).
+     * @param counter QPC value.
+     * @return Timestamp; it wraps around like a real pad's.
+     */
+    std::uint32_t ds5_timestamp(const std::int64_t counter) {
+      static const std::int64_t frequency = [] {
+        LARGE_INTEGER value;
+        QueryPerformanceFrequency(&value);
+        return value.QuadPart;
+      }();
+      constexpr std::int64_t units_per_second = 3'000'000;
+      // Split the multiplication so it cannot overflow after a long uptime
+      return static_cast<std::uint32_t>((counter / frequency) * units_per_second + (counter % frequency) * units_per_second / frequency);
+    }
+
+    void schedule_ds5_repeat(context_t &context, pad_t &pad);
+
+    /**
+     * @brief Publish a DualSense pad's current state as a new input report.
+     *
+     * Runs on the task pool thread, like all input, which keeps the input ring single-writer. A repeat is scheduled
+     * so hosts keep receiving reports (with a moving sensor timestamp) while the client sends nothing.
+     *
+     * @param context xgpad context.
+     * @param pad DualSense pad.
+     */
+    void write_ds5_input(context_t &context, pad_t &pad) {
+      LARGE_INTEGER now;
+      QueryPerformanceCounter(&now);
+      pad.shared->inputQpc = now.QuadPart;
+      const auto report = make_ds5_input_report(pad.ds5, pad.ds5_seq++, ds5_timestamp(now.QuadPart));
+      publish_input_report(*pad.shared, XGPAD_DS_INPUT_REPORT_ID, std::span {reinterpret_cast<const std::uint8_t *>(&report), sizeof(report)});
+      SetEvent(pad.input_event);
+      schedule_ds5_repeat(context, pad);
+    }
+
+    /**
+     * @brief Replace a DualSense pad's pending repeat with one ds5_repeat_interval from now.
+     * @param context xgpad context.
+     * @param pad DualSense pad.
+     */
+    void schedule_ds5_repeat(context_t &context, pad_t &pad) {
+      if (pad.repeat_task) {
+        task_pool.cancel(pad.repeat_task);
+      }
+      pad.repeat_task = task_pool
+                          .pushDelayed(
+                            [&context, slot = pad.index, owner = &pad]() {
+                              // free() cancels the repeat, so a pad in the slot is the one that scheduled it
+                              if (!has(&context, static_cast<int>(slot)) || context.pads[slot].get() != owner) {
+                                return;
+                              }
+                              owner->repeat_task = nullptr;
+                              write_ds5_input(context, *owner);
+                            },
+                            ds5_repeat_interval
+                          )
+                          .task_id;
+    }
+
+    /**
+     * @brief Ask the client to send motion events for a DualSense pad.
+     * @param pad DualSense pad with its feedback queue set.
+     */
+    void request_motion(pad_t &pad) {
+      if (!pad.feedback_queue) {
+        return;
+      }
+      pad.feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(pad.client_relative_index, LI_MOTION_TYPE_ACCEL, motion_report_rate));
+      pad.feedback_queue->raise(gamepad_feedback_msg_t::make_motion_event_state(pad.client_relative_index, LI_MOTION_TYPE_GYRO, motion_report_rate));
+    }
+
+    /**
+     * @brief Find the DualSense pad in a slot.
+     * @param context xgpad context.
+     * @param nr Global gamepad index.
+     * @return The pad, or null when the slot is empty or holds an Xbox Series pad.
+     */
+    pad_t *dualsense_pad(context_t &context, const int nr) {
+      if (!has(&context, nr) || context.pads[nr]->profile != profile_e::dualsense) {
+        return nullptr;
+      }
+      return context.pads[nr].get();
+    }
+
+    /**
      * @brief Log once whether the driver picked up a pad's shared memory.
      *
      * Runs on the input path, so it only reads a shared flag. An outdated driver package enumerates the
@@ -558,7 +707,7 @@ namespace platf::xgpad {
       std::memset(pad.shared, 0, sizeof(*pad.shared));
       pad.shared->magic = XGPAD_SHARED_MAGIC;
       pad.shared->version = XGPAD_SHARED_VERSION;  // the driver starts from a neutral state on its own
-      pad.shared->profile = XGPAD_PROFILE_XBOX_SERIES;
+      pad.shared->profile = pad.profile == profile_e::dualsense ? XGPAD_PROFILE_DUALSENSE : XGPAD_PROFILE_XBOX_SERIES;
       return true;
     }
 
@@ -573,10 +722,11 @@ namespace platf::xgpad {
       sw_device_create_info_t info {};
       info.cbSize = sizeof(info);
       info.pszInstanceId = instance.c_str();
-      info.pszzHardwareIds = hardware_ids;
+      const bool dualsense = pad.profile == profile_e::dualsense;
+      info.pszzHardwareIds = dualsense ? dualsense_hardware_ids : hardware_ids;
       info.pszzCompatibleIds = L"\0";
       info.CapabilityFlags = sw_cap_removable | sw_cap_silent_install | sw_cap_driver_required;
-      info.pszDeviceDescription = L"Sunshine Virtual Xbox Series Controller";
+      info.pszDeviceDescription = dualsense ? L"Sunshine Virtual DualSense Controller" : L"Sunshine Virtual Xbox Series Controller";
 
       // Hand the object name token and the profile to the driver.
       std::array<devproperty_t, 2> properties {};
@@ -584,7 +734,7 @@ namespace platf::xgpad {
       properties[0].Type = devprop_type_string;
       properties[0].BufferSize = static_cast<ULONG>((pad.token.size() + 1) * sizeof(wchar_t));
       properties[0].Buffer = const_cast<wchar_t *>(pad.token.c_str());
-      ULONG profile = XGPAD_PROFILE_XBOX_SERIES;
+      ULONG profile = dualsense ? XGPAD_PROFILE_DUALSENSE : XGPAD_PROFILE_XBOX_SERIES;
       properties[1].CompKey.Key = profile_propkey;
       properties[1].Type = devprop_type_uint32;
       properties[1].BufferSize = sizeof(profile);
@@ -595,7 +745,7 @@ namespace platf::xgpad {
         ResetEvent(pad.created_event);
         pad.create_result = E_PENDING;
         pad.device = nullptr;
-        result = api.create(XGPAD_SWD_ENUMERATOR, L"HTREE\\ROOT\\0", &info, static_cast<ULONG>(properties.size()), properties.data(), on_device_created, &pad, &pad.device);
+        result = api.create(dualsense ? XGPAD_SWD_ENUMERATOR_DUALSENSE : XGPAD_SWD_ENUMERATOR, L"HTREE\\ROOT\\0", &info, static_cast<ULONG>(properties.size()), properties.data(), on_device_created, &pad, &pad.device);
         if (SUCCEEDED(result)) {
           if (WaitForSingleObject(pad.created_event, static_cast<DWORD>(std::chrono::milliseconds(create_timeout).count())) != WAIT_OBJECT_0) {
             result = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
@@ -621,6 +771,7 @@ namespace platf::xgpad {
      */
     struct driver_info_t {
       bool installed = false;  ///< A driver matching the xgpad hardware ID is in the driver store.
+      bool dualsense = false;  ///< The driver also matches the DualSense hardware ID.
       std::string version;  ///< Dotted driver version, empty when not installed.
     };
 
@@ -644,7 +795,8 @@ namespace platf::xgpad {
       if (SetupDiBuildDriverInfoList(set, nullptr, SPDIT_CLASSDRIVER)) {
         SP_DRVINFO_DATA_W driver {};
         driver.cbSize = sizeof(driver);
-        for (DWORD i = 0; !result.installed && SetupDiEnumDriverInfoW(set, nullptr, SPDIT_CLASSDRIVER, i, &driver); ++i) {
+        // Every model line of the INF is its own entry: keep going to find the DualSense one.
+        for (DWORD i = 0; SetupDiEnumDriverInfoW(set, nullptr, SPDIT_CLASSDRIVER, i, &driver); ++i) {
           DWORD size = 0;
           SetupDiGetDriverInfoDetailW(set, nullptr, &driver, nullptr, 0, &size);
           if (size < sizeof(SP_DRVINFO_DETAIL_DATA_W)) {
@@ -657,6 +809,7 @@ namespace platf::xgpad {
               _wcsnicmp(detail->HardwareID, hardware_id_prefix.data(), hardware_id_prefix.size()) == 0) {
             result.installed = true;
             result.version = driver_version_text(driver.DriverVersion);
+            result.dualsense |= _wcsicmp(detail->HardwareID, dualsense_hardware_ids) == 0;
           }
         }
         SetupDiDestroyDriverInfoList(set, nullptr, SPDIT_CLASSDRIVER);
@@ -677,8 +830,9 @@ namespace platf::xgpad {
       std::lock_guard lock {mutex};
       if (refresh || !cache) {
         auto current = query_driver_info();
-        if (!cache || cache->installed != current.installed) {
-          BOOST_LOG(info) << "xgpad: driver package "sv << (current.installed ? "found"sv : "not found"sv);
+        if (!cache || cache->installed != current.installed || cache->dualsense != current.dualsense) {
+          BOOST_LOG(info) << "xgpad: driver package "sv << (current.installed ? "found"sv : "not found"sv)
+                          << (current.installed ? (current.dualsense ? " (Xbox Series and DualSense)"sv : " (Xbox Series only)"sv) : ""sv);
         }
         cache = std::move(current);
       }
@@ -692,6 +846,10 @@ namespace platf::xgpad {
 
   std::string driver_version() {
     return cached_driver_info(false).version;
+  }
+
+  bool driver_supports_dualsense() {
+    return cached_driver_info(false).dualsense;
   }
 
   bool is_xgpad_instance_id(const std::wstring_view instance_id) {
@@ -782,13 +940,15 @@ namespace platf::xgpad {
     return context;
   }
 
-  int alloc(context_t &context, const gamepad_id_t &id, feedback_queue_t feedback_queue) {
+  int alloc(context_t &context, const gamepad_id_t &id, const profile_e profile, feedback_queue_t feedback_queue) {
     if (id.globalIndex < 0 || id.globalIndex >= MAX_GAMEPADS) {
       return -1;
     }
 
     auto pad = std::make_unique<pad_t>();
     pad->index = static_cast<unsigned>(id.globalIndex);
+    pad->profile = profile;
+    pad->ds5.back_as_touchpad = config::input.ds4_back_as_touchpad_click;
     pad->token = make_token(pad->index);
     pad->client_relative_index = id.clientRelativeIndex;
     pad->feedback_queue = std::move(feedback_queue);
@@ -810,18 +970,25 @@ namespace platf::xgpad {
         context.api.close(pad->device);
         pad->device = nullptr;
       }
-      BOOST_LOG(warning) << "xgpad: could not create virtual Xbox Series controller "sv << id.globalIndex << " ["sv
+      BOOST_LOG(warning) << "xgpad: could not create virtual "sv << profile_name(profile) << " controller "sv << id.globalIndex << " ["sv
                          << util::hex(result).to_string_view() << "]; is the xgpad driver installed and Sunshine elevated?"sv;
       return -1;
     }
 
-    BOOST_LOG(info) << "Gamepad "sv << id.globalIndex << " will be Xbox Series controller (xgpad, token "sv
+    BOOST_LOG(info) << "Gamepad "sv << id.globalIndex << " will be "sv << profile_name(profile) << " controller (xgpad, token "sv
                     << std::string(pad->token.begin(), pad->token.end()) << ", created in "sv << create_ms << " ms)"sv;
+    pad_t *created = pad.get();
     {
       std::lock_guard lock {context.mutex};
+      if (profile == profile_e::dualsense) {
+        request_motion(*created);
+      }
       context.pads[id.globalIndex] = std::move(pad);
     }
     SetEvent(context.wake_event);
+    if (profile == profile_e::dualsense) {
+      write_ds5_input(context, *created);  // hosts see the pad at rest, and the repeat starts
+    }
     return 0;
   }
 
@@ -838,17 +1005,54 @@ namespace platf::xgpad {
     pad.client_relative_index = id.clientRelativeIndex;
     pad.feedback_queue = std::move(feedback_queue);
     pad.sent = {};  // resend the current rumble state to the resumed client on the next change
+    pad.sent_lightbar.reset();
+    pad.sent_player_leds.reset();
+    if (pad.profile == profile_e::dualsense) {
+      request_motion(pad);
+    }
     return 0;
   }
 
   void update(context_t &context, const int nr, const gamepad_state_t &state) {
-    // alloc/free/update all run on the input thread, so the slot cannot change underneath us.
+    // alloc/free/update/touch/motion/battery all run on the input thread, so the slot cannot change underneath us.
     if (!has(&context, nr)) {
       return;
     }
     auto &pad = *context.pads[nr];
     check_driver_attached(pad);
-    write_input(pad, make_input_report(state));
+    if (pad.profile == profile_e::dualsense) {
+      pad.ds5.gamepad = state;
+      write_ds5_input(context, pad);
+    } else {
+      write_input(pad, make_input_report(state));
+    }
+  }
+
+  void touch(context_t &context, const gamepad_touch_t &touch) {
+    auto *pad = dualsense_pad(context, touch.id.globalIndex);
+    if (!pad) {
+      return;
+    }
+    if (!ds5_apply_touch(pad->ds5, pad->touch_slots, touch)) {
+      BOOST_LOG(debug) << "xgpad: ignored touch event "sv << static_cast<unsigned>(touch.eventType) << " for pointer "sv << touch.pointerId
+                       << " on pad "sv << pad->index;
+      return;
+    }
+    write_ds5_input(context, *pad);
+  }
+
+  void motion(context_t &context, const gamepad_motion_t &motion) {
+    auto *pad = dualsense_pad(context, motion.id.globalIndex);
+    if (pad && ds5_apply_motion(pad->ds5, motion.motionType, motion.x, motion.y, motion.z)) {
+      write_ds5_input(context, *pad);
+    }
+  }
+
+  void battery(context_t &context, const gamepad_battery_t &battery) {
+    if (auto *pad = dualsense_pad(context, battery.id.globalIndex)) {
+      pad->ds5.status = ds5_battery_status(pad->ds5.status, battery.state, battery.percentage);
+      write_ds5_input(context, *pad);
+    }
   }
 
   void free(context_t &context, const int nr) {
@@ -863,12 +1067,16 @@ namespace platf::xgpad {
         task_pool.cancel(pad->rumble_stop_task);
         pad->rumble_stop_task = nullptr;
       }
+      if (pad->repeat_task) {
+        task_pool.cancel(pad->repeat_task);
+        pad->repeat_task = nullptr;
+      }
     }
     SetEvent(context.wake_event);
     if (pad->device) {
       context.api.close(pad->device);
     }
-    BOOST_LOG(info) << "xgpad: removed virtual Xbox Series controller "sv << nr;
+    BOOST_LOG(info) << "xgpad: removed virtual "sv << profile_name(pad->profile) << " controller "sv << nr;
 
     // Delete the device nodes once PnP has finished removing the device, so none are left in Device Manager.
     if (!pad->instance_id.empty()) {

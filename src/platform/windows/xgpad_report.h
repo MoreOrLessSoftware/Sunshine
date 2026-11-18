@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -181,6 +182,23 @@ namespace platf::xgpad {
   }
 
   /**
+   * @brief Controller an xgpad virtual pad presents.
+   */
+  enum class profile_e {
+    xbox_series,  ///< Xbox Series X|S controller (XInput through xinputhid).
+    dualsense,  ///< DualSense controller (motion, touchpad, lightbar, adaptive triggers).
+  };
+
+  /**
+   * @brief Name of a profile for logs.
+   * @param profile Pad profile.
+   * @return "Xbox Series" or "DualSense".
+   */
+  constexpr std::string_view profile_name(const profile_e profile) {
+    return profile == profile_e::dualsense ? "DualSense" : "Xbox Series";
+  }
+
+  /**
    * @brief Inputs for choosing between xgpad and ViGEmBus for one controller.
    */
   struct allocation_choice_t {
@@ -191,49 +209,78 @@ namespace platf::xgpad {
     bool vigem_available;  ///< Whether ViGEmBus can create controllers.
     bool motion_as_ds4;  ///< config::input.motion_as_ds4
     bool touchpad_as_ds4;  ///< config::input.touchpad_as_ds4
+    bool dualsense_supported;  ///< Whether the installed xgpad driver has the DualSense profile.
   };
 
   /**
-   * @brief Decide whether a controller should be created through xgpad (when the xgpad context exists).
-   *
-   * With an explicit "xgpad" policy every controller is an Xbox Series controller. Under "all", xgpad covers
-   * the Xbox profiles while ViGEmBus keeps what only it can do: DualShock 4 (explicitly, or automatically
-   * for PlayStation clients and the motion/touchpad-as-DS4 options) and an explicit Xbox 360 choice.
-   *
-   * @param choice Policy, profile, client metadata and ViGEmBus availability.
-   * @return True to allocate through xgpad, false to use the remaining drivers.
+   * @brief Check whether a controller should be a PlayStation controller when its type is chosen automatically.
+   * @param choice Client metadata and the motion/touchpad options.
+   * @return True for PlayStation clients, and for clients with motion sensors or a touchpad when the matching
+   *         option is on.
    */
-  constexpr bool should_allocate_xgpad(const allocation_choice_t &choice) {
+  constexpr bool wants_playstation(const allocation_choice_t &choice) {
+    constexpr std::uint8_t ctype_ps = 0x02;  // LI_CTYPE_PS
+    constexpr std::uint16_t ccap_touchpad = 0x08;  // LI_CCAP_TOUCHPAD
+    constexpr std::uint16_t ccap_motion = 0x10 | 0x20;  // LI_CCAP_ACCEL | LI_CCAP_GYRO
+    return choice.client_type == ctype_ps ||
+           (choice.motion_as_ds4 && (choice.client_capabilities & ccap_motion)) ||
+           (choice.touchpad_as_ds4 && (choice.client_capabilities & ccap_touchpad));
+  }
+
+  /**
+   * @brief Decide whether a controller is created through xgpad (when the xgpad context exists), and as what.
+   *
+   * With an explicit "xgpad" policy every controller is an xgpad pad: a DualSense for the PlayStation profiles and,
+   * automatically, for controllers wants_playstation() picks; an Xbox Series controller otherwise, or when the
+   * installed driver predates the DualSense profile. Under "all", xgpad covers the Xbox profiles and the DualSense,
+   * while ViGEmBus keeps an explicit DualShock 4 or Xbox 360 choice, and what xgpad cannot present.
+   *
+   * @param choice Policy, profile, client metadata and driver availability.
+   * @return Profile to allocate through xgpad, or empty to use the remaining drivers.
+   */
+  constexpr std::optional<profile_e> choose_xgpad_profile(const allocation_choice_t &choice) {
+    const auto &gamepad = choice.gamepad;
+    const bool playstation_profile = gamepad == "ds5" || gamepad == "ds4";
+    const auto dualsense_or_xbox = choice.dualsense_supported ? profile_e::dualsense : profile_e::xbox_series;
+
     if (choice.driver_policy == "xgpad") {
-      return true;
+      if (playstation_profile) {
+        return dualsense_or_xbox;
+      }
+      if (gamepad == "auto" && wants_playstation(choice)) {
+        return dualsense_or_xbox;
+      }
+      return profile_e::xbox_series;
     }
     if (!choice.driver_policy.empty() && choice.driver_policy != "all") {
-      return false;  // "vigembus" / "virtualhid" never use xgpad
+      return std::nullopt;  // "vigembus" / "virtualhid" never use xgpad
     }
 
-    const auto &gamepad = choice.gamepad;
     if (gamepad == "xseries" || gamepad == "xone") {
-      return true;
+      return profile_e::xbox_series;
     }
     if (gamepad == "x360") {
-      return !choice.vigem_available;
+      return choice.vigem_available ? std::nullopt : std::optional {profile_e::xbox_series};
+    }
+    if (gamepad == "ds5") {
+      return choice.dualsense_supported ? std::optional {profile_e::dualsense} : std::nullopt;
+    }
+    if (gamepad == "ds4") {
+      return !choice.vigem_available && choice.dualsense_supported ? std::optional {profile_e::dualsense} : std::nullopt;
     }
     if (gamepad != "auto") {
-      return false;  // ds4, ds5, switch, generic: not an Xbox profile
+      return std::nullopt;  // switch, generic: not something xgpad presents
     }
 
-    // Automatic selection: leave controllers ViGEmBus would make a DualShock 4 to ViGEmBus
-    if (choice.vigem_available) {
-      constexpr std::uint8_t ctype_ps = 0x02;  // LI_CTYPE_PS
-      constexpr std::uint16_t ccap_touchpad = 0x08;  // LI_CCAP_TOUCHPAD
-      constexpr std::uint16_t ccap_motion = 0x10 | 0x20;  // LI_CCAP_ACCEL | LI_CCAP_GYRO
-      if (choice.client_type == ctype_ps ||
-          (choice.motion_as_ds4 && (choice.client_capabilities & ccap_motion)) ||
-          (choice.touchpad_as_ds4 && (choice.client_capabilities & ccap_touchpad))) {
-        return false;
+    if (wants_playstation(choice)) {
+      if (choice.dualsense_supported) {
+        return profile_e::dualsense;
+      }
+      if (choice.vigem_available) {
+        return std::nullopt;  // ViGEmBus makes it a DualShock 4
       }
     }
-    return true;
+    return profile_e::xbox_series;
   }
 
   /**

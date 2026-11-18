@@ -337,7 +337,7 @@ TEST_F(XgpadReportTest, PolicyUsesXgpad) {
 }
 
 namespace {
-  allocation_choice_t make_choice(std::string_view policy, std::string_view gamepad, std::uint8_t type, bool vigem) {
+  allocation_choice_t make_choice(std::string_view policy, std::string_view gamepad, std::uint8_t type, bool vigem, bool dualsense = false) {
     return {
       .driver_policy = policy,
       .gamepad = gamepad,
@@ -346,52 +346,106 @@ namespace {
       .vigem_available = vigem,
       .motion_as_ds4 = true,
       .touchpad_as_ds4 = true,
+      .dualsense_supported = dualsense,
     };
   }
+
+  constexpr auto xbox = std::optional {profile_e::xbox_series};
+  constexpr auto dualsense = std::optional {profile_e::dualsense};
+  constexpr std::optional<profile_e> none;
 }  // namespace
 
+TEST_F(XgpadReportTest, ProfileNames) {
+  EXPECT_EQ(profile_name(profile_e::xbox_series), "Xbox Series");
+  EXPECT_EQ(profile_name(profile_e::dualsense), "DualSense");
+}
+
 TEST_F(XgpadReportTest, ExplicitPolicyAlwaysAllocatesXgpad) {
-  EXPECT_TRUE(should_allocate_xgpad(make_choice("xgpad", "ds4", 0x02, true)));
-  EXPECT_TRUE(should_allocate_xgpad(make_choice("xgpad", "auto", 0x02, true)));
+  for (const bool vigem : {false, true}) {
+    // Without the DualSense profile every controller is an Xbox Series controller
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "ds4", 0x02, vigem)), xbox);
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "auto", 0x02, vigem)), xbox);
+
+    // With it, PlayStation profiles and PlayStation-style clients get a DualSense
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "ds4", 0x01, vigem, true)), dualsense);
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "ds5", 0x01, vigem, true)), dualsense);
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "auto", 0x02, vigem, true)), dualsense);
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "auto", 0x01, vigem, true)), xbox);
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "x360", 0x02, vigem, true)), xbox);
+    EXPECT_EQ(choose_xgpad_profile(make_choice("xgpad", "switch", 0x03, vigem, true)), xbox);
+  }
 }
 
 TEST_F(XgpadReportTest, AllPolicyRoutesXboxProfilesToXgpad) {
   for (const bool vigem : {false, true}) {
-    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "xseries", 0x00, vigem)));
-    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "xone", 0x00, vigem)));
-    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "auto", 0x01, vigem)));  // Xbox client
-    EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "auto", 0x00, vigem)));  // unknown client
-    EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "ds4", 0x00, vigem)));
-    EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "ds5", 0x00, vigem)));
+    for (const bool ds : {false, true}) {
+      EXPECT_EQ(choose_xgpad_profile(make_choice("all", "xseries", 0x00, vigem, ds)), xbox);
+      EXPECT_EQ(choose_xgpad_profile(make_choice("all", "xone", 0x00, vigem, ds)), xbox);
+      EXPECT_EQ(choose_xgpad_profile(make_choice("all", "auto", 0x01, vigem, ds)), xbox);  // Xbox client
+      EXPECT_EQ(choose_xgpad_profile(make_choice("all", "auto", 0x00, vigem, ds)), xbox);  // unknown client
+      EXPECT_EQ(choose_xgpad_profile(make_choice("all", "switch", 0x03, vigem, ds)), none);
+      EXPECT_EQ(choose_xgpad_profile(make_choice("all", "generic", 0x00, vigem, ds)), none);
+    }
   }
   // An explicit Xbox 360 choice goes to ViGEmBus when it can, xgpad otherwise
-  EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "x360", 0x00, true)));
-  EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "x360", 0x00, false)));
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "x360", 0x00, true)), none);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "x360", 0x00, false)), xbox);
+}
+
+TEST_F(XgpadReportTest, AllPolicyPlayStationProfiles) {
+  // DualSense: only xgpad can present it
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds5", 0x00, true, true)), dualsense);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds5", 0x00, false, true)), dualsense);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds5", 0x00, true, false)), none);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds5", 0x00, false, false)), none);
+
+  // DualShock 4: ViGEmBus when it can, otherwise the closest xgpad pad
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds4", 0x00, true, true)), none);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds4", 0x00, false, true)), dualsense);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "ds4", 0x00, false, false)), none);
 }
 
 TEST_F(XgpadReportTest, OtherPoliciesNeverAllocateXgpad) {
   for (const auto policy : {"vigembus", "virtualhid"}) {
-    EXPECT_FALSE(should_allocate_xgpad(make_choice(policy, "xseries", 0x01, false)));
-    EXPECT_FALSE(should_allocate_xgpad(make_choice(policy, "auto", 0x01, false)));
+    EXPECT_EQ(choose_xgpad_profile(make_choice(policy, "xseries", 0x01, false, true)), none);
+    EXPECT_EQ(choose_xgpad_profile(make_choice(policy, "auto", 0x02, false, true)), none);
   }
-  EXPECT_TRUE(should_allocate_xgpad(make_choice("", "auto", 0x01, false)));  // unset behaves like "all"
+  EXPECT_EQ(choose_xgpad_profile(make_choice("", "auto", 0x01, false)), xbox);  // unset behaves like "all"
+  EXPECT_EQ(choose_xgpad_profile(make_choice("", "auto", 0x02, false, true)), dualsense);
 }
 
-TEST_F(XgpadReportTest, AllPolicyKeepsDualShockClientsOnViGEmBus) {
-  // PlayStation client: DS4 through ViGEmBus when available, otherwise still a working Xbox controller
-  EXPECT_FALSE(should_allocate_xgpad(make_choice("all", "auto", 0x02, true)));
-  EXPECT_TRUE(should_allocate_xgpad(make_choice("all", "auto", 0x02, false)));
+TEST_F(XgpadReportTest, AllPolicyPlayStationClients) {
+  // With the DualSense profile, PlayStation clients get a DualSense even when ViGEmBus is installed
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "auto", 0x02, true, true)), dualsense);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "auto", 0x02, false, true)), dualsense);
 
-  // Motion / touchpad capable clients with the *_as_ds4 options
+  // Without it: DS4 through ViGEmBus when available, otherwise still a working Xbox controller
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "auto", 0x02, true)), none);
+  EXPECT_EQ(choose_xgpad_profile(make_choice("all", "auto", 0x02, false)), xbox);
+}
+
+TEST_F(XgpadReportTest, MotionAndTouchpadOptionsPickPlayStation) {
   auto choice = make_choice("all", "auto", 0x00, true);
+  EXPECT_FALSE(wants_playstation(choice));
+
   choice.client_capabilities = 0x10;  // LI_CCAP_ACCEL
-  EXPECT_FALSE(should_allocate_xgpad(choice));
+  EXPECT_TRUE(wants_playstation(choice));
+  EXPECT_EQ(choose_xgpad_profile(choice), none);  // ViGEmBus DualShock 4
+  choice.dualsense_supported = true;
+  EXPECT_EQ(choose_xgpad_profile(choice), dualsense);
   choice.motion_as_ds4 = false;
-  EXPECT_TRUE(should_allocate_xgpad(choice));
+  EXPECT_FALSE(wants_playstation(choice));
+  EXPECT_EQ(choose_xgpad_profile(choice), xbox);
+
+  choice.client_capabilities = 0x20;  // LI_CCAP_GYRO
+  EXPECT_FALSE(wants_playstation(choice));
+
   choice.client_capabilities = 0x08;  // LI_CCAP_TOUCHPAD
-  EXPECT_FALSE(should_allocate_xgpad(choice));
+  EXPECT_TRUE(wants_playstation(choice));
+  EXPECT_EQ(choose_xgpad_profile(choice), dualsense);
   choice.touchpad_as_ds4 = false;
-  EXPECT_TRUE(should_allocate_xgpad(choice));
+  EXPECT_FALSE(wants_playstation(choice));
+  EXPECT_EQ(choose_xgpad_profile(choice), xbox);
 }
 
 TEST_F(XgpadReportTest, MatchesOwnInstanceIds) {
@@ -401,12 +455,21 @@ TEST_F(XgpadReportTest, MatchesOwnInstanceIds) {
   // Earlier test builds
   EXPECT_TRUE(is_xgpad_instance_id(L"SWD\\SunshineXgpad\\Pad1"));
   EXPECT_TRUE(is_xgpad_instance_id(L"HID\\SUNSHINEXGPAD&IG_00\\1&2D650065&0&0000"));
+  // DualSense pads
+  EXPECT_TRUE(is_xgpad_instance_id(L"SWD\\VID_054C&PID_0CE6&REV_0100\\Pad3"));
+  EXPECT_TRUE(is_xgpad_instance_id(L"HID\\VID_054C&PID_0CE6&REV_0100\\1&2D650065&0&0000"));
+  EXPECT_TRUE(is_xgpad_instance_id(L"HID\\VID_054C&PID_0CE6&REV_0100&IG_00\\1&2D650065&0&0000"));
 }
 
 TEST_F(XgpadReportTest, NeverMatchesRealControllers) {
   // Real Bluetooth LE Xbox Series controller: parent and HID child (address before &IG_00)
   EXPECT_FALSE(is_xgpad_instance_id(L"BTHLEDEVICE\\{00001812-0000-1000-8000-00805F9B34FB}_DEV_VID&02045E_PID&0B13_REV&0509_AC8EBD0913A3\\A&165B0C48&1&0016"));
   EXPECT_FALSE(is_xgpad_instance_id(L"HID\\{00001812-0000-1000-8000-00805F9B34FB}&DEV&VID_045E&PID_0B13&REV_0509&AC8EBD0913A3&IG_00\\B&30AE7916&0&0000"));
+  // Real DualSense over USB and Bluetooth: parents and HID children
+  EXPECT_FALSE(is_xgpad_instance_id(L"USB\\VID_054C&PID_0CE6\\5&2A1E3C4&0&3"));
+  EXPECT_FALSE(is_xgpad_instance_id(L"HID\\VID_054C&PID_0CE6&MI_03\\7&1C4B2D3A&0&0000"));
+  EXPECT_FALSE(is_xgpad_instance_id(L"BTHENUM\\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0CE6\\8&2B3C4D5E&0&A0AB51C0FFEE_C00000000"));
+  EXPECT_FALSE(is_xgpad_instance_id(L"HID\\{00001124-0000-1000-8000-00805F9B34FB}_VID&0002054C_PID&0CE6\\9&3C4D5E6F&0&0000"));
   // Microsoft's own synthetic gamepad
   EXPECT_FALSE(is_xgpad_instance_id(L"SWD\\SYNTHETICGAMEPADENUM\\SYNTHETICGAMEPAD0"));
   // Prefix alone (no instance part) and unrelated IDs
@@ -442,6 +505,9 @@ TEST_F(XgpadReportTest, RefreshMatchesTheDriverStoreAndReportsAVersion) {
   const bool installed = driver_installed(true);
   EXPECT_EQ(driver_installed(), installed);
   EXPECT_EQ(!driver_version().empty(), installed);
+  if (!installed) {
+    EXPECT_FALSE(driver_supports_dualsense());  // the DualSense profile needs the driver
+  }
 }
 
 TEST_F(XgpadReportTest, DriverVersionTextSplitsAllFourParts) {

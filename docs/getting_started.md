@@ -595,15 +595,17 @@ Input keyboard and mouse. Activate, check and move the license in **Virtual HID 
 release on the **Plugins** page, and warns on the Web UI home page when the driver needs an update.
 
 Sunshine also includes the **Xbox Series Controller Driver** plugin. Installing it from the **Plugins** page installs the
-Sunshine Xbox Series Driver (xgpad), which emulates controllers as Xbox Series X|S controllers with the Guide and Share
-buttons and impulse triggers; uninstalling the plugin removes the driver. Restart Sunshine after installing or removing
+Sunshine Gamepad Driver (xgpad), which emulates PlayStation controllers, and controllers with motion sensors or a
+touchpad, as DualSense controllers with motion sensors, touchpad, lightbar and adaptive triggers, and every other
+controller as an Xbox Series X|S controller with the Guide and Share buttons and impulse triggers; uninstalling the plugin
+removes the driver. Games that only support Xbox controllers see a DualSense only through Steam Input. Restart Sunshine after installing or removing
 it.
 
 In **Configuration > Input**, choose whether Sunshine may use **All Available Drivers**, only **Virtual HID Driver**, only
-**ViGEmBus**, or the **Sunshine Xbox Series Driver (xgpad)**. Sunshine continues to show the selection prompt until this
+**ViGEmBus**, or the **Sunshine Gamepad Driver (xgpad)**. Sunshine continues to show the selection prompt until this
 setting is saved. If an active Virtual HID Driver license is already present, Sunshine selects **All Available Drivers**
-automatically. That policy prefers Virtual HID Driver. When its license is not valid, Sunshine uses xgpad for Xbox
-controllers when it is installed, ViGEmBus for Xbox 360 and DualShock 4 gamepads, and SendInput for keyboard and mouse.
+automatically. That policy prefers Virtual HID Driver. When its license is not valid, Sunshine uses xgpad when it is
+installed, ViGEmBus for what xgpad does not cover, and SendInput for keyboard and mouse.
 Selecting only **ViGEmBus** limits the available emulated gamepads to Xbox 360 and DualShock 4. Sunshine checks the
 license each time a stream starts and recreates the shared keyboard and mouse when it changed, so switching between the
 HID and SendInput paths does not require restarting Sunshine.

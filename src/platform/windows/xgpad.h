@@ -1,9 +1,9 @@
 /**
  * @file src/platform/windows/xgpad.h
- * @brief Virtual Xbox Series X|S controllers backed by the Sunshine xgpad UMDF2 driver.
+ * @brief Virtual Xbox Series X|S and DualSense controllers backed by the Sunshine xgpad UMDF2 driver.
  *
- * Each virtual pad is a software device (SwDeviceCreate) driven by the xgpad HID minidriver, with the
- * inbox xinputhid filter on top. Sunshine exchanges HID reports with the driver through a named shared
+ * Each virtual pad is a software device (SwDeviceCreate) driven by the xgpad HID minidriver; Xbox Series pads
+ * have the inbox xinputhid filter on top. Sunshine exchanges HID reports with the driver through a named shared
  * memory section and two events per pad (see drivers/xgpad/xgpad_shared.h).
  */
 #pragma once
@@ -15,6 +15,7 @@
 
 // local includes
 #include "src/platform/common.h"
+#include "xgpad_report.h"
 
 namespace platf::xgpad {
 
@@ -51,6 +52,15 @@ namespace platf::xgpad {
   std::string driver_version();
 
   /**
+   * @brief Check whether the installed xgpad driver can present DualSense controllers.
+   *
+   * Uses the result cached by `driver_installed()`.
+   *
+   * @return True when the driver package matches the DualSense hardware ID.
+   */
+  bool driver_supports_dualsense();
+
+  /**
    * @brief Check whether a device instance ID belongs to an xgpad virtual pad (software device or its HID child).
    *
    * Also matches the naming used by earlier xgpad test builds. A real Bluetooth Xbox Series controller never
@@ -81,12 +91,15 @@ namespace platf::xgpad {
    *
    * Blocks until PnP reports the device as created (normally well under a second).
    *
+   * A DualSense pad asks the client for motion events.
+   *
    * @param context xgpad context.
    * @param id Global and client-relative identifiers of the controller.
-   * @param feedback_queue Queue used to send rumble back to the client.
+   * @param profile Controller the pad presents.
+   * @param feedback_queue Queue used to send rumble, lightbar, player LEDs and trigger effects back to the client.
    * @return 0 on success, -1 on failure (the caller may fall back to another driver).
    */
-  int alloc(context_t &context, const gamepad_id_t &id, feedback_queue_t feedback_queue);
+  int alloc(context_t &context, const gamepad_id_t &id, profile_e profile, feedback_queue_t feedback_queue);
 
   /**
    * @brief Check whether a global gamepad index is backed by an xgpad virtual pad.
@@ -98,9 +111,12 @@ namespace platf::xgpad {
 
   /**
    * @brief Route an existing virtual pad's feedback to a resumed client.
+   *
+   * A DualSense pad asks the resumed client for motion events again.
+   *
    * @param context xgpad context.
    * @param id Global and client-relative identifiers of the controller.
-   * @param feedback_queue Queue used to send rumble back to the client.
+   * @param feedback_queue Queue used to send feedback back to the client.
    * @return 0 on success, -1 when the slot is empty.
    */
   int rebind(context_t &context, const gamepad_id_t &id, feedback_queue_t feedback_queue);
@@ -112,6 +128,27 @@ namespace platf::xgpad {
    * @param state Button and axis state from the client.
    */
   void update(context_t &context, int nr, const gamepad_state_t &state);
+
+  /**
+   * @brief Submit a touchpad event to a virtual pad; Xbox Series pads ignore it.
+   * @param context xgpad context.
+   * @param touch Touch event from the client.
+   */
+  void touch(context_t &context, const gamepad_touch_t &touch);
+
+  /**
+   * @brief Submit a motion sample to a virtual pad; Xbox Series pads ignore it.
+   * @param context xgpad context.
+   * @param motion Accelerometer or gyro sample from the client.
+   */
+  void motion(context_t &context, const gamepad_motion_t &motion);
+
+  /**
+   * @brief Submit the client controller's battery state to a virtual pad; Xbox Series pads ignore it.
+   * @param context xgpad context.
+   * @param battery Battery state from the client.
+   */
+  void battery(context_t &context, const gamepad_battery_t &battery);
 
   /**
    * @brief Remove a virtual pad.
