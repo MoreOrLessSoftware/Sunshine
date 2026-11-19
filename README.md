@@ -25,7 +25,7 @@ Bundled plugins:
 - **RTSS Frame Limit**: caps games at the client's frame rate through RivaTuner.
 - **V-Sync Toggle**: sets the driver's global V-Sync for the stream (NVIDIA and AMD).
 - **Nyrna**: a *Suspend* / *Resume* client command, with a notification showing what is suspended.
-- **Xbox Series Controller Driver**: light-weight input driver that maps any client controller to an Xbox Series controller on this host.
+- **Virtual Controllers**: a light-weight input driver that shows client controllers to games as Xbox Series or DualSense controllers, chosen automatically, per application or client, or from the client's in-stream menu.
 - **Virtual HID**: manage the optional Virtual HID driver license and status.
 - **Stadia Controller**: use a Stadia Controller over Wi-Fi as a virtual Xbox controller, with a live view of its buttons and optional headset audio.
 - **Latency Test**: a test pattern for measuring latency and pacing with a phone camera (read more: [ML Latency Analyzer](https://github.com/MoreOrLessSoftware/latency-analyzer))
@@ -38,7 +38,7 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 
 - Edit them on the **Client Commands** page, for all streams, for one application, or for a group of programs.
 - Program groups appear when one of their programs is in the foreground (or, with a `~` before the name, just running).
-- Plugins add commands of their own, and you can change their labels, icons and programs.
+- Plugins add commands of their own, and you can change their labels, icons and programs. Bundled plugins can also offer commands that Sunshine itself carries out, such as switching your controllers between Xbox and DualSense.
 - Individual commands can be turned on or off. Command lines are told which client and application they run for.
 
 [![Client Commands](./screenshots/client_commands.webp)](https://raw.githubusercontent.com/MoreOrLessSoftware/Sunshine/mlsoft-custom/screenshots/client_commands.webp)
@@ -49,11 +49,11 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 ### Web UI
 
 - Recommendations on the Home page, such as the best AMD encoder settings or the Virtual Display app, applied in one click.
-- A **Clients + PIN** page to manage paired devices: rename them in a dialog, search and sort, see when each last connected, and have a client's name filled in when you pair with a PIN.
+- A **Clients** page built around paired devices: search and sort them, see when each last connected and which have plugin settings, rename or unpair them (with a confirmation), and pair a new one with a PIN from a panel that opens by itself when a device asks to pair, with its name filled in.
 - Plugin settings for an application or a client, with option choices that a script can supply.
 - A list view for the Applications page, and an overview of every application against every plugin.
 - The Sunshine version in the page header, and the active encoder and NVENC unit count in the configuration.
-- A layout that works on phones.
+- A layout that works on phones: the navbar stays on one line, with links that don't fit in an overflow menu.
 
 ### Latency and Frame Pacing
 
@@ -89,7 +89,10 @@ Support for [PyroWave](https://github.com/Themaister/pyrowave), an experimental 
 
 ### Input
 
-- **Xbox Series Controller Driver** (xgpad): a virtual Xbox Series X|S controller that XInput, Windows.Gaming.Input and GameInput see as a real one, with Guide and Share buttons and impulse trigger rumble. It needs no kernel driver. It is an optional installer component that can also be installed from the web UI.
+- **Virtual Controllers** (xgpad): virtual controllers that need no kernel driver, installed with the Virtual Controllers plugin.
+  - **Xbox Series X|S**: XInput, Windows.Gaming.Input and GameInput see a real one, with Guide and Share buttons and impulse trigger rumble.
+  - **DualSense**: motion sensors, a two-finger touchpad and battery level from the client's controller, and lightbar color, player LEDs, rumble and adaptive trigger effects sent back to it. SDL, Steam Input and games with DualSense support see a DualSense; games that only support Xbox controllers see it through Steam Input.
+  - PlayStation controllers, and controllers with motion sensors or a touchpad such as Switch controllers, become DualSense controllers automatically; the rest become Xbox Series controllers. The plugin's **Controller type** sets it per application or client, and clients can switch during a stream from their in-stream menu.
 - **Virtual HID**: virtual gamepads without ViGEmBus, which is no longer needed.
 
 ### Sessions
