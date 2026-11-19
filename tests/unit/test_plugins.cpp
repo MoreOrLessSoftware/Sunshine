@@ -191,6 +191,7 @@ protected:
     plugins::set_activation_callback({});
     plugins::set_failure_callback({});
     plugins::set_stream_check({});
+    plugins::set_restart_callback({});
     plugins::load({});
     client_commands::set_foreground_program_for_testing(std::nullopt);
     client_commands::set_running_programs_for_testing(std::nullopt);
@@ -3919,6 +3920,114 @@ TEST_F(PluginsTest, UpdatedBundledPluginsAreReinstalledInOrderButCustomOnesAreNo
   EXPECT_EQ(find_plugin(list, "uninstalled")["installed"], false);
   EXPECT_TRUE(find_plugin(list, "current")["task"].is_null());
   EXPECT_EQ(plugins::load_state(state_file).at("second").installed_version, "2.0.0");
+}
+
+TEST_F(PluginsTest, ReinstallsThatNeedARestartRestartSunshineOnceAllAreDone) {
+  write_plugin(builtin_dir, "first", versioned_manifest("first", "2.0.0"));
+  auto second = versioned_manifest("second", "2.0.0");
+  second["restart_after_change"] = false;
+  write_plugin(builtin_dir, "second", second);
+  write_text(state_file, R"({"plugins":{
+    "first":{"installed":true,"active":true,"installed_version":"1.0.0"},
+    "second":{"installed":true,"active":true,"installed_version":"1.0.0"}
+  }})");
+  plugins::load(paths());
+  std::atomic<int> restarts = 0;
+  std::atomic<bool> both_done_at_restart = false;
+  plugins::set_restart_callback([&]() {
+    both_done_at_restart = calls.size() == 2;
+    ++restarts;
+  });
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([&restarts] {
+    return restarts > 0;
+  }));
+  plugins::load(paths());  // stops the reinstaller
+  EXPECT_EQ(restarts, 1);
+  EXPECT_TRUE(both_done_at_restart);
+}
+
+TEST_F(PluginsTest, ReinstallsThatDontNeedARestartOrFailDontRestartSunshine) {
+  auto no_restart = versioned_manifest("no_restart", "2.0.0");
+  no_restart["restart_after_change"] = false;
+  write_plugin(builtin_dir, "no_restart", no_restart);
+  write_text(state_file, R"({"plugins":{"no_restart":{"installed":true,"active":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  std::atomic<int> restarts = 0;
+  plugins::set_restart_callback([&restarts]() {
+    ++restarts;
+  });
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("no_restart", "succeeded");
+  }));
+  std::this_thread::sleep_for(200ms);
+  EXPECT_EQ(restarts, 0);
+
+  // A failed reinstall of a plugin that needs a restart doesn't restart either
+  write_plugin(builtin_dir, "failing", versioned_manifest("failing", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"failing":{"installed":true,"active":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  runner_exit_code = 1;
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("failing", "failed");
+  }));
+  std::this_thread::sleep_for(200ms);
+  EXPECT_EQ(restarts, 0);
+}
+
+TEST_F(PluginsTest, RestartAfterReinstallsWaitsForTheStreamToEnd) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  plugins::set_session_check_for_testing([] {
+    return true;
+  },
+                                         10ms);
+  std::atomic<bool> streaming = true;
+  plugins::set_stream_check([&streaming]() {
+    return streaming.load();
+  });
+  std::atomic<int> restarts = 0;
+  plugins::set_restart_callback([&restarts]() {
+    ++restarts;
+  });
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("p", "succeeded");
+  }));
+  std::this_thread::sleep_for(200ms);
+  EXPECT_EQ(restarts, 0);
+
+  streaming = false;
+  ASSERT_TRUE(eventually([&restarts] {
+    return restarts > 0;
+  }));
+  EXPECT_EQ(restarts, 1);
+}
+
+TEST_F(PluginsTest, StoppingTheReinstallerWhileAStreamRunsSkipsTheRestart) {
+  write_plugin(builtin_dir, "p", versioned_manifest("p", "2.0.0"));
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true,"installed_version":"1.0.0"}}})");
+  plugins::load(paths());
+  plugins::set_stream_check([]() {
+    return true;
+  });
+  std::atomic<int> restarts = 0;
+  plugins::set_restart_callback([&restarts]() {
+    ++restarts;
+  });
+
+  plugins::reinstall_updated_builtins();
+  ASSERT_TRUE(eventually([] {
+    return task_is("p", "succeeded");
+  }));
+  plugins::load(paths());  // stops the reinstaller while it waits
+  EXPECT_EQ(restarts, 0);
 }
 
 TEST(PluginsStatusTest, KeepsTheStatusAndFillsInEachNotice) {

@@ -119,6 +119,7 @@ namespace plugins {
       std::function<void(const std::string &, const std::string &, const std::string &)> on_failure;  ///< Called when a background install fails.
       std::unordered_map<std::string, std::vector<std::string>> display_exclusions;  ///< Applications each plugin was turned off for when last activated.
       std::function<bool()> streaming;  ///< Whether a stream is running, for plugins that are `idle_only`.
+      std::function<void()> on_restart;  ///< Restarts Sunshine after background installs that need it.
       std::jthread worker;  ///< Thread running the current install or uninstall.
       std::function<bool()> session_ready = default_session_ready;  ///< Whether install scripts can run yet.
       std::chrono::milliseconds session_poll = DEFAULT_SESSION_POLL;  ///< Time between checks of `session_ready`.
@@ -1243,6 +1244,50 @@ namespace plugins {
     }
 
     /**
+     * @brief Restart Sunshine when a background install succeeded for a plugin that needs a restart to take effect.
+     *
+     * Waits for any running stream to end first, so a restart doesn't end it.
+     *
+     * @param stop Requests the wait to end without restarting.
+     * @param attempted IDs of the plugins installed in the background.
+     */
+    void restart_if_needed(std::stop_token stop, const std::set<std::string> &attempted) {
+      auto &reg = registry();
+      std::function<void()> on_restart;
+      std::function<bool()> streaming;
+      std::chrono::milliseconds poll;
+      {
+        std::scoped_lock lock {reg.mutex};
+        if (stop.stop_requested() || !reg.on_restart) {
+          return;
+        }
+        const bool needed = std::ranges::any_of(attempted, [&reg](const std::string &id) {
+          const auto *manifest = find_manifest(reg, id);
+          const auto task = reg.tasks.find(id);
+          return manifest && manifest->restart_after_change && task != reg.tasks.end() && task->second.action == action_e::install && task->second.status == task_status_e::succeeded;
+        });
+        if (!needed) {
+          return;
+        }
+        on_restart = reg.on_restart;
+        streaming = reg.streaming;
+        poll = reg.session_poll;
+      }
+
+      if (streaming && streaming()) {
+        BOOST_LOG(info) << "Waiting for the stream to end before restarting to use the reinstalled plugins"sv;
+        do {
+          if (!sleep_unless_stopped(stop, poll)) {
+            return;
+          }
+        } while (streaming());
+      }
+
+      BOOST_LOG(info) << "Restarting Sunshine to use the reinstalled plugins"sv;
+      on_restart();
+    }
+
+    /**
      * @brief Body of the thread started by `reinstall_updated_builtins()`.
      *
      * @param stop Requests the thread to end; a reinstall it already started keeps running.
@@ -1281,7 +1326,7 @@ namespace plugins {
               first_install = true;
             }
             if (!manifest) {
-              return;
+              break;
             }
             attempted.insert(manifest->id);
             if (first_install) {
@@ -1299,6 +1344,8 @@ namespace plugins {
         }
         sleep_unless_stopped(stop, 100ms);
       }
+
+      restart_if_needed(stop, attempted);
     }
 
     /**
@@ -3858,6 +3905,12 @@ namespace plugins {
     auto &reg = registry();
     std::scoped_lock lock {reg.mutex};
     reg.streaming = std::move(check);
+  }
+
+  void set_restart_callback(std::function<void()> callback) {
+    auto &reg = registry();
+    std::scoped_lock lock {reg.mutex};
+    reg.on_restart = std::move(callback);
   }
 
   void set_script_runner_for_testing(script_runner_t runner) {

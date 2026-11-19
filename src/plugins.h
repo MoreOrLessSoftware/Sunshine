@@ -986,6 +986,16 @@ namespace plugins {
   void set_stream_check(std::function<bool()> check);
 
   /**
+   * @brief Set the function that restarts Sunshine.
+   *
+   * `reinstall_updated_builtins()` calls it once its installs are done when one succeeded for a plugin whose
+   * manifest sets `restart_after_change`, after waiting for any running stream to end.
+   *
+   * @param callback Function restarting Sunshine, or an empty function to restart nothing.
+   */
+  void set_restart_callback(std::function<void()> callback);
+
+  /**
    * @brief Set the function called when an install Sunshine started by itself fails.
    *
    * Installs of plugins that are on by default or changed since they were installed run in the background, where

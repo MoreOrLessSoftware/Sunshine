@@ -465,6 +465,10 @@ int main(int argc, char *argv[]) {
   plugins::set_stream_check([]() {
     return rtsp_stream::session_count() > 0;
   });
+  // A bundled plugin like xgpad that was updated at startup only takes effect after a restart
+  plugins::set_restart_callback([]() {
+    platf::restart();
+  });
   proc::refresh(config::stream.file_apps);
   // After the callback is set, so the applications pick up each plugin as its reinstall finishes.
   plugins::reinstall_updated_builtins();
