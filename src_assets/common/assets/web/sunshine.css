@@ -1170,13 +1170,31 @@ body {
     background-color: rgba(255, 255, 255, 0.15);
 }
 
-.navbar-sunshine .navbar-toggler {
-    color: var(--navbar-text) !important;
-    border-color: rgba(255, 255, 255, 0.2) !important;
+/* Link labels never wrap; links that don't fit move to the overflow menu instead (see Navbar.vue). */
+.navbar-sunshine .nav-link {
+    white-space: nowrap;
 }
 
-.navbar-sunshine .navbar-toggler:focus {
-    box-shadow: 0 0 0 0.25rem rgba(255, 255, 255, 0.15);
+.navbar-sunshine .navbar-nav > .nav-item {
+    flex-shrink: 0;
+}
+
+/* Takes the space left over by the logo and the right-hand menus; its width decides how many links fit. */
+.navbar-sunshine .navbar-priority {
+    display: flex;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow-x: clip;
+}
+
+/* Invisible copy of every link, measured at its natural width. */
+.navbar-sunshine .navbar-measure {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: max-content;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 /* ==========================================================================
