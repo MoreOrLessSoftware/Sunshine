@@ -1187,6 +1187,13 @@ body {
     overflow-x: clip;
 }
 
+/* On phones and tablets the theme picker shows only its icon, leaving more room for links. */
+@media (max-width: 991.98px) {
+    .navbar-sunshine #bd-theme-text {
+        display: none;
+    }
+}
+
 /* Invisible copy of every link, measured at its natural width. */
 .navbar-sunshine .navbar-measure {
     position: absolute;
