@@ -2494,6 +2494,11 @@ p {
     background: linear-gradient(135deg, rgba(79, 70, 229, 0.2), rgba(245, 158, 11, 0.2));
 }
 
+/* Paired devices on the Clients page have no artwork, so their initial sits in a square. */
+.client-list-thumb {
+    height: 3rem;
+}
+
 .app-list-thumb img {
     position: absolute;
     inset: 0;

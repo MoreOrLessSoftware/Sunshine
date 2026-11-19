@@ -700,9 +700,11 @@
     "success_msg": "Password has been changed successfully! This page will reload soon, your browser will ask you for the new credentials."
   },
   "pin": {
+    "allow_connections": "Allow this device to connect",
     "cancel_failure": "The pairing request could not be cancelled",
     "cancel_pairing": "Cancel selected pairing request",
     "cancel_success": "Pairing request cancelled",
+    "clients_title": "Clients",
     "device_name": "Device Name",
     "edit_title": "Edit: {name}",
     "last_connected": "Last connected {time}",
@@ -711,8 +713,9 @@
     "never_connected": "Never connected",
     "no_pending_pairings": "No devices are waiting to pair",
     "no_search_results": "No devices match your search",
+    "pair_device": "Pair a Device",
     "pair_failure": "Pairing Failed: Check if the PIN is typed correctly",
-    "pair_success": "Success! Please check Moonlight to continue",
+    "pair_success": "Client paired successfully",
     "pin": "PIN",
     "pin_pairing": "PIN Pairing",
     "plugin_settings_badge": "{count} plugin setting | {count} plugin settings",
@@ -729,7 +732,14 @@
     "sort_recent": "Last connected",
     "unknown_address": "Unknown address",
     "unknown_device": "Unknown device",
-    "unpair_single_success": "However, the device may still be in an active session. Use 'Force Close' on the Troubleshooting page to end any open sessions.",
+    "unpair": "Unpair",
+    "unpair_all_confirm": "Every device will have to pair again before it can stream. Devices streaming now keep their sessions until they end, or until you use Force Close on the Troubleshooting page.",
+    "unpair_all_title": "Unpair all devices?",
+    "unpair_confirm": "{name} will have to pair again before it can stream. If it is streaming now, its session stays open until it ends, or until you use Force Close on the Troubleshooting page.",
+    "unpair_failure": "{name} could not be unpaired",
+    "unpair_success": "{name} unpaired",
+    "unpair_title": "Unpair {name}?",
+    "waiting_count": "{count} device waiting to pair | {count} devices waiting to pair",
     "warning_msg": "Make sure you have access to the client you are pairing with. This software can give total control to your computer, so be careful!"
   },
   "plugins": {

@@ -8,128 +8,150 @@
 <body id="app" v-cloak>
   <Navbar></Navbar>
   <div id="content" class="container">
-    <h1 class="my-4 text-center">{{ $t('pin.pin_pairing') }}</h1>
-    <form class="form d-flex flex-column align-items-center" id="form" @submit.prevent="registerDevice">
-      <div class="card flex-column d-flex p-4 mb-4">
-        <div class="input-group mt-2">
-          <span class="input-group-text">
-            <user-round-search :size="18" class="icon"></user-round-search>
+    <div class="my-4">
+      <h1>{{ $t('pin.clients_title') }}<span v-if="clients.length"> ({{ clientCountLabel }})</span></h1>
+      <p>{{ $t('troubleshooting.unpair_desc') }}</p>
+    </div>
+
+    <!-- Actions toolbar -->
+    <div class="toolbar apps-toolbar d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
+      <!-- Left side actions -->
+      <div class="d-flex flex-wrap align-items-center gap-2">
+        <button class="btn btn-primary" type="button" @click="togglePairing"
+                :class="{ active: pairingOpen }" :aria-expanded="pairingOpen" aria-controls="pairing-panel">
+          <link-icon :size="18" class="icon"></link-icon>
+          {{ $t('pin.pair_device') }}
+          <span v-if="pendingPairings.length" class="badge rounded-pill text-bg-warning ms-1">
+            {{ pendingPairings.length }}
+            <span class="visually-hidden">{{ $t('pin.waiting_count', {count: pendingPairings.length}, pendingPairings.length) }}</span>
           </span>
-          <select v-model="selectedPairingId" class="form-select" id="pairing-input" required>
-            <option disabled value="">
-              {{ pendingPairings.length ? $t('pin.select_pairing') : $t('pin.no_pending_pairings') }}
-            </option>
-            <option v-for="pairing in pendingPairings" :key="pairing.id" :value="pairing.id">
-              {{ pairing.name || $t('pin.unknown_device') }} — {{ pairing.address || $t('pin.unknown_address') }}
-            </option>
-          </select>
-          <button
-            type="button"
-            class="btn btn-outline-danger"
-            :disabled="!selectedPairingId"
-            :title="$t('pin.cancel_pairing')"
-            @click="cancelSelectedPairing"
-          >
-            <x :size="18" class="icon"></x>
+        </button>
+        <button class="btn btn-outline-danger" type="button" :disabled="unpairAllPressed || clients.length === 0" @click="unpairAll">
+          <trash-2 :size="18" class="icon"></trash-2>
+          {{ $t('troubleshooting.unpair_all') }}
+        </button>
+      </div>
+      <!-- Right side actions -->
+      <div class="d-flex flex-wrap align-items-center gap-2" v-if="clients.length > 0">
+        <select class="form-select w-auto" v-model="sortMode" :aria-label="$t('pin.sort_label')">
+          <option value="default">{{ $t('pin.sort_paired') }}</option>
+          <option value="asc">{{ $t('pin.sort_name_asc') }}</option>
+          <option value="desc">{{ $t('pin.sort_name_desc') }}</option>
+          <option value="recent">{{ $t('pin.sort_recent') }}</option>
+        </select>
+        <div class="input-group client-search">
+          <input type="text" class="form-control" v-model="searchQuery" :placeholder="$t('pin.search_placeholder')" />
+          <button v-if="searchQuery" class="btn btn-outline-secondary" type="button" @click="searchQuery = ''" :aria-label="$t('_common.close')">
+            <x :size="16" class="icon"></x>
           </button>
-        </div>
-        <div class="input-group mt-2">
-          <span class="input-group-text">
-            <hash :size="18" class="icon"></hash>
+          <span v-else class="input-group-text">
+            <search :size="16" class="icon"></search>
           </span>
-          <input v-model="pin" type="text" pattern="\d{4}" maxlength="4" inputmode="numeric" :placeholder="`${$t('pin.pin')}`" autofocus id="pin-input" class="form-control" required />
         </div>
-        <div class="input-group my-4">
-          <span class="input-group-text">
-            <monitor :size="18" class="icon"></monitor>
-          </span>
-          <input v-model="name" @input="nameEdited = name !== ''" type="text" :placeholder="`${$t('pin.device_name')}`" id="name-input" class="form-control" required />
+      </div>
+    </div>
+
+    <!-- PIN pairing: collapsed until opened, or until a device asks to pair -->
+    <div class="card mb-3" id="pairing-panel" v-show="pairingOpen">
+      <form class="card-body" id="form" @submit.prevent="registerDevice">
+        <div class="d-flex align-items-center mb-3">
+          <h2 class="h5 mb-0">{{ $t('pin.pin_pairing') }}</h2>
+          <button type="button" class="btn-close ms-auto" @click="pairingOpen = false" :aria-label="$t('_common.close')"></button>
+        </div>
+        <div class="row g-2">
+          <div class="col-12 col-lg-5">
+            <div class="input-group">
+              <span class="input-group-text">
+                <user-round-search :size="18" class="icon"></user-round-search>
+              </span>
+              <select v-model="selectedPairingId" class="form-select" id="pairing-input" required>
+                <option disabled value="">
+                  {{ pendingPairings.length ? $t('pin.select_pairing') : $t('pin.no_pending_pairings') }}
+                </option>
+                <option v-for="pairing in pendingPairings" :key="pairing.id" :value="pairing.id">
+                  {{ pairing.name || $t('pin.unknown_device') }} — {{ pairing.address || $t('pin.unknown_address') }}
+                </option>
+              </select>
+              <button
+                type="button"
+                class="btn btn-outline-danger"
+                :disabled="!selectedPairingId"
+                :title="$t('pin.cancel_pairing')"
+                :aria-label="$t('pin.cancel_pairing')"
+                @click="cancelSelectedPairing"
+              >
+                <x :size="18" class="icon"></x>
+              </button>
+            </div>
+          </div>
+          <div class="col-12 col-sm-4 col-lg-2">
+            <div class="input-group">
+              <span class="input-group-text">
+                <hash :size="18" class="icon"></hash>
+              </span>
+              <input v-model="pin" ref="pinInput" type="text" pattern="\d{4}" maxlength="4" inputmode="numeric" :placeholder="`${$t('pin.pin')}`" id="pin-input" class="form-control" required />
+            </div>
+          </div>
+          <div class="col-12 col-sm-8 col-lg-5">
+            <div class="input-group">
+              <span class="input-group-text">
+                <monitor :size="18" class="icon"></monitor>
+              </span>
+              <input v-model="name" @input="nameEdited = name !== ''" type="text" :placeholder="`${$t('pin.device_name')}`" id="name-input" class="form-control" required />
+            </div>
+          </div>
+        </div>
+        <div class="alert alert-warning my-3">
+          <b>{{ $t('_common.warning') }}</b> {{ $t('pin.warning_msg') }}
         </div>
         <button class="btn btn-primary">
           <forward :size="18" class="icon"></forward>
           {{ $t('pin.send') }}
         </button>
-      </div>
-      <div class="alert alert-warning">
-        <b>{{ $t('_common.warning') }}</b> {{ $t('pin.warning_msg') }}
-      </div>
-      <div v-if="status" :class="`alert alert-${status.type}`" role="alert">{{ status.message }}</div>
-    </form>
-    <!-- Paired Clients -->
-    <div class="card my-4">
-      <div class="card-body">
-        <div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
-          <h2 id="unpair" class="mb-0">{{ $t('troubleshooting.unpair_title') }}<span v-if="clients.length"> ({{ clientCountLabel }})</span></h2>
-          <button class="btn btn-danger" :disabled="unpairAllPressed || clients.length === 0" @click="unpairAll">
-            <trash-2 :size="18" class="icon"></trash-2>
-            {{ $t('troubleshooting.unpair_all') }}
-          </button>
+        <div v-if="status" :class="`alert alert-${status.type} mt-3 mb-0`" role="alert">{{ status.message }}</div>
+      </form>
+    </div>
+
+    <!-- Paired devices -->
+    <div class="list-group app-list mb-4" v-if="displayedClients.length > 0">
+      <div class="list-group-item d-flex align-items-center gap-3" v-for="client in displayedClients" :key="client.uuid">
+        <div class="app-list-thumb client-list-thumb flex-shrink-0" aria-hidden="true">
+          <span class="app-list-initial">{{ clientName(client).charAt(0).toUpperCase() }}</span>
         </div>
-        <p>{{ $t('troubleshooting.unpair_desc') }}</p>
-        <!-- Sort and search -->
-        <div class="d-flex flex-wrap justify-content-end align-items-center gap-2" v-if="clients.length > 0">
-          <select class="form-select w-auto" v-model="sortMode" :aria-label="$t('pin.sort_label')">
-            <option value="default">{{ $t('pin.sort_paired') }}</option>
-            <option value="asc">{{ $t('pin.sort_name_asc') }}</option>
-            <option value="desc">{{ $t('pin.sort_name_desc') }}</option>
-            <option value="recent">{{ $t('pin.sort_recent') }}</option>
-          </select>
-          <div class="input-group client-search">
-            <input type="text" class="form-control" v-model="searchQuery" :placeholder="$t('pin.search_placeholder')" />
-            <button v-if="searchQuery" class="btn btn-outline-secondary" type="button" @click="searchQuery = ''" :aria-label="$t('_common.close')">
-              <x :size="16" class="icon"></x>
-            </button>
-            <span v-else class="input-group-text">
-              <search :size="16" class="icon"></search>
-            </span>
+        <div class="flex-grow-1 min-w-0">
+          <div class="fw-semibold text-truncate">{{ clientName(client) }}</div>
+          <div class="small text-muted" :title="client.last_connected ? connectedDate(client) : null">
+            {{ client.last_connected ? $t('pin.last_connected', {time: connectedAgo(client)}) : $t('pin.never_connected') }}
+          </div>
+          <div class="d-flex flex-wrap gap-1 mt-1" v-if="!client.enabled || overrideCount(client.uuid)">
+            <span v-if="!client.enabled" class="badge text-bg-warning fw-normal">{{ $t('_common.disabled') }}</span>
+            <span v-if="overrideCount(client.uuid)" class="badge text-bg-secondary fw-normal">{{ $t('pin.plugin_settings_badge', {count: overrideCount(client.uuid)}, overrideCount(client.uuid)) }}</span>
           </div>
         </div>
-        <div class="alert alert-success d-flex align-items-center" v-if="showUnpairMessage">
-          <check-circle :size="18" class="icon"></check-circle>
-          <div><b>{{ $t('_common.success') }}</b> {{ $t('pin.unpair_single_success') }}</div>
-          <button class="btn btn-success ms-auto" @click="showUnpairMessage = false">{{ $t('_common.dismiss') }}</button>
-        </div>
-        <div class="alert alert-success" v-if="unpairAllStatus === true">
-          <check-circle :size="18" class="icon"></check-circle>
-          {{ $t('troubleshooting.unpair_all_success') }}
-        </div>
-        <div class="alert alert-danger" v-if="unpairAllStatus === false">
-          <alert-circle :size="18" class="icon"></alert-circle>
-          {{ $t('troubleshooting.unpair_all_error') }}
-        </div>
-      </div>
-      <ul class="list-group list-group-flush" v-if="displayedClients.length > 0">
-        <li v-for="client in displayedClients" :key="client.uuid" class="list-group-item d-flex align-items-center">
-          <div class="flex-grow-1 text-break">
-            {{ client.name !== "" ? client.name : $t('troubleshooting.unpair_single_unknown') }}
-            <span v-if="overrideCount(client.uuid)" class="badge text-bg-secondary ms-1">{{ $t('pin.plugin_settings_badge', {count: overrideCount(client.uuid)}, overrideCount(client.uuid)) }}</span>
-            <div class="small text-muted" :title="client.last_connected ? connectedDate(client) : null">
-              {{ client.last_connected ? $t('pin.last_connected', {time: connectedAgo(client)}) : $t('pin.never_connected') }}
-            </div>
-          </div>
-          <button class="btn btn-primary btn-sm ms-2" @click="editClient(client)">
-            <edit :size="18" class="icon"></edit>
-            <span class="d-none d-sm-inline">{{ $t('apps.edit') }}</span>
-          </button>
-          <div class="form-check form-switch ms-2 mb-0">
+        <div class="d-flex align-items-center gap-2 flex-shrink-0">
+          <div class="form-check form-switch mb-0" :title="$t('pin.allow_connections')">
             <input class="form-check-input" type="checkbox" role="switch"
                    :id="'toggle-' + client.uuid"
                    :checked="client.enabled"
                    :aria-checked="client.enabled.toString()"
+                   :aria-label="$t('pin.allow_connections')"
                    @change="toggleClient(client.uuid, !client.enabled)">
           </div>
-          <button class="btn btn-danger btn-sm ms-2" @click="unpairSingle(client.uuid)">
-            <trash-2 :size="18" class="icon"></trash-2>
+          <button class="btn btn-sm btn-primary" @click="editClient(client)">
+            <edit :size="16" class="icon"></edit>
+            <span class="d-none d-sm-inline">{{ $t('apps.edit') }}</span>
           </button>
-        </li>
-      </ul>
-      <ul v-else class="list-group list-group-flush">
-        <li class="list-group-item p-3 text-center">
-          <em>{{ clients.length > 0 ? $t('pin.no_search_results') : $t('troubleshooting.unpair_single_no_devices') }}</em>
-        </li>
-      </ul>
+          <button class="btn btn-sm btn-danger" @click="unpairSingle(client)" :aria-label="$t('pin.unpair')" :title="$t('pin.unpair')">
+            <trash-2 :size="16" class="icon"></trash-2>
+          </button>
+        </div>
+      </div>
     </div>
-
+    <div v-else class="list-group mb-4">
+      <div class="list-group-item p-3 text-center">
+        <em>{{ clients.length > 0 ? $t('pin.no_search_results') : $t('troubleshooting.unpair_single_no_devices') }}</em>
+      </div>
+    </div>
     <!-- Edit a paired device: its name, and which plugins run for it and with what settings -->
     <div class="modal fade" ref="editModal" tabindex="-1" aria-labelledby="clientEditModalLabel"
          aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
@@ -195,13 +217,14 @@
   import Navbar from './Navbar.vue'
   import PluginOptionOverrides from './PluginOptionOverrides.vue'
   import { apiFetch } from './fetch_utils'
+  import { confirmDialog } from './ConfirmDialog.vue'
+  import { notify, notifyKey } from './Notification.vue'
   import { Modal } from 'bootstrap/dist/js/bootstrap'
   import {
-    AlertCircle,
-    CheckCircle,
     Forward,
     Hash,
     Edit,
+    Link as LinkIcon,
     Monitor,
     Save,
     Search,
@@ -231,11 +254,10 @@
     components: {
       Navbar,
       PluginOptionOverrides,
-      AlertCircle,
-      CheckCircle,
       Forward,
       Hash,
       Edit,
+      LinkIcon,
       Monitor,
       Save,
       Search,
@@ -253,6 +275,7 @@
         editForm: null,
         name: '',
         nameEdited: false,
+        pairingOpen: false,
         pluginSettingsOpen: {},
         saving: false,
         searchQuery: '',
@@ -262,10 +285,8 @@
         pin: '',
         refreshTimer: null,
         selectedPairingId: '',
-        showUnpairMessage: false,
         status: null,
         unpairAllPressed: false,
-        unpairAllStatus: null,
       };
     },
     computed: {
@@ -273,8 +294,7 @@
        * The devices matching the search, in pairing order, sorted by name, or most recently connected first.
        */
       displayedClients() {
-        const unnamed = this.i18n.t('troubleshooting.unpair_single_unknown');
-        const nameOf = (client) => client.name || unnamed;
+        const nameOf = (client) => this.clientName(client);
         let list = [...this.clients];
 
         const query = this.searchQuery.trim().toLowerCase();
@@ -320,6 +340,8 @@
       },
     },
     created() {
+      // Pairing requests already seen, so only a new request opens the pairing panel again after it's closed
+      this.seenPairingIds = new Set();
       try {
         const saved = window.localStorage.getItem(SORT_KEY);
         if (SORT_MODES.includes(saved)) {
@@ -357,10 +379,50 @@
           if (!this.pendingPairings.some((pairing) => pairing.id === this.selectedPairingId)) {
             this.selectedPairingId = this.pendingPairings.length === 1 ? this.pendingPairings[0].id : '';
           }
+
+          const arrived = this.pendingPairings.filter((pairing) => !this.seenPairingIds.has(pairing.id));
+          arrived.forEach((pairing) => this.seenPairingIds.add(pairing.id));
+          if (arrived.length > 0 && !this.pairingOpen) {
+            // Only take focus when the operator isn't busy with something else on the page
+            this.openPairing(document.activeElement === document.body);
+          }
         } catch (error) {
           console.error('Failed to load pending pairing requests', error);
           this.status = {type: 'danger', message: this.i18n.t('pin.load_failure')};
         }
+      },
+
+      /**
+       * Show the pairing panel.
+       *
+       * @param {boolean} focus Whether to put the cursor in the PIN box.
+       */
+      openPairing(focus) {
+        this.pairingOpen = true;
+        if (focus) {
+          this.$nextTick(() => this.$refs.pinInput?.focus());
+        }
+      },
+
+      /**
+       * Show or hide the pairing panel from the toolbar button.
+       */
+      togglePairing() {
+        if (this.pairingOpen) {
+          this.pairingOpen = false;
+        } else {
+          this.openPairing(true);
+        }
+      },
+
+      /**
+       * The name to show for a paired device.
+       *
+       * @param {object} client The device from the client list.
+       * @returns {string} Its name, or a placeholder when it has none.
+       */
+      clientName(client) {
+        return client.name || this.i18n.t('troubleshooting.unpair_single_unknown');
       },
 
       /**
@@ -386,8 +448,9 @@
           body,
         });
         const result = await response.json();
-        if (result.status === true) {
-          this.status = {type: 'success', message: this.i18n.t('pin.pair_success')};
+        const paired = result.status === true;
+        if (paired) {
+          notifyKey.success('pin.pair_success');
           this.pin = '';
           this.name = '';
           this.nameEdited = false;
@@ -396,6 +459,10 @@
           this.status = {type: 'danger', message: this.i18n.t('pin.pair_failure')};
         }
         await this.loadPendingPairings();
+        // Done with the panel once nothing else is waiting to pair
+        if (paired && this.pendingPairings.length === 0) {
+          this.pairingOpen = false;
+        }
       },
 
       /**
@@ -414,9 +481,12 @@
           body: JSON.stringify({pairing_id: this.selectedPairingId}),
         });
         const result = await response.json();
-        this.status = result.status === true
-          ? {type: 'success', message: this.i18n.t('pin.cancel_success')}
-          : {type: 'danger', message: this.i18n.t('pin.cancel_failure')};
+        this.status = null;
+        if (result.status === true) {
+          notifyKey.success('pin.cancel_success');
+        } else {
+          this.status = {type: 'danger', message: this.i18n.t('pin.cancel_failure')};
+        }
         await this.loadPendingPairings();
       },
 
@@ -580,9 +650,19 @@
       },
 
       /**
-       * Unpair every client.
+       * Unpair every client, once the operator confirms.
        */
       async unpairAll() {
+        const confirmed = await confirmDialog({
+          title: this.i18n.t('pin.unpair_all_title'),
+          message: this.i18n.t('pin.unpair_all_confirm'),
+          confirmLabel: this.i18n.t('troubleshooting.unpair_all'),
+          variant: 'danger',
+        });
+        if (!confirmed) {
+          return;
+        }
+
         this.unpairAllPressed = true;
         try {
           const response = await apiFetch('./api/clients/unpair-all', {
@@ -592,33 +672,53 @@
             },
           });
           const result = await response.json();
-          this.unpairAllStatus = result.status;
+          if (result.status !== true) {
+            throw new Error('refused');
+          }
           this.clientOverrides = {};
+          notifyKey.success('troubleshooting.unpair_all_success');
         } catch (error) {
           console.error('Failed to unpair all clients', error);
-          this.unpairAllStatus = false;
+          notifyKey.error('troubleshooting.unpair_all_error');
         }
         this.unpairAllPressed = false;
-        setTimeout(() => {
-          this.unpairAllStatus = null;
-        }, 5000);
         await this.refreshClients();
       },
 
       /**
-       * Unpair one client.
+       * Unpair one client, once the operator confirms.
        *
-       * @param {string} uuid The client's UUID.
+       * @param {object} client The device from the client list.
        */
-      async unpairSingle(uuid) {
-        await apiFetch('./api/clients/unpair', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({uuid}),
+      async unpairSingle(client) {
+        const name = this.clientName(client);
+        const confirmed = await confirmDialog({
+          title: this.i18n.t('pin.unpair_title', {name}),
+          message: this.i18n.t('pin.unpair_confirm', {name}),
+          confirmLabel: this.i18n.t('pin.unpair'),
+          variant: 'danger',
         });
-        this.showUnpairMessage = true;
+        if (!confirmed) {
+          return;
+        }
+
+        try {
+          const response = await apiFetch('./api/clients/unpair', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({uuid: client.uuid}),
+          });
+          const result = await response.json();
+          if (result.status !== true) {
+            throw new Error('refused');
+          }
+          notify.success(this.i18n.t('pin.unpair_success', {name}));
+        } catch (error) {
+          console.error('Failed to unpair a client', error);
+          notify.error(this.i18n.t('pin.unpair_failure', {name}));
+        }
         await this.refreshClients();
         await this.loadPluginSettings();
       },
