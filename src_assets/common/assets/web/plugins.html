@@ -106,10 +106,12 @@
           <div v-else-if="matrix.apps.length === 0" class="alert alert-secondary mb-0">{{ $t('plugins.matrix_no_apps') }}</div>
           <template v-else>
             <div class="table-responsive plugin-matrix">
-              <table class="table table-sm table-hover align-middle mb-0">
+              <table class="table table-sm align-middle mb-0">
                 <thead>
                   <tr>
-                    <th scope="col">{{ $t('plugins.matrix_apps') }}</th>
+                    <th scope="col" class="plugin-matrix-row-toggle">
+                      <span class="visually-hidden">{{ $t('plugins.matrix_apps') }}</span>
+                    </th>
                     <th scope="col" class="text-center" v-for="plugin in activePlugins" :key="plugin.id">
                       <label class="d-flex flex-column align-items-center gap-1 mb-0">
                         <span>{{ plugin.name }}</span>
@@ -122,17 +124,20 @@
                     </th>
                   </tr>
                 </thead>
-                <tbody>
-                  <tr v-for="app in matrix.apps" :key="app.index">
-                    <th scope="row" class="fw-normal">
-                      <div class="form-check mb-0">
-                        <input class="form-check-input" type="checkbox" :id="'matrix-app-' + app.index"
-                               :checked="rowState(app) === 'all'" :indeterminate="rowState(app) === 'some'"
-                               :title="$t('plugins.matrix_toggle_app', {name: app.name})"
-                               :disabled="matrix.saving" @change="setRow(app, $event.target.checked)">
-                        <label class="form-check-label" :for="'matrix-app-' + app.index">{{ app.name }}</label>
-                      </div>
+                <tbody v-for="app in matrix.apps" :key="app.index">
+                  <tr>
+                    <th scope="rowgroup" class="plugin-matrix-app-name" :colspan="activePlugins.length + 1">
+                      <label :for="'matrix-app-' + app.index">{{ app.name }}</label>
                     </th>
+                  </tr>
+                  <tr>
+                    <td class="plugin-matrix-row-toggle">
+                      <input class="form-check-input m-0" type="checkbox" :id="'matrix-app-' + app.index"
+                             :checked="rowState(app) === 'all'" :indeterminate="rowState(app) === 'some'"
+                             :title="$t('plugins.matrix_toggle_app', {name: app.name})"
+                             :aria-label="$t('plugins.matrix_toggle_app', {name: app.name})"
+                             :disabled="matrix.saving" @change="setRow(app, $event.target.checked)">
+                    </td>
                     <td class="text-center" v-for="plugin in activePlugins" :key="plugin.id"
                         :class="{'plugin-matrix-changed': isCellChanged(app, plugin)}">
                       <input class="form-check-input m-0" type="checkbox"
