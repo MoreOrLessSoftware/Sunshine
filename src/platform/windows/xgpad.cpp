@@ -297,7 +297,8 @@ namespace platf::xgpad {
     std::uint8_t ds5_seq = 0;  ///< DualSense report counter.
     thread_pool_util::ThreadPool::task_id_t repeat_task = nullptr;  ///< Pending repeat of the DualSense report.
     std::optional<std::array<std::uint8_t, 3>> sent_lightbar;  ///< Last lightbar color sent to the client.
-    std::optional<std::uint8_t> sent_player_leds;  ///< Last player LED mask sent to the client.
+    std::optional<std::uint8_t> sent_player_leds;  ///< Last DualSense player LED bits sent to the client.
+    std::optional<std::uint8_t> sent_mic_led;  ///< Last mute LED state sent to the client.
 
     /**
      * @brief Release all handles; the device must already be closed.
@@ -493,8 +494,13 @@ namespace platf::xgpad {
           pad.sent_lightbar = output->lightbar;
         }
         if (output->player_leds && output->player_leds != pad.sent_player_leds) {
-          pad.feedback_queue->raise(gamepad_feedback_msg_t::make_player_leds(pad.client_relative_index, *output->player_leds, 0));
+          const auto leds = *output->player_leds;
+          pad.feedback_queue->raise(gamepad_feedback_msg_t::make_player_leds(pad.client_relative_index, ds5_player_mask(leds), 0, leds | gamepad_feedback_msg_t::ds5_player_leds_valid));
           pad.sent_player_leds = output->player_leds;
+        }
+        if (output->mic_led && output->mic_led != pad.sent_mic_led) {
+          pad.feedback_queue->raise(gamepad_feedback_msg_t::make_mic_led(pad.client_relative_index, *output->mic_led));
+          pad.sent_mic_led = output->mic_led;
         }
       }
       send_rumble(pad);
@@ -1273,6 +1279,7 @@ namespace platf::xgpad {
     pad.sent = {};  // resend the current rumble state to the resumed client on the next change
     pad.sent_lightbar.reset();
     pad.sent_player_leds.reset();
+    pad.sent_mic_led.reset();
     if (pad.profile == profile_e::dualsense) {
       request_motion(pad);
     }

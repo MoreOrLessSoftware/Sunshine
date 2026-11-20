@@ -8,6 +8,7 @@
 
 #ifdef _WIN32
   // standard includes
+  #include <algorithm>
   #include <cstdint>
   #include <cstring>
 
@@ -260,7 +261,8 @@ TEST_F(XgpadDs5Test, BatteryStatus) {
   constexpr std::uint8_t full = (XGPAD_DS_POWER_FULL << 4) | 10;
 
   EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_DISCHARGING, 64), (XGPAD_DS_POWER_DISCHARGING << 4) | 6);
-  EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_CHARGING, 95), (XGPAD_DS_POWER_CHARGING << 4) | 10);
+  EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_CHARGING, 95), (XGPAD_DS_POWER_CHARGING << 4) | 9);
+  EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_CHARGING, 100), (XGPAD_DS_POWER_CHARGING << 4) | 10);
   EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_CHARGING, 0), XGPAD_DS_POWER_CHARGING << 4);
   // An unknown percentage keeps the level, an unknown state keeps the power state
   EXPECT_EQ(ds5_battery_status(0x03, LI_BATTERY_STATE_DISCHARGING, LI_BATTERY_PERCENTAGE_UNKNOWN), 0x03);
@@ -272,6 +274,14 @@ TEST_F(XgpadDs5Test, BatteryStatus) {
   EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_NOT_CHARGING, 40), 0xF4);
   // Out of range percentages are limited to level 10
   EXPECT_EQ(ds5_battery_status(full, LI_BATTERY_STATE_DISCHARGING, 250), 10);
+}
+
+TEST_F(XgpadDs5Test, BatteryStatusInvertsSdlDualSensePercentage) {
+  // SDL reports a DualSense at level L as min(L * 10 + 5, 100) percent; the host must show level L again
+  for (std::uint8_t level = 0; level <= 10; ++level) {
+    const auto percentage = static_cast<std::uint8_t>(std::min(level * 10 + 5, 100));
+    EXPECT_EQ(ds5_battery_status(0, LI_BATTERY_STATE_DISCHARGING, percentage) & 0x0F, level) << "level " << static_cast<int>(level);
+  }
 }
 
 TEST_F(XgpadDs5Test, PlayerMask) {
@@ -371,8 +381,54 @@ TEST_F(XgpadDs5Test, ParseOutputLightbarAndPlayerLeds) {
   report.validFlag1 = XGPAD_DS_FLAG1_PLAYER_LEDS;
   output = parse_ds5_output(output_entry(report));
   ASSERT_TRUE(output && output->player_leds);
-  EXPECT_EQ(*output->player_leds, 0x2);
+  EXPECT_EQ(*output->player_leds, 0x0A);  // the exact LED bits; ds5_player_mask makes the Moonlight mask
   EXPECT_FALSE(output->lightbar);
+  EXPECT_FALSE(output->mic_led);
+
+  // Bits above the five LEDs are dropped
+  report.playerLeds = 0xE1;
+  output = parse_ds5_output(output_entry(report));
+  ASSERT_TRUE(output && output->player_leds);
+  EXPECT_EQ(*output->player_leds, 0x01);
+}
+
+TEST_F(XgpadDs5Test, ParseOutputMicLed) {
+  XGPAD_DS_OUTPUT_REPORT report {};
+  report.validFlag1 = XGPAD_DS_FLAG1_LIGHTBAR;
+  report.muteButtonLed = 1;
+  auto output = parse_ds5_output(output_entry(report));
+  ASSERT_TRUE(output);
+  EXPECT_FALSE(output->mic_led);  // ignored without its valid flag
+
+  report.validFlag1 = XGPAD_DS_FLAG1_MIC_MUTE_LED;
+  for (const std::uint8_t state : {0, 1, 2}) {
+    report.muteButtonLed = state;
+    output = parse_ds5_output(output_entry(report));
+    ASSERT_TRUE(output && output->mic_led);
+    EXPECT_EQ(*output->mic_led, state);
+    EXPECT_FALSE(output->player_leds || output->lightbar || output->rumble);
+  }
+
+  // Unknown values pulse, like the highest known one
+  report.muteButtonLed = 7;
+  output = parse_ds5_output(output_entry(report));
+  ASSERT_TRUE(output && output->mic_led);
+  EXPECT_EQ(*output->mic_led, 2);
+}
+
+TEST_F(XgpadDs5Test, FeedbackMessages) {
+  const auto leds = platf::gamepad_feedback_msg_t::make_player_leds(3, 0x2, 0x0, 0x0A | platf::gamepad_feedback_msg_t::ds5_player_leds_valid);
+  EXPECT_EQ(leds.type, platf::gamepad_feedback_e::set_player_leds);
+  EXPECT_EQ(leds.id, 3);
+  EXPECT_EQ(leds.data.player_leds.solid, 0x2);
+  EXPECT_EQ(leds.data.player_leds.flashing, 0x0);
+  EXPECT_EQ(leds.data.player_leds.ds5_leds, 0x8A);
+  EXPECT_EQ(platf::gamepad_feedback_msg_t::make_player_leds(0, 0x1, 0x0).data.player_leds.ds5_leds, 0);
+
+  const auto mic = platf::gamepad_feedback_msg_t::make_mic_led(2, 1);
+  EXPECT_EQ(mic.type, platf::gamepad_feedback_e::set_mic_led);
+  EXPECT_EQ(mic.id, 2);
+  EXPECT_EQ(mic.data.mic_led.state, 1);
 }
 
 #endif

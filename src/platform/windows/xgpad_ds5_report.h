@@ -256,7 +256,8 @@ namespace platf::xgpad {
    * @brief Combine a battery event from the client with the current status byte.
    *
    * See the DualSense status byte in hid-playstation: the low nibble is the level (0..10), the high nibble the power
-   * state. An unknown state or percentage keeps that part of the status.
+   * state. An unknown state or percentage keeps that part of the status. The level is the percentage divided by ten,
+   * rounded down, which inverts SDL's DualSense mapping (`level * 10 + 5`) exactly.
    *
    * @param status Current status byte.
    * @param state LI_BATTERY_STATE_* from the client.
@@ -287,8 +288,8 @@ namespace platf::xgpad {
         break;
     }
     if (percentage != LI_BATTERY_PERCENTAGE_UNKNOWN && state != LI_BATTERY_STATE_FULL) {
-      const unsigned rounded = (static_cast<unsigned>(percentage) + 5u) / 10u;
-      level = static_cast<std::uint8_t>(rounded > 10u ? 10u : rounded);
+      const unsigned tenths = static_cast<unsigned>(percentage) / 10u;
+      level = static_cast<std::uint8_t>(tenths > 10u ? 10u : tenths);
     }
     return static_cast<std::uint8_t>((power << 4) | (level & 0x0F));
   }
@@ -335,7 +336,8 @@ namespace platf::xgpad {
     std::optional<std::array<std::uint16_t, 2>> rumble;  ///< Low and high frequency motors in Moonlight's 0..65535 range.
     std::optional<ds5_triggers_t> triggers;  ///< Adaptive trigger effects.
     std::optional<std::array<std::uint8_t, 3>> lightbar;  ///< Lightbar red, green, blue.
-    std::optional<std::uint8_t> player_leds;  ///< Moonlight player LED mask.
+    std::optional<std::uint8_t> player_leds;  ///< DualSense player LED bits 0..4, left to right.
+    std::optional<std::uint8_t> mic_led;  ///< Mute LED: 0 = off, 1 = on, 2 = pulsing.
   };
 
   /**
@@ -375,7 +377,10 @@ namespace platf::xgpad {
       output.lightbar = std::array {report.lightbarRed, report.lightbarGreen, report.lightbarBlue};
     }
     if (report.validFlag1 & XGPAD_DS_FLAG1_PLAYER_LEDS) {
-      output.player_leds = ds5_player_mask(report.playerLeds);
+      output.player_leds = static_cast<std::uint8_t>(report.playerLeds & 0x1F);
+    }
+    if (report.validFlag1 & XGPAD_DS_FLAG1_MIC_MUTE_LED) {
+      output.mic_led = static_cast<std::uint8_t>(report.muteButtonLed > 2 ? 2 : report.muteButtonLed);
     }
     return output;
   }

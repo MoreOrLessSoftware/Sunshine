@@ -56,6 +56,7 @@ constexpr int IDX_SET_RGB_LED = 14;  ///< Control-stream message index for set r
 constexpr int IDX_SET_ADAPTIVE_TRIGGERS = 15;  ///< Control-stream message index for set adaptive triggers.
 constexpr int IDX_SET_PLAYER_LEDS = 16;  ///< Control-stream message index for set player indicator LEDs.
 constexpr int IDX_LTR_FRAME_ACK = 17;  ///< Control-stream message index for a long-term reference frame the client received.
+constexpr int IDX_SET_MIC_LED = 18;  ///< Control-stream message index for set microphone mute LED.
 
 static const short packetTypes[] = {
   0x0305,  // Start A
@@ -76,6 +77,7 @@ static const short packetTypes[] = {
   0x5503,  // Set Adaptive triggers (Sunshine protocol extension)
   0x5504,  // Set player indicator LEDs (Sunshine protocol extension)
   0x0350,  // LTR frame ACK (Sunshine protocol extension)
+  0x5505,  // Set microphone mute LED (fork protocol extension)
 };
 
 namespace asio = boost::asio;
@@ -294,6 +296,17 @@ namespace stream {
     std::uint16_t id;  ///< Controller identifier associated with this message.
     std::uint8_t solid;  ///< Four-bit mask of solid player indicators.
     std::uint8_t flashing;  ///< Four-bit mask of flashing player indicators.
+    std::uint8_t ds5_leds;  ///< Fork extension: exact DualSense LED bits 0..4 with bit 7 set, or 0. Older clients read only the first four bytes.
+  };
+
+  /**
+   * @brief Control payload that sets a controller's microphone mute LED (fork extension).
+   */
+  struct control_set_mic_led_t {
+    control_header_v2 header;  ///< Control message header preceding this payload.
+
+    std::uint16_t id;  ///< Controller identifier associated with this message.
+    std::uint8_t state;  ///< 0 = off, 1 = on, 2 = pulsing.
   };
 
   /**
@@ -1160,8 +1173,23 @@ namespace stream {
       plaintext.id = util::endian::little(msg.id);
       plaintext.solid = data.solid;
       plaintext.flashing = data.flashing;
+      plaintext.ds5_leds = data.ds5_leds;
 
-      BOOST_LOG(verbose) << "Player LEDs: "sv << msg.id << " :: solid "sv << util::hex(data.solid).to_string_view() << " :: flashing "sv << util::hex(data.flashing).to_string_view();
+      BOOST_LOG(verbose) << "Player LEDs: "sv << msg.id << " :: solid "sv << util::hex(data.solid).to_string_view() << " :: flashing "sv << util::hex(data.flashing).to_string_view()
+                         << " :: ds5 "sv << util::hex(data.ds5_leds).to_string_view();
+      std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
+        encrypted_payload;
+
+      payload = encode_control(session, util::view(plaintext), encrypted_payload);
+    } else if (msg.type == platf::gamepad_feedback_e::set_mic_led) {
+      control_set_mic_led_t plaintext;
+      plaintext.header.type = packetTypes[IDX_SET_MIC_LED];
+      plaintext.header.payloadLength = sizeof(plaintext) - sizeof(control_header_v2);
+
+      plaintext.id = util::endian::little(msg.id);
+      plaintext.state = msg.data.mic_led.state;
+
+      BOOST_LOG(verbose) << "Mic LED: "sv << msg.id << " :: "sv << static_cast<unsigned>(msg.data.mic_led.state);
       std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size>
         encrypted_payload;
 

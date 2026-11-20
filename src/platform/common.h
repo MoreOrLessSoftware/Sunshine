@@ -123,6 +123,7 @@ namespace platf {
     set_rgb_led,  ///< Set RGB LED
     set_player_leds,  ///< Set player indicator LEDs
     set_adaptive_triggers,  ///< Set adaptive triggers
+    set_mic_led,  ///< Set the microphone mute LED
   };
 
   /**
@@ -196,18 +197,39 @@ namespace platf {
     }
 
     /**
+     * @brief Flag in the player LED message's `ds5_leds` byte marking the DualSense LED bits as present.
+     */
+    static constexpr std::uint8_t ds5_player_leds_valid = 0x80;
+
+    /**
      * @brief Create player indicator LED state.
      *
      * @param id Identifier for the controller, session, display, or resource.
      * @param solid Four-bit mask of solid player indicators.
      * @param flashing Four-bit mask of flashing player indicators.
+     * @param ds5_leds Exact DualSense player LED bits 0..4 ORed with `ds5_player_leds_valid`, or 0 when unknown.
      * @return Constructed player indicator LED object.
      */
-    static gamepad_feedback_msg_t make_player_leds(std::uint16_t id, std::uint8_t solid, std::uint8_t flashing) {
+    static gamepad_feedback_msg_t make_player_leds(std::uint16_t id, std::uint8_t solid, std::uint8_t flashing, std::uint8_t ds5_leds = 0) {
       gamepad_feedback_msg_t msg;
       msg.type = gamepad_feedback_e::set_player_leds;
       msg.id = id;
-      msg.data.player_leds = {solid, flashing};
+      msg.data.player_leds = {solid, flashing, ds5_leds};
+      return msg;
+    }
+
+    /**
+     * @brief Create microphone mute LED state.
+     *
+     * @param id Identifier for the controller, session, display, or resource.
+     * @param state 0 = off, 1 = on, 2 = pulsing (DualSense mute LED values).
+     * @return Constructed microphone LED object.
+     */
+    static gamepad_feedback_msg_t make_mic_led(std::uint16_t id, std::uint8_t state) {
+      gamepad_feedback_msg_t msg;
+      msg.type = gamepad_feedback_e::set_mic_led;
+      msg.id = id;
+      msg.data.mic_led = {state};
       return msg;
     }
 
@@ -258,7 +280,12 @@ namespace platf {
       struct {
         std::uint8_t solid;  ///< Bit mask of solid player indicators.
         std::uint8_t flashing;  ///< Bit mask of flashing player indicators.
+        std::uint8_t ds5_leds;  ///< Exact DualSense LED bits 0..4 with `ds5_player_leds_valid`, or 0 when unknown.
       } player_leds;  ///< Player-indicator LED payload.
+
+      struct {
+        std::uint8_t state;  ///< 0 = off, 1 = on, 2 = pulsing.
+      } mic_led;  ///< Microphone mute LED payload.
 
       struct {
         uint8_t event_flags;  ///< Flags describing which adaptive-trigger data is present.
