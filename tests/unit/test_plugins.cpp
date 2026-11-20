@@ -2959,7 +2959,7 @@ TEST(PluginsBundledTest, LatencyTestManifestIsValid) {
   EXPECT_EQ(manifest->actions[0].script, "launch.ps1");
   ASSERT_EQ(manifest->client_commands.size(), 2);
   EXPECT_EQ(manifest->client_commands[0].script, "start.ps1");
-  EXPECT_TRUE(manifest->client_commands[0].programs.empty());
+  EXPECT_EQ(manifest->client_commands[0].programs, (std::vector<std::string> {"explorer"}));  // only offered from the desktop
   EXPECT_EQ(manifest->client_commands[1].programs, (std::vector<std::string> {"latency-test"}));
 }
 
