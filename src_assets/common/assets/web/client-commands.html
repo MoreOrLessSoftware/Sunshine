@@ -95,6 +95,15 @@
       word-break: break-all;
     }
 
+    /* A confirmation asked over the edit dialog, and its backdrop */
+    .modal.modal-stacked {
+      z-index: 1075;
+    }
+
+    .modal-backdrop.modal-stacked-backdrop {
+      z-index: 1065;
+    }
+
     .min-w-0 {
       min-width: 0;
     }
@@ -375,138 +384,6 @@
             {{ $t('client_commands.add') }}
           </button>
 
-          <!-- The command being added or edited -->
-          <div v-if="editor" class="card mb-3">
-            <div class="card-body">
-              <h3 class="h5 card-title">{{ editor.index < 0 ? $t('client_commands.add') : $t('client_commands.edit') }}</h3>
-
-              <div class="row g-3 mb-3">
-                <div class="col-12 col-sm">
-                  <label class="form-label" for="command-label">{{ $t('client_commands.label') }}</label>
-                  <input type="text" class="form-control" id="command-label" v-model="editor.draft.label" maxlength="64">
-                </div>
-                <div class="col-12 col-sm-auto">
-                  <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
-                  <div class="d-flex align-items-center gap-2">
-                    <span class="command-icon" :title="editor.draft.icon ? editor.draft.icon.substring('material:'.length) : $t('client_commands.no_icon')">
-                      <span class="material-icon" v-if="glyph(editor.draft.icon)">{{ glyph(editor.draft.icon) }}</span>
-                    </span>
-                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" @click="toggleIconPicker(editor.draft)">
-                      <search :size="16" class="icon"></search>
-                      {{ $t('client_commands.choose_icon') }}
-                    </button>
-                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="editor.draft.icon" @click="editor.draft.icon = ''">
-                      {{ $t('client_commands.no_icon') }}
-                    </button>
-                  </div>
-                </div>
-                <div class="col-12" v-if="iconPicker.target === editor.draft">
-                  <icon-chooser :names="iconNames" :codepoints="codepoints" :selected="editor.draft.icon" @pick="pickIcon"></icon-chooser>
-                </div>
-              </div>
-
-              <div class="mb-3">
-                <label class="form-label d-block">{{ $t('client_commands.type') }}</label>
-                <div class="btn-group" role="group">
-                  <input type="radio" class="btn-check" id="type-keys" value="keys" v-model="editor.draft.type">
-                  <label class="btn btn-outline-primary" for="type-keys">
-                    <keyboard :size="16" class="icon"></keyboard>
-                    {{ $t('client_commands.type_keys') }}
-                  </label>
-                  <input type="radio" class="btn-check" id="type-script" value="script" v-model="editor.draft.type">
-                  <label class="btn btn-outline-primary" for="type-script">
-                    <square-terminal :size="16" class="icon"></square-terminal>
-                    {{ $t('client_commands.type_script') }}
-                  </label>
-                </div>
-              </div>
-
-              <!-- Keys -->
-              <div v-if="editor.draft.type === 'keys'" class="mb-3">
-                <label class="form-label d-block">{{ $t('client_commands.keys') }}</label>
-                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                  <span class="text-muted small" v-if="editor.draft.steps.length === 0">{{ $t('client_commands.no_keys') }}</span>
-                  <span class="badge text-bg-secondary chord-badge d-inline-flex align-items-center gap-1"
-                        v-for="(step, i) in editor.draft.steps" :key="i">
-                    {{ describeChord(step) }}
-                    <button type="button" class="btn-close btn-close-white ms-1" style="font-size: 0.6rem"
-                            :aria-label="$t('client_commands.remove_chord')" @click="editor.draft.steps.splice(i, 1)"></button>
-                  </span>
-                </div>
-
-                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
-                  <button type="button" class="btn btn-sm" :class="recorder.recording ? 'btn-danger recording' : 'btn-outline-danger'"
-                          @click="recorder.recording ? stopRecording() : startRecording()">
-                    <circle-stop :size="16" class="icon" v-if="recorder.recording"></circle-stop>
-                    <circle-dot :size="16" class="icon" v-else></circle-dot>
-                    {{ recorder.recording ? $t('client_commands.stop_recording') : $t('client_commands.record') }}
-                  </button>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" v-if="editor.draft.steps.length > 0" @click="editor.draft.steps = []">
-                    {{ $t('client_commands.clear_keys') }}
-                  </button>
-                  <span class="small text-muted" v-if="recorder.recording">
-                    {{ recorder.chord.length ? describeChord(recorder.chord) : $t('client_commands.recording_hint') }}
-                  </span>
-                </div>
-
-                <div class="d-flex flex-wrap align-items-center gap-2">
-                  <span class="small">{{ $t('client_commands.add_chord') }}</span>
-                  <div class="form-check form-check-inline mb-0" v-for="modifier in modifiers" :key="modifier.vk">
-                    <input class="form-check-input" type="checkbox" :id="'mod-' + modifier.vk" v-model="keyPicker.modifiers" :value="modifier.vk">
-                    <label class="form-check-label" :for="'mod-' + modifier.vk">{{ keyName(modifier.vk) }}</label>
-                  </div>
-                  <select class="form-select form-select-sm w-auto" v-model.number="keyPicker.key" :aria-label="$t('client_commands.key')">
-                    <option :value="0">{{ $t('client_commands.no_key') }}</option>
-                    <option v-for="vk in pickableKeys" :key="vk" :value="vk">{{ keyName(vk) }}</option>
-                  </select>
-                  <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="!keyPicker.key && keyPicker.modifiers.length === 0"
-                          @click="addPickedChord">
-                    <plus :size="16" class="icon"></plus>
-                    {{ $t('client_commands.add_chord_button') }}
-                  </button>
-                </div>
-                <div class="form-text">{{ $t('client_commands.keys_desc') }}</div>
-              </div>
-
-              <!-- Script -->
-              <template v-else>
-                <div class="mb-3">
-                  <label class="form-label" for="command-cmd">{{ $t('client_commands.cmd') }}</label>
-                  <input type="text" class="form-control font-monospace" id="command-cmd" v-model="editor.draft.cmd">
-                  <div class="form-text">{{ $t('client_commands.cmd_desc') }}</div>
-                </div>
-                <div class="mb-3">
-                  <label class="form-label" for="command-working-dir">{{ $t('client_commands.working_dir') }}</label>
-                  <input type="text" class="form-control font-monospace" id="command-working-dir" v-model="editor.draft['working-dir']">
-                </div>
-                <div class="form-check mb-3">
-                  <input class="form-check-input" type="checkbox" id="command-elevated" v-model="editor.draft.elevated">
-                  <label class="form-check-label" for="command-elevated">{{ $t('client_commands.elevated') }}</label>
-                </div>
-              </template>
-
-              <!-- Groups are already limited to their programs -->
-              <div class="mb-3" v-if="!currentGroup">
-                <label class="form-label" for="command-programs">{{ $t('client_commands.command_programs') }}</label>
-                <input type="text" class="form-control font-monospace" id="command-programs" :value="editor.draft.programs.join(', ')"
-                       placeholder="photoshop.exe" @change="setPrograms(editor.draft, $event.target.value)">
-                <div class="form-text">{{ $t('client_commands.command_programs_desc') }}</div>
-              </div>
-
-              <div class="form-check mb-3">
-                <input class="form-check-input" type="checkbox" id="command-close-menu" v-model="editor.draft['close-menu']">
-                <label class="form-check-label" for="command-close-menu">{{ $t('client_commands.close_menu') }}</label>
-              </div>
-
-              <div v-if="editor.error" class="alert alert-danger py-2">{{ editor.error }}</div>
-
-              <div class="d-flex gap-2">
-                <button type="button" class="btn btn-primary" @click="commitEdit">{{ $t('client_commands.done') }}</button>
-                <button type="button" class="btn btn-outline-secondary" @click="cancelEdit">{{ $t('_common.cancel') }}</button>
-              </div>
-            </div>
-          </div>
-
           </template>
 
           <!-- Saving covers every list -->
@@ -520,6 +397,150 @@
             </button>
           </div>
           <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- The command being added or edited. Esc and clicks outside don't close it, as Esc can be part of a recorded key sequence. -->
+    <div class="modal fade" ref="editModal" tabindex="-1" aria-labelledby="commandEditModalLabel"
+         aria-hidden="true" data-bs-backdrop="static" data-bs-keyboard="false">
+      <div class="modal-dialog modal-lg modal-dialog-scrollable modal-fullscreen-sm-down">
+        <div class="modal-content" v-if="editDialog">
+          <div class="modal-header">
+            <h5 class="modal-title" id="commandEditModalLabel">{{ editDialogTitle }}</h5>
+            <button type="button" class="btn-close" @click="cancelEdit" :aria-label="$t('_common.close')"></button>
+          </div>
+          <div class="modal-body">
+            <div class="row g-3 mb-3">
+              <div class="col-12 col-sm">
+                <label class="form-label" for="command-label">{{ $t('client_commands.label') }}</label>
+                <input type="text" class="form-control" id="command-label" v-model="editDialog.draft.label" maxlength="64">
+              </div>
+              <div class="col-12 col-sm-auto">
+                <label class="form-label d-block">{{ $t('client_commands.icon') }}</label>
+                <div class="d-flex align-items-center gap-2">
+                  <span class="command-icon" :title="editDialog.draft.icon ? editDialog.draft.icon.substring('material:'.length) : $t('client_commands.no_icon')">
+                    <span class="material-icon" v-if="glyph(editDialog.draft.icon)">{{ glyph(editDialog.draft.icon) }}</span>
+                  </span>
+                  <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" @click="toggleIconPicker(editDialog.draft)">
+                    <search :size="16" class="icon"></search>
+                    {{ $t('client_commands.choose_icon') }}
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="editDialog.draft.icon" @click="editDialog.draft.icon = ''">
+                    {{ $t('client_commands.no_icon') }}
+                  </button>
+                </div>
+              </div>
+              <div class="col-12" v-if="iconPicker.target === editDialog.draft">
+                <icon-chooser :names="iconNames" :codepoints="codepoints" :selected="editDialog.draft.icon" @pick="pickIcon"></icon-chooser>
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label d-block">{{ $t('client_commands.type') }}</label>
+              <div class="btn-group" role="group">
+                <input type="radio" class="btn-check" id="type-keys" value="keys" v-model="editDialog.draft.type">
+                <label class="btn btn-outline-primary" for="type-keys">
+                  <keyboard :size="16" class="icon"></keyboard>
+                  {{ $t('client_commands.type_keys') }}
+                </label>
+                <input type="radio" class="btn-check" id="type-script" value="script" v-model="editDialog.draft.type">
+                <label class="btn btn-outline-primary" for="type-script">
+                  <square-terminal :size="16" class="icon"></square-terminal>
+                  {{ $t('client_commands.type_script') }}
+                </label>
+              </div>
+            </div>
+
+            <!-- Keys -->
+            <div v-if="editDialog.draft.type === 'keys'" class="mb-3">
+              <label class="form-label d-block">{{ $t('client_commands.keys') }}</label>
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <span class="text-muted small" v-if="editDialog.draft.steps.length === 0">{{ $t('client_commands.no_keys') }}</span>
+                <span class="badge text-bg-secondary chord-badge d-inline-flex align-items-center gap-1"
+                      v-for="(step, i) in editDialog.draft.steps" :key="i">
+                  {{ describeChord(step) }}
+                  <button type="button" class="btn-close btn-close-white ms-1" style="font-size: 0.6rem"
+                          :aria-label="$t('client_commands.remove_chord')" @click="editDialog.draft.steps.splice(i, 1)"></button>
+                </span>
+              </div>
+
+              <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                <button type="button" class="btn btn-sm" :class="recorder.recording ? 'btn-danger recording' : 'btn-outline-danger'"
+                        @click="recorder.recording ? stopRecording() : startRecording()">
+                  <circle-stop :size="16" class="icon" v-if="recorder.recording"></circle-stop>
+                  <circle-dot :size="16" class="icon" v-else></circle-dot>
+                  {{ recorder.recording ? $t('client_commands.stop_recording') : $t('client_commands.record') }}
+                </button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" v-if="editDialog.draft.steps.length > 0" @click="editDialog.draft.steps = []">
+                  {{ $t('client_commands.clear_keys') }}
+                </button>
+                <span class="small text-muted" v-if="recorder.recording">
+                  {{ recorder.chord.length ? describeChord(recorder.chord) : $t('client_commands.recording_hint') }}
+                </span>
+              </div>
+
+              <div class="d-flex flex-wrap align-items-center gap-2">
+                <span class="small">{{ $t('client_commands.add_chord') }}</span>
+                <div class="form-check form-check-inline mb-0" v-for="modifier in modifiers" :key="modifier.vk">
+                  <input class="form-check-input" type="checkbox" :id="'mod-' + modifier.vk" v-model="keyPicker.modifiers" :value="modifier.vk">
+                  <label class="form-check-label" :for="'mod-' + modifier.vk">{{ keyName(modifier.vk) }}</label>
+                </div>
+                <select class="form-select form-select-sm w-auto" v-model.number="keyPicker.key" :aria-label="$t('client_commands.key')">
+                  <option :value="0">{{ $t('client_commands.no_key') }}</option>
+                  <option v-for="vk in pickableKeys" :key="vk" :value="vk">{{ keyName(vk) }}</option>
+                </select>
+                <button type="button" class="btn btn-outline-secondary btn-sm" :disabled="!keyPicker.key && keyPicker.modifiers.length === 0"
+                        @click="addPickedChord">
+                  <plus :size="16" class="icon"></plus>
+                  {{ $t('client_commands.add_chord_button') }}
+                </button>
+              </div>
+              <div class="form-text">{{ $t('client_commands.keys_desc') }}</div>
+            </div>
+
+            <!-- Script -->
+            <template v-else>
+              <div class="mb-3">
+                <label class="form-label" for="command-cmd">{{ $t('client_commands.cmd') }}</label>
+                <input type="text" class="form-control font-monospace" id="command-cmd" v-model="editDialog.draft.cmd">
+                <div class="form-text">{{ $t('client_commands.cmd_desc') }}</div>
+              </div>
+              <div class="mb-3">
+                <label class="form-label" for="command-working-dir">{{ $t('client_commands.working_dir') }}</label>
+                <input type="text" class="form-control font-monospace" id="command-working-dir" v-model="editDialog.draft['working-dir']">
+              </div>
+              <div class="form-check mb-3">
+                <input class="form-check-input" type="checkbox" id="command-elevated" v-model="editDialog.draft.elevated">
+                <label class="form-check-label" for="command-elevated">{{ $t('client_commands.elevated') }}</label>
+              </div>
+            </template>
+
+            <!-- Groups are already limited to their programs -->
+            <div class="mb-3" v-if="!currentGroup">
+              <label class="form-label" for="command-programs">{{ $t('client_commands.command_programs') }}</label>
+              <input type="text" class="form-control font-monospace" id="command-programs" :value="editDialog.draft.programs.join(', ')"
+                     placeholder="photoshop.exe" @change="setPrograms(editDialog.draft, $event.target.value)">
+              <div class="form-text">{{ $t('client_commands.command_programs_desc') }}</div>
+            </div>
+
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" id="command-close-menu" v-model="editDialog.draft['close-menu']">
+              <label class="form-check-label" for="command-close-menu">{{ $t('client_commands.close_menu') }}</label>
+            </div>
+
+            <div v-if="editDialog.error" class="alert alert-danger py-2 mb-0">{{ editDialog.error }}</div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="cancelEdit">
+              <x :size="18" class="icon"></x>
+              {{ $t('_common.cancel') }}
+            </button>
+            <button type="button" class="btn btn-primary" @click="commitEdit">
+              <check :size="18" class="icon"></check>
+              {{ $t('client_commands.done') }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -556,7 +577,7 @@
   import { apiFetch } from './fetch_utils'
   import { notifyKey } from './Notification.vue'
   import { Modal } from 'bootstrap/dist/js/bootstrap'
-  import { AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search, SquareMousePointer, SquareTerminal, Trash2, X } from '@lucide/vue'
+  import { AppWindow, ArrowDown, ArrowUp, Check, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search, SquareMousePointer, SquareTerminal, Trash2, X } from '@lucide/vue'
 
   // Recording stops after this long without a key
   const RECORD_IDLE_MS = 15000;
@@ -719,7 +740,7 @@
 
   const app = createApp({
     components: {
-      Navbar, IconChooser, AppWindow, ArrowDown, ArrowUp, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search,
+      Navbar, IconChooser, AppWindow, ArrowDown, ArrowUp, Check, CircleDot, CircleStop, Globe, Keyboard, Pencil, Plus, Puzzle, Save, Search,
       SquareMousePointer, SquareTerminal, Trash2, X,
     },
     inject: ['i18n'],
@@ -746,6 +767,8 @@
         currentView: 'global',
         // The command being edited: {view, index (-1 for a new one), draft, error}
         editor: null,
+        // The editor the dialog shows: kept until the dialog has finished closing, so its form doesn't vanish as it fades
+        editDialog: null,
         // What the confirmation dialog is asking about: {title, message, button, action}
         confirmation: null,
         recorder: {recording: false, held: [], chord: [], idleTimer: null},
@@ -759,6 +782,10 @@
       };
     },
     computed: {
+      // Adding a command, or editing one
+      editDialogTitle() {
+        return this.editDialog && this.editDialog.index >= 0 ? this.i18n.t('client_commands.edit') : this.i18n.t('client_commands.add');
+      },
       currentList() {
         if (this.currentView === 'global') {
           return this.global;
@@ -838,6 +865,7 @@
       window.addEventListener('beforeunload', this.onBeforeUnload);
       // However the dialog closes (Cancel, Esc, a click outside), it no longer asks about anything
       this.$refs.confirmModal.addEventListener('hidden.bs.modal', this.onConfirmModalHidden);
+      this.$refs.editModal.addEventListener('hidden.bs.modal', this.onEditModalHidden);
       this.loadIcons();
       this.load();
     },
@@ -1129,12 +1157,29 @@
       },
       openEditor(index, draft) {
         this.editor = {view: this.currentView, index, draft, error: null};
+        this.editDialog = this.editor;
         this.keyPicker = {modifiers: [], key: 0};
         this.iconPicker.target = null;
+        this.$nextTick(() => {
+          Modal.getOrCreateInstance(this.$refs.editModal).show();
+        });
       },
       cancelEdit() {
         this.stopRecording();
+        this.closeEditor();
+      },
+      closeEditor() {
         this.editor = null;
+        const modal = Modal.getInstance(this.$refs.editModal);
+        if (modal) {
+          modal.hide();
+        }
+      },
+      onEditModalHidden() {
+        // Unless another edit was started while it closed
+        if (!this.editor) {
+          this.editDialog = null;
+        }
       },
       commitEdit() {
         this.stopRecording();
@@ -1158,7 +1203,7 @@
         } else {
           list.splice(this.editor.index, 1, draft);
         }
-        this.editor = null;
+        this.closeEditor();
       },
       move(index, delta) {
         const list = this.currentList;
@@ -1179,7 +1224,20 @@
       ask(confirmation) {
         this.confirmation = confirmation;
         this.$nextTick(() => {
-          Modal.getOrCreateInstance(this.$refs.confirmModal).show();
+          const modalEl = this.$refs.confirmModal;
+          // Bootstrap gives every dialog the same z-index, so one asked over the edit dialog must be raised above it
+          const stacked = this.$refs.editModal.classList.contains('show');
+          modalEl.classList.toggle('modal-stacked', stacked);
+          if (stacked) {
+            // Its backdrop is added as it starts to show
+            modalEl.addEventListener('show.bs.modal', () => {
+              requestAnimationFrame(() => {
+                const backdrops = document.querySelectorAll('.modal-backdrop');
+                backdrops[backdrops.length - 1]?.classList.add('modal-stacked-backdrop');
+              });
+            }, {once: true});
+          }
+          Modal.getOrCreateInstance(modalEl).show();
         });
       },
       closeConfirmModal() {
