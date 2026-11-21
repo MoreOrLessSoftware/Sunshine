@@ -38,7 +38,7 @@ Buttons that Sunshine adds to a Moonlight client's in-stream overlay menu. Each 
 
 - Edit them on the **Client Commands** page, for all streams, for one application, or for a group of programs.
 - Program groups appear when one of their programs is in the foreground (or, with a `~` before the name, just running).
-- Plugins add commands of their own, and you can change their labels, icons and programs. Bundled plugins can also offer commands that Sunshine itself carries out, such as switching your controllers between Xbox and DualSense.
+- Plugins add commands of their own, and you can change their labels, icons and programs, and whether they close the menu. Bundled plugins can also offer commands that Sunshine itself carries out, such as switching your controllers between Xbox and DualSense.
 - Individual commands can be turned on or off. Command lines are told which client and application they run for.
 
 [![Client Commands](./screenshots/client_commands.webp)](https://raw.githubusercontent.com/MoreOrLessSoftware/Sunshine/mlsoft-custom/screenshots/client_commands.webp)
@@ -91,7 +91,7 @@ Support for [PyroWave](https://github.com/Themaister/pyrowave), an experimental 
 
 - **Virtual Controllers** (xgpad): virtual controllers that need no kernel driver, installed with the Virtual Controllers plugin.
   - **Xbox Series X|S**: XInput, Windows.Gaming.Input and GameInput see a real one, with Guide and Share buttons and impulse trigger rumble.
-  - **DualSense**: motion sensors, a two-finger touchpad and battery level from the client's controller, and lightbar color, player LEDs, rumble and adaptive trigger effects sent back to it. SDL, Steam Input and games with DualSense support see a DualSense; games that only support Xbox controllers see it through Steam Input.
+  - **DualSense**: motion sensors, a two-finger touchpad and battery level from the client's controller, and lightbar color, player and microphone LEDs, rumble and adaptive trigger effects sent back to it. SDL, Steam Input and games with DualSense support see a DualSense; games that only support Xbox controllers see it through Steam Input.
   - PlayStation controllers, and controllers with motion sensors or a touchpad such as Switch controllers, become DualSense controllers automatically; the rest become Xbox Series controllers. The plugin's **Controller type** sets it per application or client, and clients can switch during a stream from their in-stream menu.
 - **Virtual HID**: virtual gamepads without ViGEmBus, which is no longer needed.
 
