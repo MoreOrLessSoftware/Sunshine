@@ -7,6 +7,7 @@
 #pragma once
 
 // standard includes
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -196,6 +197,15 @@ namespace platf::xgpad {
    */
   constexpr std::string_view profile_name(const profile_e profile) {
     return profile == profile_e::dualsense ? "DualSense" : "Xbox Series";
+  }
+
+  /**
+   * @brief Lightbar color the client controller shows after switching to a profile.
+   * @param profile Profile switched to.
+   * @return Red, green and blue: blue for DualSense, green for Xbox Series.
+   */
+  constexpr std::array<std::uint8_t, 3> profile_led_color(const profile_e profile) {
+    return profile == profile_e::dualsense ? std::array<std::uint8_t, 3> {0, 0, 255} : std::array<std::uint8_t, 3> {0, 255, 0};
   }
 
   /**

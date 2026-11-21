@@ -1012,7 +1012,20 @@ namespace platf::xgpad {
       for (const auto profile : {target, old->profile}) {
         if (alloc(context, id, profile, old->feedback_queue, old->client_uuid) == 0) {
           update(context, nr, old->state);
-          return profile == target;
+          if (profile != target) {
+            return false;
+          }
+
+          // Show the new mode on the client controller's lightbar; a DualSense host may set its own color later
+          if (old->feedback_queue) {
+            const auto color = profile_led_color(target);
+            old->feedback_queue->raise(gamepad_feedback_msg_t::make_rgb_led(old->client_relative_index, color[0], color[1], color[2]));
+            std::lock_guard lock {context.mutex};  // the output thread updates sent_lightbar under it
+            if (has(&context, nr)) {
+              context.pads[nr]->sent_lightbar = color;
+            }
+          }
+          return true;
         }
       }
       BOOST_LOG(error) << "xgpad: controller "sv << nr << " could not be recreated"sv;

@@ -497,6 +497,11 @@ TEST_F(XgpadReportTest, PlanProfileSwitch) {
   EXPECT_EQ(plan_profile_switch({}, "a", profile_e::dualsense), (std::vector<int> {}));
 }
 
+TEST_F(XgpadReportTest, ProfileLedColor) {
+  EXPECT_EQ(profile_led_color(profile_e::dualsense), (std::array<std::uint8_t, 3> {0, 0, 255}));
+  EXPECT_EQ(profile_led_color(profile_e::xbox_series), (std::array<std::uint8_t, 3> {0, 255, 0}));
+}
+
 TEST_F(XgpadReportTest, SwitchMenuState) {
   const std::vector<pad_slot_t> slots {
     {0, "mixed", profile_e::xbox_series},
