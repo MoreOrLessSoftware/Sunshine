@@ -1685,7 +1685,9 @@ namespace nvhttp {
   /**
    * @brief Run a command from the client's overlay menu.
    *
-   * The command must be one offered to the client now, and the client must be streaming.
+   * The command must be one offered to the client now, and the client must be streaming. A plugin's script command
+   * that keeps the menu open and updates its button through a status file is answered once the script ends, or after
+   * a few seconds, so the commands the client asks for next show the change.
    *
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
@@ -1723,9 +1725,13 @@ namespace nvhttp {
     std::string error;
     context.app_id = offer.app_id;
     context.app_name = offer.app_name;
-    switch (client_commands::run(*command, error, context)) {
+    // A script that keeps the menu open and updates its button is answered once it ends (see `command_t::finish_wait`),
+    // from another thread, so the menu the client reloads shows the change; the response is sent when that's done
+    const auto answer_ok = [response]() mutable {
+      write_json(response, SimpleWeb::StatusCode::success_ok, {{"status", "ok"}});
+    };
+    switch (client_commands::run(*command, error, context, answer_ok)) {
       case client_commands::run_result_e::ok:
-        write_json(response, SimpleWeb::StatusCode::success_ok, {{"status", "ok"}});
         return;
       case client_commands::run_result_e::busy:
         write_json(response, SimpleWeb::StatusCode::client_error_conflict, {{"status", "error"}, {"message", error}});

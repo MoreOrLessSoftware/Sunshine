@@ -244,9 +244,11 @@ namespace client_commands {
      * @param command Command to start.
      * @param context Who the command runs for.
      * @param error Receives the reason when it does not start.
+     * @param on_finished When set and the command has a `finish_wait`, called from another thread once the script
+     *                    has ended or that long has passed; otherwise called before this returns, once it started.
      * @return `true` when it started.
      */
-    bool start_script(const command_t &command, const run_context_t &context, std::string &error) {
+    bool start_script(const command_t &command, const run_context_t &context, std::string &error, const std::function<void()> &on_finished) {
       // A copy, so the variables are only for the command
       boost::process::v1::environment env = boost::this_process::environment();
       env["SUNSHINE_CLIENT_COMMAND_ID"] = command.id;
@@ -293,7 +295,28 @@ namespace client_commands {
         return false;
       }
 
-      child.detach();
+      if (!on_finished || command.finish_wait <= std::chrono::milliseconds::zero()) {
+        child.detach();
+        if (on_finished) {
+          on_finished();
+        }
+        return true;
+      }
+
+      // Waited for on a thread of its own, so the caller (such as the client's request) isn't held up
+      std::thread([child = std::move(child), wait = command.finish_wait, label = command.label, on_finished]() mutable {
+        const auto deadline = std::chrono::steady_clock::now() + wait;
+        std::error_code running_ec;
+        // child::wait_for() is unreliable in Boost.Process v1, so poll
+        while (child.running(running_ec) && !running_ec && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(50ms);
+        }
+        if (child.running(running_ec) && !running_ec) {
+          BOOST_LOG(debug) << "Client command ["sv << label << "] is still running; reporting it ran"sv;
+        }
+        child.detach();
+        on_finished();
+      }).detach();
       return true;
     }
   }  // namespace
@@ -1109,10 +1132,28 @@ namespace client_commands {
     });
   }
 
-  run_result_e run(const command_t &command, std::string &error, const run_context_t &context) {
+  /**
+   * @brief Run a `keys` or `action` command (see `run()`).
+   *
+   * @param command Command to run.
+   * @param error Receives the reason when the command does not start or its action fails.
+   * @param context Who the command runs for.
+   * @return Outcome of the request.
+   */
+  static run_result_e run_other(const command_t &command, std::string &error, const run_context_t &context);
+
+  run_result_e run(const command_t &command, std::string &error, const run_context_t &context, const std::function<void()> &on_finished) {
     if (command.type == type_e::script) {
-      return start_script(command, context, error) ? run_result_e::ok : run_result_e::failed;
+      return start_script(command, context, error, on_finished) ? run_result_e::ok : run_result_e::failed;
     }
+    const auto result = run_other(command, error, context);
+    if (result == run_result_e::ok && on_finished) {
+      on_finished();
+    }
+    return result;
+  }
+
+  static run_result_e run_other(const command_t &command, std::string &error, const run_context_t &context) {
     if (command.type == type_e::action) {
       const auto action = find_action(command.action);
       if (!action) {

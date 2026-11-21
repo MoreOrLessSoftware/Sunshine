@@ -421,7 +421,94 @@ TEST_F(ClientCommandsTest, RunStartsAScript) {
   std::string error;
   EXPECT_EQ(client_commands::run(command, error), client_commands::run_result_e::ok) << error;
 }
+
+/**
+ * @brief Counts calls of a `run()` callback, which may come from another thread, and waits for them.
+ */
+struct finished_t {
+  std::mutex mutex;  ///< Guards `calls`.
+  std::condition_variable changed;  ///< Signalled on each call.
+  int calls = 0;  ///< Calls so far.
+
+  /**
+   * @brief The callback to give `run()`.
+   *
+   * @return A callback that counts its calls.
+   */
+  std::function<void()> callback() {
+    return [this] {
+      std::scoped_lock lock {mutex};
+      ++calls;
+      changed.notify_all();
+    };
+  }
+
+  /**
+   * @brief Wait for the first call.
+   *
+   * @param timeout Longest to wait.
+   * @return `true` once it has been called.
+   */
+  bool wait(std::chrono::milliseconds timeout) {
+    std::unique_lock lock {mutex};
+    return changed.wait_for(lock, timeout, [this] {
+      return calls > 0;
+    });
+  }
+};
+
+TEST_F(ClientCommandsTest, AScriptWithoutAFinishWaitIsReportedOnceItStarts) {
+  client_commands::command_t command {.id = "x", .label = "Exit", .type = client_commands::type_e::script, .cmd = "cmd.exe /c exit 0", .working_dir = dir_.string()};
+  finished_t finished;
+  std::string error;
+  ASSERT_EQ(client_commands::run(command, error, {}, finished.callback()), client_commands::run_result_e::ok) << error;
+  EXPECT_EQ(finished.calls, 1);  // before run() returned
+}
+
+TEST_F(ClientCommandsTest, AScriptWithAFinishWaitIsReportedOnceItEnds) {
+  // Writes its file a moment after it starts, then ends
+  auto out = dir_ / "done.txt";
+  client_commands::command_t command {
+    .id = "x",
+    .label = "Slow",
+    .type = client_commands::type_e::script,
+    .cmd = std::format("cmd.exe /c ping -n 2 127.0.0.1 >nul & echo done> \"{}\"", out.string()),
+    .working_dir = dir_.string(),
+    .finish_wait = 10s,
+  };
+  finished_t finished;
+  std::string error;
+  ASSERT_EQ(client_commands::run(command, error, {}, finished.callback()), client_commands::run_result_e::ok) << error;
+  ASSERT_TRUE(finished.wait(15s));
+  EXPECT_TRUE(fs::exists(out));  // what it changed is there when it's reported
+  EXPECT_EQ(finished.calls, 1);
+}
+
+TEST_F(ClientCommandsTest, AScriptThatTakesTooLongIsReportedAfterItsFinishWait) {
+  client_commands::command_t command {
+    .id = "x",
+    .label = "Slower",
+    .type = client_commands::type_e::script,
+    .cmd = "cmd.exe /c ping -n 6 127.0.0.1 >nul",
+    .working_dir = dir_.string(),
+    .finish_wait = 300ms,
+  };
+  finished_t finished;
+  std::string error;
+  const auto start = std::chrono::steady_clock::now();
+  ASSERT_EQ(client_commands::run(command, error, {}, finished.callback()), client_commands::run_result_e::ok) << error;
+  ASSERT_TRUE(finished.wait(4s));
+  EXPECT_LT(std::chrono::steady_clock::now() - start, 3s);  // well before the script's 5 seconds are up
+}
 #endif
+
+TEST_F(ClientCommandsTest, AScriptThatDoesNotStartIsNotReportedAsFinished) {
+  client_commands::command_t command {.id = "x", .label = "Missing", .type = client_commands::type_e::script, .cmd = "sunshine-no-such-program-for-client-commands", .finish_wait = 1s};
+  finished_t finished;
+  std::string error;
+  EXPECT_EQ(client_commands::run(command, error, {}, finished.callback()), client_commands::run_result_e::failed);
+  EXPECT_EQ(finished.calls, 0);
+}
 
 TEST_F(ClientCommandsTest, RunReportsAScriptThatDoesNotStart) {
   client_commands::command_t command {.id = "x", .label = "Missing", .type = client_commands::type_e::script, .cmd = "sunshine-no-such-program-for-client-commands"};
@@ -1010,6 +1097,20 @@ TEST(ClientCommandsActions, RunPassesContextAndArgs) {
   EXPECT_EQ(seen_context.client_uuid, "uuid-1");
   EXPECT_EQ(seen_context.app_id, "7");
   EXPECT_EQ(seen_args, (std::vector<std::string> {"dualsense"}));
+
+  // Reported as it returns; not when it fails
+  int finished = 0;
+  EXPECT_EQ(client_commands::run(command, error, context, [&finished] {
+              ++finished;
+            }),
+            client_commands::run_result_e::ok);
+  EXPECT_EQ(finished, 1);
+  command.action = "test.missing";
+  EXPECT_EQ(client_commands::run(command, error, context, [&finished] {
+              ++finished;
+            }),
+            client_commands::run_result_e::failed);
+  EXPECT_EQ(finished, 1);
 
   client_commands::unregister_action("test.run");
 }

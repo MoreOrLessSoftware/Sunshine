@@ -59,6 +59,7 @@ namespace client_commands {
     std::vector<std::string> args;  ///< Arguments passed to an `action` command's handler.
     bool enabled = true;  ///< Whether clients are offered the command; a disabled one is kept but not offered.
     std::vector<std::string> programs;  ///< Programs the command is only offered with (see `matches()`), or empty for any.
+    std::chrono::milliseconds finish_wait {};  ///< How long a `script` command may take before `run()` reports it ran, when asked to wait (see `run()`), so what it changes shows in the next offer; zero to report as soon as it starts.
   };
 
   /**
@@ -577,9 +578,12 @@ namespace client_commands {
    * @param error Receives the reason when the command does not start or its action fails.
    * @param context Who the command runs for; a `script` command gets each non-empty value in its environment, an
    *                `action` command's handler gets all of it.
+   * @param on_finished When set, called once when the result is `ok`: for a `script` command with a `finish_wait`,
+   *                    from another thread once the script has ended or that long has passed, whichever is first;
+   *                    for any other command, before this returns.
    * @return Outcome of the request.
    */
-  run_result_e run(const command_t &command, std::string &error, const run_context_t &context = {});
+  run_result_e run(const command_t &command, std::string &error, const run_context_t &context = {}, const std::function<void()> &on_finished = {});
 
   /**
    * @brief Prepare client commands for use.

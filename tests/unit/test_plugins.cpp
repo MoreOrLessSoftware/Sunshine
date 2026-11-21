@@ -3731,6 +3731,40 @@ TEST_F(PluginsTest, TheUsersChoiceOfClosingTheMenuReplacesThePlugins) {
   EXPECT_EQ(close_menu({{"p/closes", keep_open}, {"p/stays", close}}), (std::vector<bool> {false, true}));
 }
 
+TEST_F(PluginsTest, AStatusScriptThatKeepsTheMenuOpenIsWaitedFor) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"client_commands", json::parse(R"([
+                                     {"id": "status_open", "script": "toggle.ps1", "status_file": "menu.json", "close_menu": false},
+                                     {"id": "status_closes", "script": "toggle.ps1", "status_file": "menu.json"},
+                                     {"id": "plain_open", "script": "run.ps1", "close_menu": false},
+                                     {"id": "keys_open", "steps": [[27]], "status_file": "keys.json", "close_menu": false}
+                                   ])")},
+                                 });
+  write_text(builtin_dir / "p" / "toggle.ps1", "exit 0\n");
+  write_text(builtin_dir / "p" / "run.ps1", "exit 0\n");
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto waits = [](const client_commands::plugin_overrides_t &overrides) {
+    std::vector<bool> out;
+    for (const auto &command : plugins::offered_client_commands({}, overrides).at(0).grouped) {
+      out.push_back(command.finish_wait > 0ms);
+    }
+    return out;
+  };
+
+  // Only a script with a status file, and only while the menu stays open after it
+  EXPECT_EQ(waits({}), (std::vector<bool> {true, false, false, false}));
+
+  // The user's choice of keeping the menu open counts, either way round
+  client_commands::plugin_override_t keep_open;
+  keep_open.close_menu = false;
+  client_commands::plugin_override_t close;
+  close.close_menu = true;
+  EXPECT_EQ(waits({{"p/status_open", close}, {"p/status_closes", keep_open}}), (std::vector<bool> {false, true, false, false}));
+}
+
 TEST_F(PluginsTest, TheClientsOfferUsesTheSavedOverrides) {
   write_plugin(builtin_dir, "p", {{"id", "p"}, {"client_commands", json::parse(R"([{"id": "top", "label": "Top", "top_level": true, "steps": [[27]]}])")}});
   write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");

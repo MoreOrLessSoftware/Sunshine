@@ -75,6 +75,8 @@ Clients use two requests on the paired HTTPS port:
 * `GET /clientcommands` lists the commands offered now:
   `{"version": 1, "commands": [...], "groups": [{"kind": "app", "label": "...", "icon": "", "commands": [...]}]}`,
   where a group's `kind` is `app`, `program` or `plugin`, and each command has `id`, `label`, `icon` and `close-menu`.
-* `GET /runclientcommand?id=<id>` runs one and answers `{"status": "ok"}`, or `{"status": "error", "message": "..."}`
+* `GET /runclientcommand?id=<id>` runs one and answers `{"status": "ok"}` once it has started (a plugin's script
+  command that keeps the menu open and has a status file is answered once it ends, or after 4 seconds, so a client that
+  then asks for the commands again sees its new label and icon), or `{"status": "error", "message": "..."}`
   with 403 when the client isn't streaming, 404 when the command is no longer offered, 409 while another key sequence
   is being typed, and 500 when a command line couldn't start.

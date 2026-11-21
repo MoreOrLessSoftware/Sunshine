@@ -65,6 +65,12 @@ namespace plugins {
     constexpr int DEFAULT_ORDER = 1000;
 
     /**
+     * @brief How long a script command with a status file that keeps the client's menu open may take before the client
+     * is told it ran, so the menu it then reloads shows the status the script wrote. Under the client's 5 second timeout.
+     */
+    constexpr std::chrono::milliseconds STATUS_SCRIPT_WAIT = 4s;
+
+    /**
      * @brief Status of the last install or uninstall of a plugin.
      */
     struct task_info_t {
@@ -2887,6 +2893,10 @@ namespace plugins {
           command.elevated = source.elevated;
           command.env = env;
           command.log_file = plugin_log_file(reg.paths, manifest.id);
+          // With the menu kept open, the client reloads it once told the command ran: wait for the new status
+          if (!source.status_file.empty() && !command.close_menu) {
+            command.finish_wait = STATUS_SCRIPT_WAIT;
+          }
         }
         (source.top_level ? plugin.top_level : plugin.grouped).push_back(std::move(command));
       }
