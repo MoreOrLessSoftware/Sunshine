@@ -1194,6 +1194,19 @@ body {
     }
 }
 
+/*
+ * Zero-size box that clips the measuring copy below. Without it the copy, which is as wide as every link
+ * together, sticks out past narrow windows and makes the whole page scroll.
+ */
+.navbar-sunshine .navbar-measure-clip {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+}
+
 /* Invisible copy of every link, measured at its natural width. */
 .navbar-sunshine .navbar-measure {
     position: absolute;

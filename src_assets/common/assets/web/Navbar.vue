@@ -67,19 +67,21 @@
           </li>
         </ul>
         <!-- Invisible copy of every link and the overflow button, used to measure their natural widths -->
-        <ul class="navbar-nav navbar-measure" ref="measure" aria-hidden="true">
-          <li class="nav-item" v-for="item in navItems" :key="item.href">
-            <span class="nav-link">
-              <component :is="item.icon" :size="18" class="icon"></component>
-              {{ $t(item.label) }}
-            </span>
-          </li>
-          <li class="nav-item">
-            <span class="nav-link dropdown-toggle">
-              <Menu :size="18" class="icon"></Menu>
-            </span>
-          </li>
-        </ul>
+        <div class="navbar-measure-clip" aria-hidden="true">
+          <ul class="navbar-nav navbar-measure" ref="measure">
+            <li class="nav-item" v-for="item in navItems" :key="item.href">
+              <span class="nav-link">
+                <component :is="item.icon" :size="18" class="icon"></component>
+                {{ $t(item.label) }}
+              </span>
+            </li>
+            <li class="nav-item">
+              <span class="nav-link dropdown-toggle">
+                <Menu :size="18" class="icon"></Menu>
+              </span>
+            </li>
+          </ul>
+        </div>
       </div>
     </nav>
     <Notification></Notification>
