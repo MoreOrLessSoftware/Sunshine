@@ -45,6 +45,23 @@
       word-break: break-all;
     }
 
+    /* On a phone the switch and buttons move to their own line, leaving the text the full width. */
+    @media (max-width: 575.98px) {
+      .command-row {
+        flex-wrap: wrap;
+        row-gap: var(--spacing-sm) !important;
+      }
+
+      .command-text {
+        flex-basis: calc(100% - 2.25rem - var(--spacing-md));
+      }
+
+      .command-controls {
+        width: 100%;
+        justify-content: flex-end;
+      }
+    }
+
     /* With .badge, or Bootstrap's own font size wins */
     .badge.chord-badge {
       font-family: var(--bs-font-monospace);
@@ -225,7 +242,7 @@
             <ul class="list-group mb-3">
               <li class="list-group-item" v-for="command in currentPlugin.client_commands" :key="command.id"
                   :class="{'command-off': !pluginEnabled(command)}">
-                <div class="d-flex align-items-center gap-3">
+                <div class="d-flex align-items-center gap-3 command-row">
                   <span class="command-icon">
                     <span class="material-icon" v-if="glyph(pluginIcon(command))">{{ glyph(pluginIcon(command)) }}</span>
                   </span>
@@ -248,17 +265,19 @@
                       {{ command.script ? [command.script, ...command.args].join(' ') : describeSteps(command.steps) }}
                     </div>
                   </div>
-                  <div class="form-check form-switch mb-0" :title="$t('client_commands.offered')">
-                    <input class="form-check-input" type="checkbox" role="switch" :checked="pluginEnabled(command)"
-                           @change="setPluginEnabled(command, $event.target.checked)" :aria-label="$t('client_commands.offered')">
+                  <div class="d-flex align-items-center gap-3 command-controls">
+                    <div class="form-check form-switch mb-0" :title="$t('client_commands.offered')">
+                      <input class="form-check-input" type="checkbox" role="switch" :checked="pluginEnabled(command)"
+                             @change="setPluginEnabled(command, $event.target.checked)" :aria-label="$t('client_commands.offered')">
+                    </div>
+                    <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="isPluginCommandCustomized(command)" @click="resetPluginCommand(command)">
+                      {{ $t('client_commands.reset_plugin_command') }}
+                    </button>
+                    <button type="button" class="btn btn-outline-primary btn-sm" @click="editPluginCommand(command)"
+                            :title="$t('client_commands.customize')" :aria-label="$t('client_commands.customize')">
+                      <pencil :size="16"></pencil>
+                    </button>
                   </div>
-                  <button type="button" class="btn btn-outline-secondary btn-sm text-nowrap" v-if="isPluginCommandCustomized(command)" @click="resetPluginCommand(command)">
-                    {{ $t('client_commands.reset_plugin_command') }}
-                  </button>
-                  <button type="button" class="btn btn-outline-primary btn-sm" @click="editPluginCommand(command)"
-                          :title="$t('client_commands.customize')" :aria-label="$t('client_commands.customize')">
-                    <pencil :size="16"></pencil>
-                  </button>
                 </div>
 
                 <div v-if="pluginEditKey === pluginKey(command)" class="border-top mt-3 pt-3">
@@ -306,7 +325,7 @@
           <!-- The list -->
           <div v-if="currentList.length === 0 && !editor" class="alert alert-secondary">{{ $t('client_commands.empty') }}</div>
           <ul class="list-group mb-3" v-if="currentList.length > 0">
-            <li class="list-group-item d-flex align-items-center gap-3" v-for="(command, i) in currentList" :key="command.id"
+            <li class="list-group-item d-flex align-items-center gap-3 command-row" v-for="(command, i) in currentList" :key="command.id"
                 :class="{'list-group-item-primary': editor && editor.index === i, 'command-off': !command.enabled}">
               <span class="command-icon">
                 <span class="material-icon" v-if="glyph(command.icon)">{{ glyph(command.icon) }}</span>
@@ -324,27 +343,29 @@
                   {{ command.type === 'keys' ? describeSteps(command.steps) : command.cmd }}
                 </div>
               </div>
-              <div class="form-check form-switch mb-0" :title="$t('client_commands.offered')">
-                <input class="form-check-input" type="checkbox" role="switch" v-model="command.enabled" :disabled="!!editor"
-                       :aria-label="$t('client_commands.offered')">
-              </div>
-              <div class="btn-group btn-group-sm" role="group">
-                <button type="button" class="btn btn-outline-secondary" :disabled="i === 0 || !!editor" @click="move(i, -1)"
-                        :title="$t('client_commands.move_up')" :aria-label="$t('client_commands.move_up')">
-                  <arrow-up :size="16"></arrow-up>
-                </button>
-                <button type="button" class="btn btn-outline-secondary" :disabled="i === currentList.length - 1 || !!editor" @click="move(i, 1)"
-                        :title="$t('client_commands.move_down')" :aria-label="$t('client_commands.move_down')">
-                  <arrow-down :size="16"></arrow-down>
-                </button>
-                <button type="button" class="btn btn-outline-primary" :disabled="!!editor" @click="startEdit(i)"
-                        :title="$t('client_commands.edit')" :aria-label="$t('client_commands.edit')">
-                  <pencil :size="16"></pencil>
-                </button>
-                <button type="button" class="btn btn-outline-danger" :disabled="!!editor" @click="remove(i)"
-                        :title="$t('client_commands.delete')" :aria-label="$t('client_commands.delete')">
-                  <trash-2 :size="16"></trash-2>
-                </button>
+              <div class="d-flex align-items-center gap-3 command-controls">
+                <div class="form-check form-switch mb-0" :title="$t('client_commands.offered')">
+                  <input class="form-check-input" type="checkbox" role="switch" v-model="command.enabled" :disabled="!!editor"
+                         :aria-label="$t('client_commands.offered')">
+                </div>
+                <div class="btn-group btn-group-sm" role="group">
+                  <button type="button" class="btn btn-outline-secondary" :disabled="i === 0 || !!editor" @click="move(i, -1)"
+                          :title="$t('client_commands.move_up')" :aria-label="$t('client_commands.move_up')">
+                    <arrow-up :size="16"></arrow-up>
+                  </button>
+                  <button type="button" class="btn btn-outline-secondary" :disabled="i === currentList.length - 1 || !!editor" @click="move(i, 1)"
+                          :title="$t('client_commands.move_down')" :aria-label="$t('client_commands.move_down')">
+                    <arrow-down :size="16"></arrow-down>
+                  </button>
+                  <button type="button" class="btn btn-outline-primary" :disabled="!!editor" @click="startEdit(i)"
+                          :title="$t('client_commands.edit')" :aria-label="$t('client_commands.edit')">
+                    <pencil :size="16"></pencil>
+                  </button>
+                  <button type="button" class="btn btn-outline-danger" :disabled="!!editor" @click="remove(i)"
+                          :title="$t('client_commands.delete')" :aria-label="$t('client_commands.delete')">
+                    <trash-2 :size="16"></trash-2>
+                  </button>
+                </div>
               </div>
             </li>
           </ul>
