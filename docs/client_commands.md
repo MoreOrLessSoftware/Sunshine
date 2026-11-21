@@ -46,8 +46,8 @@ before another one starts. If a command fails, the client shows why on its butto
 ## Files
 The global commands are kept in the `commands` array of `client_commands.json` in the config directory, the program
 groups in its `program-groups` array, your changes to plugin commands in its `plugin-commands` object (such
-as `{"nyrna/toggle": {"label": "Pause Game", "icon": "material:pause", "programs": ["game.exe"]}}`, where an empty
-`programs` list means any program), and an application's commands in a `client-commands` array on it in `apps.json`.
+as `{"nyrna/toggle": {"label": "Pause Game", "icon": "material:pause", "programs": ["game.exe"], "close-menu": false}}`,
+where an empty `programs` list means any program), and an application's commands in a `client-commands` array on it in `apps.json`.
 A program group looks like this:
 
 ```json

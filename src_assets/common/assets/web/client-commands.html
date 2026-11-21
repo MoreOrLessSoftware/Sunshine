@@ -277,7 +277,7 @@
                       <span class="badge bg-info text-dark ms-1">{{ command.top_level ? $t('client_commands.top_level') : $t('client_commands.in_plugin_group') }}</span>
                       <span class="badge bg-info text-dark ms-1" v-if="pluginPrograms(command).length > 0">{{ $t('client_commands.only_with_programs', { programs: pluginPrograms(command).join(', ') }) }}</span>
                       <span class="badge bg-warning text-dark ms-1" v-if="command.script && command.elevated">{{ $t('_common.elevated') }}</span>
-                      <span class="badge bg-light text-dark border ms-1" v-if="!command.close_menu">{{ $t('client_commands.keeps_menu_open') }}</span>
+                      <span class="badge bg-light text-dark border ms-1" v-if="!pluginClosesMenu(command)">{{ $t('client_commands.keeps_menu_open') }}</span>
                       <span class="badge bg-light text-dark border ms-1" v-if="isPluginCommandCustomized(command)">{{ $t('client_commands.customized') }}</span>
                     </div>
                     <div class="command-summary text-muted" v-if="command.action">
@@ -340,6 +340,14 @@
                            :aria-label="$t('client_commands.group_programs')" :value="pluginOverrides[pluginKey(command)].programs.join(', ')"
                            placeholder="photoshop.exe" @change="setPrograms(pluginOverrides[pluginKey(command)], $event.target.value)">
                     <div class="form-text" v-if="pluginOverrides[pluginKey(command)].programsMode === 'only'">{{ $t('client_commands.plugin_programs_desc') }}</div>
+                  </div>
+                  <div class="mb-2">
+                    <label class="form-label" :for="'plugin-close-menu-' + command.id">{{ $t('client_commands.plugin_close_menu') }}</label>
+                    <select class="form-select" :id="'plugin-close-menu-' + command.id" v-model="pluginOverrides[pluginKey(command)].closeMenu">
+                      <option value="plugin">{{ $t('client_commands.plugin_close_menu_default', { choice: command.close_menu ? $t('client_commands.plugin_close_menu_close') : $t('client_commands.plugin_close_menu_keep') }) }}</option>
+                      <option value="close">{{ $t('client_commands.plugin_close_menu_close') }}</option>
+                      <option value="keep">{{ $t('client_commands.plugin_close_menu_keep') }}</option>
+                    </select>
                   </div>
                 </div>
               </li>
@@ -943,6 +951,7 @@
             label: value.label || '',
             icon: value.icon || '',
             programsMode: Array.isArray(value.programs) ? (value.programs.length > 0 ? 'only' : 'any') : 'plugin',
+            closeMenu: typeof value['close-menu'] === 'boolean' ? (value['close-menu'] ? 'close' : 'keep') : 'plugin',
             programs: Array.isArray(value.programs) ? [...value.programs] : [],
             enabled: value.enabled !== false,
           }]));
@@ -1000,9 +1009,19 @@
         const override = this.pluginOverrides[this.pluginKey(command)];
         return (override && this.overridePrograms(override)) || command.programs;
       },
+      /**
+       * Whether the client closes its menu after running a plugin command.
+       *
+       * @param {object} command The command, as the plugin lists it.
+       * @returns {boolean} The user's choice, or the plugin's when they haven't made one.
+       */
+      pluginClosesMenu(command) {
+        const override = this.pluginOverrides[this.pluginKey(command)];
+        return override && override.closeMenu !== 'plugin' ? override.closeMenu === 'close' : command.close_menu;
+      },
       isPluginCommandCustomized(command) {
         const override = this.pluginOverrides[this.pluginKey(command)];
-        return !!override && (!!override.label.trim() || !!override.icon || this.overridePrograms(override) !== null);
+        return !!override && (!!override.label.trim() || !!override.icon || this.overridePrograms(override) !== null || override.closeMenu !== 'plugin');
       },
       editPluginCommand(command) {
         const key = this.pluginKey(command);
@@ -1010,7 +1029,7 @@
           this.pluginEditKey = null;
         } else {
           if (!this.pluginOverrides[key]) {
-            this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: [], enabled: true};
+            this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: [], closeMenu: 'plugin', enabled: true};
           }
           this.pluginEditKey = key;
         }
@@ -1035,7 +1054,7 @@
       setPluginEnabled(command, enabled) {
         const key = this.pluginKey(command);
         if (!this.pluginOverrides[key]) {
-          this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: [], enabled: true};
+          this.pluginOverrides[key] = {label: '', icon: '', programsMode: 'plugin', programs: [], closeMenu: 'plugin', enabled: true};
         }
         this.pluginOverrides[key].enabled = enabled;
       },
@@ -1045,6 +1064,7 @@
         override.icon = '';
         override.programsMode = 'plugin';
         override.programs = [];
+        override.closeMenu = 'plugin';
         this.iconPicker.target = null;
       },
       // Only what changes something, in a fixed order so saved and edited can be compared
@@ -1062,6 +1082,9 @@
           const programs = this.overridePrograms(override);
           if (programs !== null) {
             entry.programs = programs;
+          }
+          if (override.closeMenu !== 'plugin') {
+            entry['close-menu'] = override.closeMenu === 'close';
           }
           if (override.enabled === false) {
             entry.enabled = false;

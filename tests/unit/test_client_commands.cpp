@@ -888,6 +888,28 @@ TEST(ClientCommandsPluginOverrides, ProgramsKeepTheDifferenceBetweenAbsentAndEmp
   EXPECT_EQ(strict->size(), 1);
 }
 
+TEST(ClientCommandsPluginOverrides, ClosingTheMenuKeepsTheDifferenceBetweenAbsentAndSet) {
+  auto overrides = client_commands::parse_plugin_overrides(json::parse(R"({
+    "p/keep-open": {"close-menu": false},
+    "p/close": {"close-menu": true},
+    "p/label": {"label": "L"},
+    "p/bad": {"close-menu": "no"}
+  })"));
+  ASSERT_EQ(overrides.size(), 3);  // Either value on its own changes something
+  EXPECT_EQ(overrides["p/keep-open"].close_menu, false);
+  EXPECT_EQ(overrides["p/close"].close_menu, true);
+  EXPECT_FALSE(overrides["p/label"].close_menu);
+  EXPECT_EQ(client_commands::to_json(overrides), json::parse(R"({
+    "p/keep-open": {"close-menu": false},
+    "p/close": {"close-menu": true},
+    "p/label": {"label": "L"}
+  })"));
+
+  std::string error;
+  EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::parse(R"({"a/b": {"close-menu": 0}})"), error));
+  EXPECT_NE(error.find("\"close-menu\" must be true or false"), std::string::npos) << error;
+}
+
 TEST(ClientCommandsPluginOverrides, StrictParsingRejectsAnythingInvalid) {
   std::string error;
   EXPECT_FALSE(client_commands::parse_plugin_overrides_strict(json::array(), error));

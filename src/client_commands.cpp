@@ -520,6 +520,13 @@ namespace client_commands {
         }
         entry.programs = programs->get<std::vector<std::string>>();
       }
+      if (const auto close_menu = json.find("close-menu"); close_menu != json.end()) {
+        if (!close_menu->is_boolean()) {
+          error = std::format("\"{}\": \"close-menu\" must be true or false", key);
+          return std::nullopt;
+        }
+        entry.close_menu = close_menu->get<bool>();
+      }
       return entry;
     }
 
@@ -527,10 +534,10 @@ namespace client_commands {
      * @brief Check whether an override of a plugin command changes anything.
      *
      * @param entry Override to check.
-     * @return `true` when it sets a label, an icon or programs, or turns the command off.
+     * @return `true` when it sets a label, an icon, programs or whether the menu closes, or turns the command off.
      */
     bool changes_something(const plugin_override_t &entry) {
-      return !entry.label.empty() || !entry.icon.empty() || entry.programs.has_value() || !entry.enabled;
+      return !entry.label.empty() || !entry.icon.empty() || entry.programs.has_value() || entry.close_menu.has_value() || !entry.enabled;
     }
   }  // namespace
 
@@ -599,6 +606,9 @@ namespace client_commands {
       }
       if (entry.programs) {
         item["programs"] = *entry.programs;
+      }
+      if (entry.close_menu) {
+        item["close-menu"] = *entry.close_menu;
       }
       if (!entry.enabled) {
         item["enabled"] = false;

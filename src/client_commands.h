@@ -83,13 +83,14 @@ namespace client_commands {
   };
 
   /**
-   * @brief The user's label, icon, programs and on or off setting for a command that comes with a plugin.
+   * @brief The user's label, icon, programs, menu closing and on or off setting for a command that comes with a plugin.
    */
   struct plugin_override_t {
     std::string label;  ///< Label to show instead of the plugin's, or empty to keep it.
     std::string icon;  ///< Icon to show instead of the plugin's, such as `material:<name>`, or empty to keep it.
     std::optional<std::vector<std::string>> programs;  ///< Programs to limit the command to instead of the plugin's, empty for no limit, or `std::nullopt` to keep the plugin's.
     bool enabled = true;  ///< Whether clients are offered the command.
+    std::optional<bool> close_menu;  ///< Whether the client closes its menu after running the command instead of as the plugin says, or `std::nullopt` to keep the plugin's.
   };
 
   /**

@@ -3698,6 +3698,39 @@ TEST_F(PluginsTest, TheUsersLabelAndIconReplaceThePluginsUntilAStatusFileDoes) {
   EXPECT_EQ(plugins::offered_client_commands({}).at(0).grouped[0].label, "Suspend");
 }
 
+TEST_F(PluginsTest, TheUsersChoiceOfClosingTheMenuReplacesThePlugins) {
+  write_plugin(builtin_dir, "p", {
+                                   {"id", "p"},
+                                   {"client_commands", json::parse(R"([
+                                     {"id": "closes", "steps": [[27]]},
+                                     {"id": "stays", "steps": [[27]], "close_menu": false}
+                                   ])")},
+                                 });
+  write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto close_menu = [](const client_commands::plugin_overrides_t &overrides) {
+    std::vector<bool> out;
+    for (const auto &command : plugins::offered_client_commands({}, overrides).at(0).grouped) {
+      out.push_back(command.close_menu);
+    }
+    return out;
+  };
+  client_commands::plugin_override_t keep_open;
+  keep_open.close_menu = false;
+  client_commands::plugin_override_t close;
+  close.close_menu = true;
+  client_commands::plugin_override_t label_only;
+  label_only.label = "Renamed";
+
+  // Without one, or with one that doesn't set it, the plugin's
+  EXPECT_EQ(close_menu({}), (std::vector<bool> {true, false}));
+  EXPECT_EQ(close_menu({{"p/closes", label_only}, {"p/stays", label_only}}), (std::vector<bool> {true, false}));
+
+  // Either way round
+  EXPECT_EQ(close_menu({{"p/closes", keep_open}, {"p/stays", close}}), (std::vector<bool> {false, true}));
+}
+
 TEST_F(PluginsTest, TheClientsOfferUsesTheSavedOverrides) {
   write_plugin(builtin_dir, "p", {{"id", "p"}, {"client_commands", json::parse(R"([{"id": "top", "label": "Top", "top_level": true, "steps": [[27]]}])")}});
   write_text(state_file, R"({"plugins":{"p":{"installed":true,"active":true}}})");

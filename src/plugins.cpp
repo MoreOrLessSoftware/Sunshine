@@ -2863,6 +2863,9 @@ namespace plugins {
           if (!entry->second.icon.empty()) {
             command.icon = entry->second.icon;
           }
+          if (entry->second.close_menu) {
+            command.close_menu = *entry->second.close_menu;
+          }
         }
         if (!source.status_file.empty()) {
           apply_status_file(data_dir / source.status_file, command);
