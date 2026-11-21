@@ -8,9 +8,9 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-$version = '1.1.0'
+$version = '1.2.0'
 $url = "https://github.com/MoreOrLessSoftware/stadiacast/releases/download/v$version/stadiacast-$version-windows-x86_64.zip"
-$sha256 = 'c49973d5ae0961216e020b94a8f254402a1b86266e58a1d6ff5413b545658eeb'
+$sha256 = '479b1068c48d39d8c172e6a07ce9cb29af164d99b5fd9d96c36047588268637c'
 
 $zip = Join-Path $DataDir 'stadiacast.zip'
 $local = Join-Path $DataDir 'stadiacast-local.zip'
