@@ -1797,6 +1797,25 @@ p {
     padding-bottom: var(--spacing-3xl);
 }
 
+/* Phones get less room above the page heading and below the last section. */
+@media (max-width: 575.98px) {
+    #content {
+        padding-top: var(--spacing-md);
+        padding-bottom: var(--spacing-lg);
+    }
+
+    /* The heading block's my-4 margin would otherwise add to the padding above. */
+    #content > :first-child {
+        margin-top: 0 !important;
+        margin-bottom: var(--spacing-md) !important;
+    }
+
+    /* Keep the description close to the page title. */
+    #content > :first-child:not(.page-header) h1 {
+        margin-bottom: var(--spacing-xs);
+    }
+}
+
 .config-layout {
     display: flex;
     align-items: flex-start;
