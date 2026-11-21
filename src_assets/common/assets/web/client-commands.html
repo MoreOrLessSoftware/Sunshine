@@ -45,8 +45,9 @@
       word-break: break-all;
     }
 
-    /* On a phone the switch and buttons move to their own line, leaving the text the full width. */
-    @media (max-width: 575.98px) {
+    /* Below Bootstrap's lg breakpoint the switch and buttons move to their own line, leaving the
+       text the full width. */
+    @media (max-width: 991.98px) {
       .command-row {
         flex-wrap: wrap;
         row-gap: var(--spacing-sm) !important;
