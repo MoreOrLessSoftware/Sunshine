@@ -37,9 +37,10 @@ if (-not $before) {
 
 Invoke-NyrnaToggle $hotkey $minimize
 
-# Nyrna minimizes the window before suspending it, so this can take a moment
-for ($i = 0; $i -lt 16; $i++) {
-    Start-Sleep -Milliseconds 250
+# Nyrna minimizes the window before suspending it, so this can take a moment. Checked often, so the menu's label
+# changes soon after.
+for ($i = 0; $i -lt 40; $i++) {
+    Start-Sleep -Milliseconds 100
     if ($before -and -not (Test-Suspended $before.pid)) {
         Write-Output "$(Get-Date -Format o) Resumed $($before.name)"
         Clear-Suspended

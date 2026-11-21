@@ -19,8 +19,7 @@ $stateFile = Join-Path $dataDir 'suspended.json'
 $menuFile = Join-Path $dataDir 'menu.json'
 $imageFile = Join-Path $dataDir 'suspended.png'
 
-if (-not ('NyrnaNative' -as [type])) {
-    Add-Type -TypeDefinition @"
+$nativeSource = @"
 using System;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -44,6 +43,30 @@ public static class NyrnaNative
     [DllImport("user32.dll")] public static extern uint MapVirtualKey(uint code, uint mapType);
 }
 "@
+
+# Compiling it takes about half a second, so it's compiled once into the data directory, named after its source so a
+# changed one is compiled again. Compiled in memory as before when that can't be done.
+if (-not ('NyrnaNative' -as [type])) {
+    $hash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($nativeSource))).Replace('-', '').Substring(0, 16)
+    $nativeDll = Join-Path $dataDir "NyrnaNative-$hash.dll"
+    $partial = $null
+    try {
+        if (-not (Test-Path $nativeDll)) {
+            # Written under another name first, so a run at the same time never loads half a file
+            $partial = "$nativeDll.$PID.tmp"
+            Add-Type -TypeDefinition $nativeSource -OutputAssembly $partial -OutputType Library
+            Move-Item -LiteralPath $partial -Destination $nativeDll -Force
+        }
+        Add-Type -Path $nativeDll
+    }
+    catch {
+        if ($partial) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+        }
+        if (-not ('NyrnaNative' -as [type])) {
+            Add-Type -TypeDefinition $nativeSource
+        }
+    }
 }
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
@@ -258,30 +281,71 @@ function Invoke-NyrnaToggle([string]$hotkey, [bool]$minimize) {
     }
 
     # Through Task Scheduler (see Register-ToggleTask), so Nyrna's own window can't take the foreground
-    $task = Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName -ErrorAction SilentlyContinue
+    $task = Get-Task $taskName
     if (-not $task) {
         throw 'The scheduled task that runs Nyrna is missing; pick the Suspend command in Moonlight once to set it up again.'
     }
     $arguments = if ($minimize) { '--toggle' } else { '--toggle --no-minimize' }
-    if ($task.Actions[0].Arguments -ne $arguments) {
+    $taskArguments = $task.Definition.Actions.Item(1).Arguments
+    if ($taskArguments -ne $arguments) {
         # The minimize option changed since the task was set up; only an administrator can change it
-        Write-Output "$(Get-Date -Format o) The task runs Nyrna with $($task.Actions[0].Arguments), not $arguments"
+        Write-Output "$(Get-Date -Format o) The task runs Nyrna with $taskArguments, not $arguments"
     }
-    Write-Output "$(Get-Date -Format o) Running $exe $($task.Actions[0].Arguments) through Task Scheduler"
-    Start-ScheduledTask -TaskPath $taskPath -TaskName $taskName
-    for ($i = 0; $i -lt 80; $i++) {
-        Start-Sleep -Milliseconds 250
-        if ((Get-ScheduledTask -TaskPath $taskPath -TaskName $taskName).State -ne 'Running') {
+    Write-Output "$(Get-Date -Format o) Running $exe $taskArguments through Task Scheduler"
+    $lastRun = $task.LastRunTime
+    $task.Run($null) | Out-Null
+    # Checked often, so the toggle is seen to end soon after it does. It has ended once it has started (its last run
+    # time moved on) and is neither queued nor running.
+    for ($i = 0; $i -lt 200; $i++) {
+        Start-Sleep -Milliseconds 100
+        $now = Get-Task $taskName
+        if ($now.LastRunTime -ne $lastRun -and $now.State -ne $TASK_STATE_RUNNING -and $now.State -ne $TASK_STATE_QUEUED) {
             break
         }
     }
-    $info = Get-ScheduledTaskInfo -TaskPath $taskPath -TaskName $taskName
-    Write-Output "$(Get-Date -Format o) Nyrna finished with result $($info.LastTaskResult)"
+    Write-Output "$(Get-Date -Format o) Nyrna finished with result $($now.LastTaskResult)"
+}
+
+# Task Scheduler's states for a task, as its COM interface gives them
+$TASK_STATE_QUEUED = 2
+$TASK_STATE_RUNNING = 4
+
+# Returns one of the plugin's scheduled tasks from Task Scheduler's COM interface, or $null. Much quicker than
+# Get-ScheduledTask, which goes through WMI and takes about a second a call.
+function Get-Task([string]$name) {
+    if (-not $script:taskService) {
+        $script:taskService = New-Object -ComObject Schedule.Service
+        $script:taskService.Connect()
+    }
+    try {
+        return $script:taskService.GetFolder($taskPath.TrimEnd('\')).GetTask($name)
+    }
+    catch {
+        return $null
+    }
+}
+
+# Whether a task runs as this user: Task Scheduler may keep the name it was given, the name without the domain, or the
+# account's SID.
+function Test-TaskUser($task) {
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $userId = $task.Definition.Principal.UserId
+    return $userId -eq $identity.Name -or $userId -eq $identity.User.Value -or $userId -eq ($identity.Name -split '\\')[-1]
 }
 
 # Sets up a scheduled task that runs as this user with full rights, unless it's already set up that way.
 function Register-Task([string]$name, [string]$execute, [string]$arguments, [string]$workingDir) {
     $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    # Looked at through COM first, as this runs each time the command does
+    $task = Get-Task $name
+    if ($task) {
+        $action = $task.Definition.Actions.Item(1)
+        if ($action.Path -eq $execute -and $action.Arguments -eq $arguments -and (Test-TaskUser $task)) {
+            return
+        }
+    }
+
     $existing = Get-ScheduledTask -TaskPath $taskPath -TaskName $name -ErrorAction SilentlyContinue
     if ($existing -and $existing.Actions[0].Execute -eq $execute -and $existing.Actions[0].Arguments -eq $arguments -and $existing.Principal.UserId -eq $user) {
         return
