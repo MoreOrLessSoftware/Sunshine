@@ -199,8 +199,28 @@
         </div>
 
         <div v-else class="config-page">
-          <h2 class="h4">{{ viewTitle }}</h2>
+          <div class="d-flex flex-wrap align-items-baseline column-gap-3 mb-2">
+            <h2 class="h4 mb-0">{{ viewTitle }}</h2>
+            <!-- The commands for all streams save on their own shortly after each change -->
+            <template v-if="currentView === 'global' && !autoSaveError">
+              <span class="small text-muted ms-auto" role="status" v-if="autoSaving || globalChanged">
+                <span class="spinner-border spinner-border-sm me-1" aria-hidden="true"></span>
+                {{ $t('client_commands.saving') }}
+              </span>
+              <span class="small text-muted ms-auto" role="status" v-else-if="autoSavedOnce">
+                <check :size="14" class="icon"></check>
+                {{ $t('client_commands.autosaved') }}
+              </span>
+            </template>
+          </div>
           <p>{{ viewDescription }}</p>
+
+          <div v-if="autoSaveError" class="alert alert-danger d-flex flex-wrap align-items-center gap-2 py-2">
+            <span class="me-auto">{{ autoSaveError }}</span>
+            <button type="button" class="btn btn-sm btn-outline-danger" :disabled="saving" @click="autoSave">
+              {{ $t('client_commands.retry') }}
+            </button>
+          </div>
 
           <!-- A program group's own settings -->
           <div v-if="currentGroup" class="card mb-3">
@@ -229,16 +249,12 @@
                   <icon-chooser :names="iconNames" :codepoints="codepoints" :selected="currentGroup.icon" @pick="pickIcon"></icon-chooser>
                 </div>
               </div>
-              <div class="mb-3">
+              <div>
                 <label class="form-label" for="group-programs">{{ $t('client_commands.group_programs') }}</label>
                 <input type="text" class="form-control font-monospace" id="group-programs" :value="currentGroup.programs.join(', ')"
                        placeholder="photoshop.exe" @change="setPrograms(currentGroup, $event.target.value)">
                 <div class="form-text">{{ $t('client_commands.group_programs_desc') }}</div>
               </div>
-              <button type="button" class="btn btn-outline-danger btn-sm" @click="removeProgramGroup(currentGroup)">
-                <trash-2 :size="16" class="icon"></trash-2>
-                {{ $t('client_commands.delete_program') }}
-              </button>
             </div>
           </div>
 
@@ -384,19 +400,29 @@
             {{ $t('client_commands.add') }}
           </button>
 
-          </template>
-
-          <!-- Saving covers every list -->
-          <div class="d-flex flex-wrap align-items-center gap-2">
-            <button type="button" class="btn btn-success" :disabled="!dirty || saving || !!editor" @click="save">
-              <save :size="18" class="icon"></save>
-              {{ $t('client_commands.save') }}
-            </button>
-            <button type="button" class="btn btn-outline-secondary" v-if="dirty" :disabled="saving || !!editor" @click="revert">
-              {{ $t('client_commands.revert') }}
+          <!-- Deleting a program group comes after its commands, away from the buttons used most -->
+          <div v-if="currentGroup" class="border-top pt-3 mb-3">
+            <button type="button" class="btn btn-outline-danger btn-sm" @click="removeProgramGroup(currentGroup)">
+              <trash-2 :size="16" class="icon"></trash-2>
+              {{ $t('client_commands.delete_program') }}
             </button>
           </div>
-          <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
+
+          </template>
+
+          <!-- Applications, programs and plugins are saved with the Save button; the commands for all streams save on their own -->
+          <template v-if="currentView !== 'global'">
+            <div class="d-flex flex-wrap align-items-center gap-2">
+              <button type="button" class="btn btn-success" :disabled="!manualDirty || saving || !!editor" @click="save">
+                <save :size="18" class="icon"></save>
+                {{ $t('client_commands.save') }}
+              </button>
+              <button type="button" class="btn btn-outline-secondary" v-if="manualDirty" :disabled="saving || !!editor" @click="revert">
+                {{ $t('client_commands.revert') }}
+              </button>
+            </div>
+            <div v-if="error" class="alert alert-danger py-2 mt-3 mb-0">{{ error }}</div>
+          </template>
         </div>
       </div>
     </div>
@@ -581,6 +607,8 @@
 
   // Recording stops after this long without a key
   const RECORD_IDLE_MS = 15000;
+  // How long after the last change the commands for all streams are saved
+  const SAVE_DELAY_MS = 600;
 
   // Icons likely for a command, shown first when nothing is searched (as in Moonlight's own chooser)
   const COMMON_ICONS = [
@@ -749,7 +777,15 @@
         loading: true,
         loadError: null,
         saving: false,
+        // Why the last Save failed
         error: null,
+        // The commands for all streams save on their own: whether that's under way, changes made meanwhile,
+        // the delay before the next, whether any has been saved since the page loaded, and why the last failed
+        autoSaving: false,
+        autoSaveQueued: false,
+        autoSaveTimer: null,
+        autoSavedOnce: false,
+        autoSaveError: null,
         // The global commands, and each application's ({index, name, commands}), as edited
         global: [],
         apps: [],
@@ -847,6 +883,14 @@
       dirty() {
         return this.globalChanged || this.programGroupsChanged || this.pluginOverridesChanged || this.changedApps.length > 0;
       },
+      // What the Save button saves: everything but the commands for all streams
+      manualDirty() {
+        return this.programGroupsChanged || this.pluginOverridesChanged || this.changedApps.length > 0;
+      },
+      // The commands for all streams while they differ from what's saved, so each change can be saved
+      unsavedGlobal() {
+        return this.globalChanged ? JSON.stringify(this.global.map(forServer)) : '';
+      },
       pickableKeys() {
         const keys = [];
         for (let vk = 0x41; vk <= 0x5A; vk++) keys.push(vk);
@@ -857,6 +901,13 @@
         }
         for (let vk = 0x60; vk <= 0x69; vk++) keys.push(vk);
         return keys;
+      },
+    },
+    watch: {
+      unsavedGlobal(value) {
+        if (value) {
+          this.scheduleAutoSave();
+        }
       },
     },
     mounted() {
@@ -871,6 +922,7 @@
     },
     beforeUnmount() {
       this.stopRecording();
+      window.clearTimeout(this.autoSaveTimer);
       window.removeEventListener('hashchange', this.onHashChange);
       window.removeEventListener('beforeunload', this.onBeforeUnload);
     },
@@ -1142,7 +1194,7 @@
         }
       },
       onBeforeUnload(event) {
-        if (this.dirty || this.editor) {
+        if (this.dirty || this.saving || this.editor) {
           event.preventDefault();
           event.returnValue = '';
         }
@@ -1333,9 +1385,47 @@
       },
 
       // --- Saving
-      revert() {
+      async revert() {
+        // Discarding the Save button's changes keeps those to the commands for all streams
+        if (this.globalChanged) {
+          await this.autoSave();
+          if (this.autoSaveError) {
+            return;
+          }
+        }
+        this.error = null;
         this.load();
       },
+      scheduleAutoSave() {
+        window.clearTimeout(this.autoSaveTimer);
+        this.autoSaveTimer = window.setTimeout(() => this.autoSave(), SAVE_DELAY_MS);
+      },
+      /**
+       * Save the commands for all streams, which happens shortly after each change to them.
+       */
+      async autoSave() {
+        window.clearTimeout(this.autoSaveTimer);
+        if (this.saving) {
+          this.autoSaveQueued = true;
+          return;
+        }
+        if (!this.globalChanged) {
+          return;
+        }
+        this.autoSaving = true;
+        this.autoSaveError = null;
+        const sent = await this.send(false);
+        this.autoSaving = false;
+        if (sent.error) {
+          this.autoSaveError = sent.error;
+        } else {
+          this.autoSavedOnce = true;
+        }
+        this.afterSave();
+      },
+      /**
+       * Save the applications', programs' and plugins' commands, for the Save button.
+       */
       async save() {
         // A program group needs a name and its programs
         const incomplete = this.programGroups.find((group) => !group.label.trim() || group.programs.length === 0);
@@ -1344,20 +1434,46 @@
           this.error = this.i18n.t('client_commands.need_program');
           return;
         }
-
-        const payload = {apps: this.changedApps.map((app) => ({index: app.index, name: app.name, 'client-commands': app.commands.map(forServer)}))};
+        if (this.saving) {
+          return;
+        }
+        this.error = null;
+        const sent = await this.send(true);
+        if (sent.error) {
+          this.error = sent.error;
+        } else {
+          notifyKey.success('client_commands.saved');
+        }
+        this.afterSave();
+      },
+      /**
+       * Send what changed to the server, and take what was sent as saved once it's accepted.
+       *
+       * @param {boolean} everything Whether to send the applications', programs' and plugins' commands too,
+       *                             rather than only the commands for all streams.
+       * @returns {Promise<{error: ?string}>} Why it failed, or null.
+       */
+      async send(everything) {
+        // What's sent becomes what's saved, as the lists can change again before the answer comes
+        const changedApps = everything ? this.changedApps : [];
+        const payload = {apps: changedApps.map((app) => ({index: app.index, name: app.name, 'client-commands': app.commands.map(forServer)}))};
+        const sent = {apps: Object.fromEntries(changedApps.map((app) => [app.index, JSON.stringify(app.commands.map(forServer))]))};
         if (this.globalChanged) {
           payload.commands = this.global.map(forServer);
+          sent.global = JSON.stringify(payload.commands);
         }
-        if (this.programGroupsChanged) {
+        if (everything && this.programGroupsChanged) {
           payload['program-groups'] = this.programGroups.map(groupForServer);
+          sent.programGroups = JSON.stringify(payload['program-groups']);
         }
-        if (this.pluginOverridesChanged) {
+        if (everything && this.pluginOverridesChanged) {
           payload['plugin-commands'] = this.overridesForServer();
+          sent.pluginOverrides = JSON.stringify(payload['plugin-commands']);
         }
 
+        // Any change to the commands for all streams goes with this
+        window.clearTimeout(this.autoSaveTimer);
         this.saving = true;
-        this.error = null;
         try {
           const response = await apiFetch('./api/client-commands', {
             method: 'POST',
@@ -1366,16 +1482,31 @@
           });
           const result = await response.json();
           if (!response.ok || result.status !== true) {
-            this.error = result.error || this.i18n.t('client_commands.save_failure');
-            return;
+            return {error: result.error || this.i18n.t('client_commands.save_failure')};
           }
-          notifyKey.success('client_commands.saved');
-          await this.load();
+          Object.assign(this.saved.apps, sent.apps);
+          for (const key of ['global', 'programGroups', 'pluginOverrides']) {
+            if (key in sent) {
+              this.saved[key] = sent[key];
+            }
+          }
+          if ('global' in sent) {
+            this.autoSaveError = null;
+          }
+          return {error: null};
         } catch (error) {
           console.error('Failed to save client commands', error);
-          this.error = this.i18n.t('client_commands.save_failure');
+          return {error: this.i18n.t('client_commands.save_failure')};
         } finally {
           this.saving = false;
+        }
+      },
+      // Saves the commands for all streams changed while another save was under way
+      afterSave() {
+        const again = this.autoSaveQueued && !this.autoSaveError;
+        this.autoSaveQueued = false;
+        if (again) {
+          this.autoSave();
         }
       },
     },
