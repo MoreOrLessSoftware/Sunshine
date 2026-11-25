@@ -90,10 +90,29 @@ function Get-AudioArguments {
 }
 
 function Get-DnsUpstream {
-    <# The DNS option, or the first DNS server of the interface that holds this PC's default route. #>
+    <#
+    The DNS option, or the first DNS server of the interface that holds this PC's default route. When a single
+    interface has a default gateway, .NET answers in milliseconds; the network cmdlets that compare route metrics
+    take seconds to load, so they are only used to choose between several.
+    #>
     $configured = "$env:SUNSHINE_PLUGIN_OPT_DNS_UPSTREAM".Trim()
     if ($configured) {
         return $configured
+    }
+    $routed = @([Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() | Where-Object {
+            $_.OperationalStatus -eq 'Up' -and @($_.GetIPProperties().GatewayAddresses | Where-Object {
+                    $_.Address.AddressFamily -eq 'InterNetwork' -and -not $_.Address.Equals([Net.IPAddress]::Any)
+                }).Count -gt 0
+        })
+    if ($routed.Count -eq 1) {
+        $properties = $routed[0].GetIPProperties()
+        $own = @($properties.UnicastAddresses | ForEach-Object { $_.Address.ToString() })
+        foreach ($address in $properties.DnsAddresses) {
+            $server = $address.ToString()
+            if ($address.AddressFamily -eq 'InterNetwork' -and -not $server.StartsWith('127.') -and ($own -notcontains $server)) {
+                return $server
+            }
+        }
     }
     $own = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object IPAddress)
     $routes = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric, InterfaceMetric
@@ -142,7 +161,10 @@ function Start-Receiver {
     <#
     Start the receiver in the background unless one is already running, then wait until it answers.
     Returns once the receiver is ready; throws with the receiver's own error when it exits early.
+    With -NoWait it returns as soon as the receiver process starts, so a stream doesn't wait the seconds the
+    receiver takes to load; Start test on the Plugins page still waits and shows why a receiver can't start.
     #>
+    param([switch]$NoWait)
     if (-not (Test-Path $StadiacastExe)) {
         throw "Stadiacast is not installed ($StadiacastExe is missing); reinstall the plugin."
     }
@@ -188,6 +210,10 @@ function Start-Receiver {
     $process = Start-Process -FilePath $StadiacastExe -ArgumentList $arguments -WorkingDirectory $runDir `
         -WindowStyle Hidden -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
     Set-Content -Path $PidFile -Value $process.Id
+    if ($NoWait) {
+        Write-Output "The receiver is starting (process $($process.Id)); wake the controller with a short press of its Stadia button once the stream is up"
+        return
+    }
 
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
