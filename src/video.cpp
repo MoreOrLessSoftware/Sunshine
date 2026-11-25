@@ -4302,6 +4302,9 @@ namespace video {
 
     probe_pyrowave();
 
+    // Record the GPUs this probe saw, so the next stream probes again only if they change
+    platf::needs_encoder_reenumeration();
+
     return 0;
   }
 

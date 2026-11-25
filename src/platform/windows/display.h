@@ -846,4 +846,43 @@ namespace platf::dxgi {
      */
     capture_e release_snapshot() override;
   };
+
+  /**
+   * @brief What identifies a GPU and its driver to the encoder probe.
+   */
+  struct adapter_identity_t {
+    LONG luid_high;  ///< High part of the adapter LUID, which changes when the driver restarts.
+    DWORD luid_low;  ///< Low part of the adapter LUID.
+    UINT vendor_id;  ///< PCI vendor ID.
+    UINT device_id;  ///< PCI device ID.
+    UINT sub_sys_id;  ///< PCI subsystem ID.
+    UINT revision;  ///< PCI revision.
+    LONGLONG driver_version;  ///< User-mode driver version, or 0 when DXGI does not report one.
+    bool drives_desktop;  ///< Whether any of the adapter's outputs is part of the desktop.
+
+    /**
+     * @brief Compare two adapter identities field by field.
+     *
+     * @param other Adapter identity to compare with.
+     * @return `true` when every field matches.
+     */
+    bool operator==(const adapter_identity_t &other) const = default;
+  };
+
+  /**
+   * @brief List the identity of every adapter a DXGI factory enumerates, in enumeration order.
+   *
+   * @param factory Factory to enumerate adapters with.
+   * @return One identity per adapter; empty when the factory is null or has no adapters.
+   */
+  std::vector<adapter_identity_t> adapter_identities(IDXGIFactory1 *factory);
+
+  /**
+   * @brief Decide whether a change in the display subsystem calls for probing the encoders again.
+   *
+   * @param last Adapters seen when the encoders were last probed, or empty when they were never recorded.
+   * @param current Adapters present now.
+   * @return `true` unless the adapters, their drivers, and which of them drive the desktop are unchanged.
+   */
+  bool adapters_need_reenumeration(const std::optional<std::vector<adapter_identity_t>> &last, const std::vector<adapter_identity_t> &current);
 }  // namespace platf::dxgi

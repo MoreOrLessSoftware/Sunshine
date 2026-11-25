@@ -4,8 +4,11 @@
  */
 // standard includes
 #include <cmath>
+#include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
+#include <vector>
 
 // platform includes
 #include <initguid.h>
@@ -993,6 +996,53 @@ namespace platf::dxgi {
     }
   }
 
+  std::vector<adapter_identity_t> adapter_identities(IDXGIFactory1 *factory) {
+    std::vector<adapter_identity_t> identities;
+    if (!factory) {
+      return identities;
+    }
+
+    adapter_t::pointer adapter_p {};
+    for (UINT x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+      adapter_t adapter {adapter_p};
+
+      DXGI_ADAPTER_DESC1 desc;
+      if (FAILED(adapter->GetDesc1(&desc))) {
+        continue;
+      }
+
+      LARGE_INTEGER driver_version {};
+      if (FAILED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &driver_version))) {
+        driver_version.QuadPart = 0;
+      }
+
+      bool drives_desktop = false;
+      output_t::pointer output_p {};
+      for (UINT y = 0; !drives_desktop && adapter->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
+        output_t output {output_p};
+        DXGI_OUTPUT_DESC output_desc;
+        drives_desktop = SUCCEEDED(output->GetDesc(&output_desc)) && output_desc.AttachedToDesktop;
+      }
+
+      identities.push_back({
+        .luid_high = desc.AdapterLuid.HighPart,
+        .luid_low = desc.AdapterLuid.LowPart,
+        .vendor_id = desc.VendorId,
+        .device_id = desc.DeviceId,
+        .sub_sys_id = desc.SubSysId,
+        .revision = desc.Revision,
+        .driver_version = driver_version.QuadPart,
+        .drives_desktop = drives_desktop,
+      });
+    }
+
+    return identities;
+  }
+
+  bool adapters_need_reenumeration(const std::optional<std::vector<adapter_identity_t>> &last, const std::vector<adapter_identity_t> &current) {
+    return !last || current.empty() || *last != current;
+  }
+
 }  // namespace platf::dxgi
 
 namespace platf {
@@ -1105,7 +1155,11 @@ namespace platf {
   }
 
   /**
-   * @brief Check whether DXGI reports that adapter or driver enumeration is stale.
+   * @brief Check whether the GPUs or their drivers changed since the last call.
+   *
+   * DXGI marks its factory stale on any display change, including the mode and topology changes that display
+   * preparation commands make before every stream. Probing the encoders takes seconds, so they are probed again only
+   * when the adapters, their drivers, or which of them drive the desktop differ from the last call.
    *
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.
    */
@@ -1116,22 +1170,37 @@ namespace platf {
 
     // Keep a reference to the DXGI factory, which will keep track of changes internally.
     static dxgi::factory1_t factory;
-    if (!factory || !factory->IsCurrent()) {
-      factory.reset();
-
-      auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
-      if (FAILED(status)) {
-        BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
-        factory.release();
-      }
-
-      // Always request reenumeration on the first streaming session just to ensure we
-      // can deal with any initialization races that may occur when the system is booting.
-      BOOST_LOG(info) << "Encoder reenumeration is required"sv;
-      return true;
-    } else {
+    static std::optional<std::vector<dxgi::adapter_identity_t>> last_adapters;
+    if (factory && factory->IsCurrent()) {
       // The DXGI factory from last time is still current, so no encoder changes have occurred.
       return false;
     }
+
+    factory.reset();
+    auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    if (FAILED(status)) {
+      BOOST_LOG(error) << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']';
+      factory.release();
+    }
+
+    auto adapters = dxgi::adapter_identities(factory.get());
+    if (!dxgi::adapters_need_reenumeration(last_adapters, adapters)) {
+      BOOST_LOG(info) << "The display configuration changed, but the GPUs and drivers did not; keeping the probed encoders"sv;
+      return false;
+    }
+
+    // The first call has nothing to compare with. The encoder probe makes it right after probing, so the adapters it
+    // records are the ones the probe saw, and an adapter that appears or restarts after a probe during boot is caught.
+    if (last_adapters) {
+      BOOST_LOG(info) << "The GPUs or their drivers changed; probing the encoders again"sv;
+    } else {
+      BOOST_LOG(info) << "Recorded the GPUs the encoders were probed on"sv;
+    }
+    if (adapters.empty()) {
+      last_adapters.reset();
+    } else {
+      last_adapters = std::move(adapters);
+    }
+    return true;
   }
 }  // namespace platf
