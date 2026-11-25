@@ -43,7 +43,8 @@ function Initialize-Rtss {
     }
     if (-not ('RTSS' -as [type])) {
         $hooks = Join-Path $dir 'RTSSHooks64.dll'
-        Add-Type -TypeDefinition @"
+        . $env:SUNSHINE_PLUGIN_HELPERS
+        Import-CompiledType 'RTSS' @"
 using System;
 using System.Runtime.InteropServices;
 

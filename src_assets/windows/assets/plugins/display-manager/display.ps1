@@ -517,9 +517,8 @@ public static class DisplayManager {
 }
 '@
 
-if (-not ('DisplayManager' -as [type])) {
-    Add-Type -TypeDefinition $displaySource
-}
+. $env:SUNSHINE_PLUGIN_HELPERS
+Import-CompiledType 'DisplayManager' $displaySource
 
 $savedLayoutFile = Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'saved-layout.json'
 

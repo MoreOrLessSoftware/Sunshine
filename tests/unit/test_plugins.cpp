@@ -508,16 +508,32 @@ TEST(PluginsEnvTest, OptionEnvValue) {
   EXPECT_EQ(plugins::option_env_value(json::array({1, 2})), "[1,2]");
 }
 
+TEST_F(PluginsTest, ScriptEnvGivesAnAbsoluteHelpersPath) {
+  std::string error;
+  const auto dir = write_plugin(builtin_dir, "p", full_manifest("p"));
+  const auto manifest = plugins::parse_manifest(full_manifest("p"), dir, true, error);
+  ASSERT_TRUE(manifest);
+
+  // An installed Sunshine finds its bundled plugins relative to its working directory, but scripts run in their own
+  auto relative = paths();
+  relative.builtin_dir = fs::path("assets") / "plugins";
+  const auto env = plugins::script_env(*manifest, {}, relative);
+  const fs::path helpers = env.at("SUNSHINE_PLUGIN_HELPERS");
+  EXPECT_TRUE(helpers.is_absolute());
+  EXPECT_EQ(helpers, fs::absolute(fs::path("assets") / "plugins" / "PluginHelpers.ps1").make_preferred());
+}
+
 TEST_F(PluginsTest, ScriptEnvIncludesPathsAndOptions) {
   std::string error;
   const auto dir = write_plugin(builtin_dir, "p", full_manifest("p"));
   const auto manifest = plugins::parse_manifest(full_manifest("p"), dir, true, error);
   ASSERT_TRUE(manifest);
 
-  const auto env = plugins::script_env(*manifest, {{"multiplier", 3}}, data_dir / "p");
+  const auto env = plugins::script_env(*manifest, {{"multiplier", 3}}, paths());
   EXPECT_EQ(env.at("SUNSHINE_PLUGIN_ID"), "p");
   EXPECT_EQ(fs::path(env.at("SUNSHINE_PLUGIN_DIR")), fs::path(dir).make_preferred());
   EXPECT_EQ(fs::path(env.at("SUNSHINE_PLUGIN_DATA_DIR")), fs::path(data_dir / "p").make_preferred());
+  EXPECT_EQ(fs::path(env.at("SUNSHINE_PLUGIN_HELPERS")), fs::path(builtin_dir / "PluginHelpers.ps1").make_preferred());
   EXPECT_EQ(env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "3");
   EXPECT_EQ(env.at("SUNSHINE_PLUGIN_OPT_ENABLED"), "true");
   EXPECT_EQ(env.at("SUNSHINE_PLUGIN_OPT_MODE"), "off");
@@ -1385,6 +1401,7 @@ TEST_F(PluginsTest, PrepCmdsIncludeActivePluginsInOrder) {
   EXPECT_TRUE(cmds[1].elevated);
   EXPECT_EQ(cmds[1].env.at("SUNSHINE_PLUGIN_OPT_MULTIPLIER"), "4");
   EXPECT_EQ(fs::path(cmds[1].env.at("SUNSHINE_PLUGIN_DATA_DIR")), fs::path(data_dir / "second").make_preferred());
+  EXPECT_EQ(fs::path(cmds[1].env.at("SUNSHINE_PLUGIN_HELPERS")), fs::path(builtin_dir / "PluginHelpers.ps1").make_preferred());
   EXPECT_EQ(fs::path(cmds[1].log_file), data_dir / "second.log");  // The output goes to the plugin's log
 
   EXPECT_EQ(plugins::prep_cmds({}).size(), 3);

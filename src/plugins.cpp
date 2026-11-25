@@ -58,6 +58,7 @@ namespace plugins {
      * @brief Name of the guide to writing plugins in the directory of bundled plugins.
      */
     constexpr auto GUIDE_FILE = "PLUGIN_GUIDE.md";
+    constexpr auto HELPERS_FILE = "PluginHelpers.ps1";  ///< Functions any plugin script can dot-source, next to the guide.
 
     /**
      * @brief Order given to plugins whose manifest does not set one.
@@ -1344,7 +1345,7 @@ namespace plugins {
               BOOST_LOG(info) << "Reinstalling plugin ["sv << manifest->id << "] since it changed from version ["sv
                               << find_state(reg, manifest->id)->installed_version << "] to ["sv << manifest->version << ']';
             }
-            const auto env = script_env(*manifest, effective_options(reg, *manifest), plugin_data_dir(reg.paths, manifest->id));
+            const auto env = script_env(*manifest, effective_options(reg, *manifest), reg.paths);
             launch_task(reg, manifest->id, action_e::install, *manifest, env, first_install, {}, std::nullopt, true);
           }
         }
@@ -1688,11 +1689,18 @@ namespace plugins {
     return value.dump();
   }
 
-  std::map<std::string, std::string> script_env(const manifest_t &manifest, const nlohmann::json &options, const std::filesystem::path &data_dir) {
+  std::map<std::string, std::string> script_env(const manifest_t &manifest, const nlohmann::json &options, const paths_t &paths) {
     std::map<std::string, std::string> env;
     env["SUNSHINE_PLUGIN_ID"] = manifest.id;
     env["SUNSHINE_PLUGIN_DIR"] = path_to_utf8(fs::path(manifest.dir).make_preferred());
-    env["SUNSHINE_PLUGIN_DATA_DIR"] = path_to_utf8(fs::path(data_dir).make_preferred());
+    env["SUNSHINE_PLUGIN_DATA_DIR"] = path_to_utf8(plugin_data_dir(paths, manifest.id).make_preferred());
+    // The bundled plugins' directory is relative to Sunshine's working directory, while scripts run in their own
+    std::error_code ec;
+    auto helpers = fs::absolute(paths.builtin_dir / HELPERS_FILE, ec);
+    if (ec) {
+      helpers = paths.builtin_dir / HELPERS_FILE;
+    }
+    env["SUNSHINE_PLUGIN_HELPERS"] = path_to_utf8(helpers.make_preferred());
     for (const auto &option : manifest.options) {
       env[option_env_name(option.id)] = option_env_value(options.contains(option.id) ? options[option.id] : option.default_value);
     }
@@ -2813,7 +2821,7 @@ namespace plugins {
       if (std::ranges::find(excluded, manifest.id) != excluded.end()) {
         continue;
       }
-      const auto env = script_env(manifest, stream_options(reg, manifest, app_overrides, {}), plugin_data_dir(reg.paths, manifest.id));
+      const auto env = script_env(manifest, stream_options(reg, manifest, app_overrides, {}), reg.paths);
       auto add = [&](const std::string &do_script, const std::string &undo_script, config::prep_cmd_t::type_e type) {
         if (do_script.empty() && undo_script.empty()) {
           return;
@@ -2845,7 +2853,7 @@ namespace plugins {
 
       offered_commands_t plugin {manifest.id, manifest.name, manifest.icon, {}, {}};
       const auto data_dir = plugin_data_dir(reg.paths, manifest.id);
-      const auto env = script_env(manifest, stream_options(reg, manifest, app_overrides, client_uuid), data_dir);
+      const auto env = script_env(manifest, stream_options(reg, manifest, app_overrides, client_uuid), reg.paths);
       for (const auto &source : manifest.client_commands) {
         const auto entry = overrides.find(std::format("{}/{}", manifest.id, source.id));
         const bool has_override = entry != overrides.end();
@@ -3064,7 +3072,7 @@ namespace plugins {
     if (!manifest || off_for_client(reg, id, client_uuid)) {
       return std::nullopt;
     }
-    return script_env(*manifest, stream_options(reg, *manifest, app_overrides, client_uuid), plugin_data_dir(reg.paths, id));
+    return script_env(*manifest, stream_options(reg, *manifest, app_overrides, client_uuid), reg.paths);
   }
 
   std::optional<nlohmann::json> resolved_options(const std::string &id, const nlohmann::json &app_overrides, const std::string &client_uuid) {
@@ -3246,7 +3254,7 @@ namespace plugins {
       }
     }
     if (needs_apply) {
-      const auto env = script_env(*manifest, *normalized, plugin_data_dir(reg.paths, id));
+      const auto env = script_env(*manifest, *normalized, reg.paths);
       launch_task(reg, id, action_e::apply, *manifest, env, false, {}, std::move(normalized));
       if (applying) {
         *applying = true;
@@ -3294,7 +3302,7 @@ namespace plugins {
     }
 
     const auto manifest = *found;
-    const auto env = script_env(manifest, effective_options(reg, manifest), plugin_data_dir(reg.paths, id));
+    const auto env = script_env(manifest, effective_options(reg, manifest), reg.paths);
 
     if (action == action_e::uninstall) {
       reg.state[id].active = false;
@@ -3517,7 +3525,7 @@ namespace plugins {
       option = *found;
       script.command = script_command(manifest->dir / option.choices_script);
       script.data_dir = plugin_data_dir(reg.paths, id);
-      script.env = script_env(*manifest, effective_options(reg, *manifest), script.data_dir);
+      script.env = script_env(*manifest, effective_options(reg, *manifest), reg.paths);
       script.runner = reg.runner;
       script.timeout = reg.choices_timeout;
     }
@@ -3603,7 +3611,7 @@ namespace plugins {
       }
       script.command = script_command(manifest->dir / manifest->scripts.status);
       script.data_dir = plugin_data_dir(reg.paths, id);
-      script.env = script_env(*manifest, effective_options(reg, *manifest), script.data_dir);
+      script.env = script_env(*manifest, effective_options(reg, *manifest), reg.paths);
       script.runner = reg.runner;
       script.timeout = reg.choices_timeout;
     }

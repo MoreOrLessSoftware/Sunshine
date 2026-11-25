@@ -310,11 +310,10 @@ public static class HdrControl {
 $colorDir = Join-Path $env:windir 'System32\spool\drivers\color'
 $stateFile = Join-Path $env:SUNSHINE_PLUGIN_DATA_DIR 'state.json'
 
-# Compiles the display helper. It is only done when it will be used, as compiling takes a moment.
+# Loads the display helper. It is only done when it will be used, as compiling it the first time takes a moment.
 function Import-HdrControl {
-    if (-not ('HdrControl' -as [type])) {
-        Add-Type -TypeDefinition $hdrSource
-    }
+    . $env:SUNSHINE_PLUGIN_HELPERS
+    Import-CompiledType 'HdrControl' $hdrSource
 }
 
 # Returns the primary display, or $null when there is none.

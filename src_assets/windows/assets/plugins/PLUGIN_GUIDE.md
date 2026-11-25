@@ -300,6 +300,7 @@ when it exits with a non-zero code, including when it throws. Every script recei
 | `SUNSHINE_PLUGIN_ID`         | The plugin ID.                                                                                |
 | `SUNSHINE_PLUGIN_DIR`        | The plugin folder. `$PSScriptRoot` gives the same path.                                       |
 | `SUNSHINE_PLUGIN_DATA_DIR`   | A folder for downloaded dependencies and saved state. It is deleted after a successful uninstall. |
+| `SUNSHINE_PLUGIN_HELPERS`    | A script of [helper functions](#helper-functions) that ships with Sunshine, to dot-source. |
 | `SUNSHINE_PLUGIN_OPT_<ID>`   | The value of each option, with the option ID in upper case. Booleans are `true` or `false`. Stream scripts get the values the application and client [override](#overriding-options). |
 
 The data folder is created when the plugin is installed, and only administrators can write to it by default. If a do
@@ -324,6 +325,25 @@ most recently launched or resumed it:
 
 A client command's script receives `SUNSHINE_CLIENT_COMMAND_ID`, `SUNSHINE_CLIENT_COMMAND_LABEL`,
 `SUNSHINE_CLIENT_NAME`, `SUNSHINE_APP_ID` and `SUNSHINE_APP_NAME`.
+
+### Helper functions
+Dot-source `$env:SUNSHINE_PLUGIN_HELPERS` to use these:
+
+* `Import-CompiledType <name> <source>` loads a C# type, such as one that declares Windows API functions with
+  `DllImport`. `Add-Type -TypeDefinition` compiles the source on every run, which adds a quarter of a second or more to
+  each script; this compiles it once into the data folder and loads it from there afterwards. It compiles in memory
+  instead when the script can't write to the data folder.
+
+```powershell
+. $env:SUNSHINE_PLUGIN_HELPERS
+Import-CompiledType 'MyPluginNative' @'
+using System.Runtime.InteropServices;
+public static class MyPluginNative {
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int index);
+}
+'@
+[MyPluginNative]::GetSystemMetrics(0)
+```
 
 ## Logs
 The output of install, uninstall, action, apply, client command, do, undo, connect and disconnect scripts goes to

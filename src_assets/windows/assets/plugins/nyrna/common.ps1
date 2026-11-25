@@ -44,30 +44,13 @@ public static class NyrnaNative
 }
 "@
 
-# Compiling it takes about half a second, so it's compiled once into the data directory, named after its source so a
-# changed one is compiled again. Compiled in memory as before when that can't be done.
-if (-not ('NyrnaNative' -as [type])) {
-    $hash = [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($nativeSource))).Replace('-', '').Substring(0, 16)
-    $nativeDll = Join-Path $dataDir "NyrnaNative-$hash.dll"
-    $partial = $null
-    try {
-        if (-not (Test-Path $nativeDll)) {
-            # Written under another name first, so a run at the same time never loads half a file
-            $partial = "$nativeDll.$PID.tmp"
-            Add-Type -TypeDefinition $nativeSource -OutputAssembly $partial -OutputType Library
-            Move-Item -LiteralPath $partial -Destination $nativeDll -Force
-        }
-        Add-Type -Path $nativeDll
-    }
-    catch {
-        if ($partial) {
-            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
-        }
-        if (-not ('NyrnaNative' -as [type])) {
-            Add-Type -TypeDefinition $nativeSource
-        }
-    }
+# The resume task runs without Sunshine's variables. Nyrna ships with Sunshine, so the helpers are next to its folder.
+$helpers = $env:SUNSHINE_PLUGIN_HELPERS
+if (-not $helpers) {
+    $helpers = Join-Path (Split-Path $PSScriptRoot) 'PluginHelpers.ps1'
 }
+. $helpers
+Import-CompiledType 'NyrnaNative' $nativeSource -DataDir $dataDir
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Windows.Forms
 [NyrnaNative]::SetProcessDPIAware() | Out-Null

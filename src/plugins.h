@@ -466,10 +466,11 @@ namespace plugins {
    *
    * @param manifest Plugin running the script.
    * @param options Normalized option values.
-   * @param data_dir Directory for the plugin's dependencies.
-   * @return `SUNSHINE_PLUGIN_ID`, `SUNSHINE_PLUGIN_DIR`, `SUNSHINE_PLUGIN_DATA_DIR` and one variable per option.
+   * @param paths Plugin directories, which give the plugin's data directory and the shared helpers.
+   * @return `SUNSHINE_PLUGIN_ID`, `SUNSHINE_PLUGIN_DIR`, `SUNSHINE_PLUGIN_DATA_DIR`, `SUNSHINE_PLUGIN_HELPERS` and one
+   *         variable per option.
    */
-  std::map<std::string, std::string> script_env(const manifest_t &manifest, const nlohmann::json &options, const std::filesystem::path &data_dir);
+  std::map<std::string, std::string> script_env(const manifest_t &manifest, const nlohmann::json &options, const paths_t &paths);
 
   /**
    * @brief Build the command line that runs a PowerShell script.
