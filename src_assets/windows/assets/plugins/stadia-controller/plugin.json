@@ -9,6 +9,7 @@
   "notice_url": "https://github.com/jkfran/stadiacast#quick-start",
   "order": 50,
   "elevated": true,
+  "parallel": true,
   "scripts": {
     "install": "install.ps1",
     "uninstall": "uninstall.ps1",

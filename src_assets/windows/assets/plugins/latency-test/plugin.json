@@ -7,6 +7,7 @@
   "homepage": "https://github.com/MoreOrLessSoftware/latency-analyzer",
   "order": 500,
   "elevated": false,
+  "parallel": true,
   "icon": "material:speed",
   "scripts": {
     "install": "install.ps1",

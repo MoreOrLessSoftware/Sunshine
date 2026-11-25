@@ -6,6 +6,7 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -292,6 +293,31 @@ namespace {
   }
 
   constexpr auto FAIL_CMD = "cmd /c exit 1";  ///< A command that exits with code 1.
+
+  /**
+   * @brief Build a command that creates a file.
+   *
+   * @param file The file to create.
+   * @return The command line.
+   */
+  std::string touch_cmd(const fs::path &file) {
+    return std::format("cmd /c echo flag> \"{}\"", file.string());
+  }
+
+  /**
+   * @brief Build a command that waits up to 10 seconds for a file, then prints whether it appeared.
+   *
+   * @param file The file to wait for.
+   * @return The command line, which prints `saw-flag` or `no-flag`.
+   */
+  std::string wait_for_cmd(const fs::path &file) {
+    return std::format(
+      "powershell.exe -NoProfile -NonInteractive -Command \"$d = (Get-Date).AddSeconds(10); "
+      "while (-not (Test-Path '{0}') -and (Get-Date) -lt $d) {{ Start-Sleep -Milliseconds 50 }}; "
+      "if (Test-Path '{0}') {{ 'saw-flag' }} else {{ 'no-flag' }}\"",
+      file.string()
+    );
+  }
   constexpr auto ECHO_CLIENT_CMD = "cmd /c echo client=%SUNSHINE_CLIENT_NAME%";  ///< Prints the client name variable.
   constexpr auto ECHO_EXTRA_CMD = "cmd /c echo extra=%SUNSHINE_TEST_EXTRA%";  ///< Prints a variable set on the command only.
 #else
@@ -306,6 +332,30 @@ namespace {
   }
 
   constexpr auto FAIL_CMD = "sh -c \"exit 1\"";  ///< A command that exits with code 1.
+
+  /**
+   * @brief Build a command that creates a file.
+   *
+   * @param file The file to create.
+   * @return The command line.
+   */
+  std::string touch_cmd(const fs::path &file) {
+    return std::format("sh -c \"touch '{}'\"", file.string());
+  }
+
+  /**
+   * @brief Build a command that waits up to 10 seconds for a file, then prints whether it appeared.
+   *
+   * @param file The file to wait for.
+   * @return The command line, which prints `saw-flag` or `no-flag`.
+   */
+  std::string wait_for_cmd(const fs::path &file) {
+    return std::format(
+      "sh -c \"i=0; while [ ! -f '{0}' ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done; "
+      "if [ -f '{0}' ]; then echo saw-flag; else echo no-flag; fi\"",
+      file.string()
+    );
+  }
   constexpr auto ECHO_CLIENT_CMD = "sh -c \"echo client=$SUNSHINE_CLIENT_NAME\"";  ///< Prints the client name variable.
   constexpr auto ECHO_EXTRA_CMD = "sh -c \"echo extra=$SUNSHINE_TEST_EXTRA\"";  ///< Prints a variable set on the command only.
 #endif
@@ -319,6 +369,30 @@ namespace {
    */
   proc::cmd_t connect_cmd(std::string do_cmd, std::string undo_cmd) {
     return proc::cmd_t {std::move(do_cmd), std::move(undo_cmd), false, proc::cmd_t::type_e::connect};
+  }
+
+  /**
+   * @brief Build an app prep command that may run alongside the others.
+   *
+   * @param do_cmd Command run when the app starts.
+   * @param undo_cmd Command run when it stops.
+   * @return The prep command.
+   */
+  proc::cmd_t parallel_cmd(std::string do_cmd, std::string undo_cmd) {
+    proc::cmd_t cmd {std::move(do_cmd), std::move(undo_cmd), false};
+    cmd.parallel = true;
+    return cmd;
+  }
+
+  /**
+   * @brief Sort lines whose order depends on which command finishes first.
+   *
+   * @param lines The lines.
+   * @return The lines, sorted.
+   */
+  std::vector<std::string> sorted(std::vector<std::string> lines) {
+    std::ranges::sort(lines);
+    return lines;
   }
 
   /**
@@ -363,6 +437,17 @@ protected:
    * @param connect_cmds Commands run on client resume/leave.
    */
   void launch(std::vector<proc::cmd_t> prep_cmds, std::vector<proc::cmd_t> connect_cmds) {
+    ASSERT_EQ(0, try_launch(std::move(prep_cmds), std::move(connect_cmds)));
+  }
+
+  /**
+   * @brief Launch a desktop app with the given prep commands, which may fail.
+   *
+   * @param prep_cmds Commands run on app start/stop.
+   * @param connect_cmds Commands run on client resume/leave.
+   * @return What proc_t::execute() returned.
+   */
+  int try_launch(std::vector<proc::cmd_t> prep_cmds, std::vector<proc::cmd_t> connect_cmds = {}) {
     proc::ctx_t ctx {};
     ctx.name = "Desktop";
     ctx.id = "1";
@@ -374,7 +459,7 @@ protected:
     std::vector<proc::ctx_t> apps;
     apps.emplace_back(std::move(ctx));
     process = std::make_unique<proc::proc_t>(boost::this_process::environment(), std::move(apps));
-    ASSERT_EQ(0, process->execute(1, make_session("launcher")));
+    return process->execute(1, make_session("launcher"));
   }
 
   /**
@@ -431,6 +516,44 @@ TEST_F(ProcessConnectCmdTest, ConnectCommandsRunOnlyOnResumeAndLeave) {
 
   process->terminate();
   EXPECT_EQ(take_output(), (std::vector<std::string> {"app-undo"}));
+}
+
+TEST_F(ProcessConnectCmdTest, ParallelCommandsRunAlongsideTheOthers) {
+  const auto flag = fs::temp_directory_path() / "sunshine_process_parallel_flag";  // NOSONAR(cpp:S5443): safe for tests
+  fs::remove(flag);
+
+  // The first command only sees the flag if it's still running when the second, in turn, creates it
+  launch({parallel_cmd(wait_for_cmd(flag), echo_cmd("wait-undo")), proc::cmd_t {touch_cmd(flag), echo_cmd("touch-undo"), false}}, {});
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"saw-flag"}));
+
+  process->terminate();
+  EXPECT_EQ(sorted(take_output()), (std::vector<std::string> {"touch-undo", "wait-undo"}));
+  fs::remove(flag);
+}
+
+TEST_F(ProcessConnectCmdTest, CommandsInTurnUndoInReverseOrderAlongsideParallelOnes) {
+  launch(
+    {proc::cmd_t {echo_cmd("first-do"), echo_cmd("first-undo"), false},
+     parallel_cmd("", echo_cmd("parallel-undo")),
+     proc::cmd_t {echo_cmd("second-do"), echo_cmd("second-undo"), false}},
+    {}
+  );
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"first-do", "second-do"}));
+
+  process->terminate();
+  auto undo = take_output();
+  EXPECT_EQ(std::erase(undo, "parallel-undo"), 1);
+  EXPECT_EQ(undo, (std::vector<std::string> {"second-undo", "first-undo"}));
+}
+
+TEST_F(ProcessConnectCmdTest, FailedParallelCommandStopsTheLaunchAndUndoesTheOthers) {
+  EXPECT_EQ(-1, try_launch({parallel_cmd(FAIL_CMD, echo_cmd("failed-undo")), proc::cmd_t {echo_cmd("other-do"), echo_cmd("other-undo"), false}}));
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"other-do", "other-undo"}));
+}
+
+TEST_F(ProcessConnectCmdTest, FailedCommandInTurnStopsTheRestButParallelOnesFinishAndUndo) {
+  EXPECT_EQ(-1, try_launch({parallel_cmd(echo_cmd("parallel-do"), echo_cmd("parallel-undo")), proc::cmd_t {FAIL_CMD, echo_cmd("failed-undo"), false}, proc::cmd_t {echo_cmd("later-do"), echo_cmd("later-undo"), false}}));
+  EXPECT_EQ(take_output(), (std::vector<std::string> {"parallel-do", "parallel-undo"}));
 }
 
 TEST_F(ProcessConnectCmdTest, LeaveAfterQuitRunsNoUndo) {

@@ -7,6 +7,7 @@
   "homepage": "https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/",
   "order": 200,
   "elevated": true,
+  "parallel": true,
   "scripts": {
     "install": "install.ps1",
     "do": "do.ps1",

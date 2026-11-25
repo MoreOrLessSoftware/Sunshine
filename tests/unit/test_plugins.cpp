@@ -1632,6 +1632,33 @@ TEST_F(PluginsTest, ParsesConnectAndDisconnectScripts) {
   EXPECT_EQ(manifest->scripts.disconnect_script, "leave.ps1");
 }
 
+TEST_F(PluginsTest, ParallelAppliesToDoAndUndoScriptsOnly) {
+  auto manifest = full_manifest("par");
+  manifest["parallel"] = true;
+  manifest["scripts"]["connect"] = "resume.ps1";
+  write_plugin(builtin_dir, "par", manifest);
+  write_text(state_file, R"({"plugins":{"par":{"installed":true,"active":true}}})");
+  plugins::load(paths());
+
+  const auto cmds = plugins::prep_cmds({});
+  ASSERT_EQ(cmds.size(), 2);
+  EXPECT_EQ(cmds[0].type, config::prep_cmd_t::type_e::app);
+  EXPECT_TRUE(cmds[0].parallel);
+  EXPECT_EQ(cmds[1].type, config::prep_cmd_t::type_e::connect);
+  EXPECT_FALSE(cmds[1].parallel);
+}
+
+TEST_F(PluginsTest, PluginsRunInTurnUnlessParallel) {
+  const auto dir = write_plugin(builtin_dir, "p", {{"id", "p"}});
+  std::string error;
+  const auto manifest = plugins::parse_manifest({{"id", "p"}}, dir, false, error);
+  ASSERT_TRUE(manifest) << error;
+  EXPECT_FALSE(manifest->parallel);
+
+  EXPECT_FALSE(plugins::parse_manifest({{"id", "p"}, {"parallel", "yes"}}, dir, false, error));
+  EXPECT_EQ(error, "'parallel' must be a boolean");
+}
+
 TEST_F(PluginsTest, RejectsMissingConnectScript) {
   const auto dir = write_plugin(builtin_dir, "c", {{"id", "c"}});
   std::string error;

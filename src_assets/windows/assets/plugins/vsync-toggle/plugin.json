@@ -7,6 +7,7 @@
   "homepage": "https://github.com/xanderfrangos/vsync-toggle",
   "order": 300,
   "elevated": true,
+  "parallel": true,
   "scripts": {
     "install": "install.ps1",
     "do": "do.ps1",

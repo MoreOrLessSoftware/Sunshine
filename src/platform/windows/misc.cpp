@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iterator>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -1202,6 +1203,11 @@ namespace platf {
 
     // Create a new console for interactive processes and use no console for non-interactive processes
     creation_flags |= interactive ? CREATE_NEW_CONSOLE : CREATE_NO_WINDOW;
+
+    // Commands can start from several threads at once, and each changes PATH for Sunshine's whole process below until
+    // its process has started, so they start one at a time
+    static std::mutex start_lock;
+    std::scoped_lock start_guard {start_lock};
 
     // Find the PATH variable in our environment block using a case-insensitive search
     auto sunshine_wenv = boost::this_process::wenvironment();

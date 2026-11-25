@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <future>
 #include <string>
 #include <thread>
 #include <vector>
@@ -249,6 +250,31 @@ namespace proc {
     }
   }
 
+  namespace {
+    /**
+     * @brief Get one side of a prep command ready to run, on this thread or another.
+     *
+     * Everything that reads the application's state happens here, so the returned function only runs the command.
+     *
+     * @param prep_cmd The prep command, whose elevation, extra variables and log apply.
+     * @param cmd The command line to run: the Do or Undo command of `prep_cmd`.
+     * @param label What kind of command it is, for the logs.
+     * @param app The application the command prepares for.
+     * @param env Environment shared by every command of the application.
+     * @param pipe The application's output, for a command without a log of its own.
+     * @return A function that runs the command, waits for it, and returns how it ended.
+     */
+    auto prepare_prep_cmd(const cmd_t &prep_cmd, const std::string &cmd, std::string_view label, const ctx_t &app, boost::process::v1::environment &env, FILE *pipe) {
+      auto working_dir = app.working_dir.empty() ? find_working_directory(cmd, env) : boost::filesystem::path(app.working_dir);
+      BOOST_LOG(info) << "Executing "sv << label << (prep_cmd.parallel ? " alongside the other commands"sv : ""sv) << ": ["sv << cmd << ']';
+      return [elevated = prep_cmd.elevated, cmd, working_dir = std::move(working_dir), cmd_env = prep_cmd_env(env, prep_cmd), log = open_cmd_log(prep_cmd, label, app.name), pipe]() mutable {
+        prep_result_t result {};
+        result.exit_code = run_cmd_and_wait(elevated, cmd, working_dir, cmd_env, log ? log.get() : pipe, result.ec);
+        return result;
+      };
+    }
+  }  // namespace
+
   std::vector<cmd_t> resolve_plugin_cmds(const std::vector<cmd_t> &cmds, const nlohmann::json &app_overrides, const std::string &client_uuid) {
     std::vector<cmd_t> resolved;
     resolved.reserve(cmds.size());
@@ -299,8 +325,7 @@ namespace proc {
     _app.prep_cmds = resolve_plugin_cmds(iter->prep_cmds, iter->plugin_options, launch_session->client_uuid);
     _connect_cmds_base = iter->connect_cmds;
     _app.connect_cmds = resolve_plugin_cmds(_connect_cmds_base, iter->plugin_options, launch_session->client_uuid);
-    _app_prep_begin = std::begin(_app.prep_cmds);
-    _app_prep_it = _app_prep_begin;
+    _app_prep_ran.assign(_app.prep_cmds.size(), false);
 
     // Add Stream-specific environment variables
     _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
@@ -328,37 +353,33 @@ namespace proc {
       terminate();
     });
 
-    for (; _app_prep_it != std::end(_app.prep_cmds); ++_app_prep_it) {
-      auto &cmd = *_app_prep_it;
+    // Commands that may run in parallel start first and run alongside the others, which run in turn. The app starts
+    // once all of them have finished. After a failure no more commands start, and terminate() undoes the ones that ran.
+    std::vector<std::pair<std::size_t, std::future<prep_result_t>>> running;
+    for (std::size_t i = 0; i < _app.prep_cmds.size(); ++i) {
+      const auto &cmd = _app.prep_cmds[i];
+      if (cmd.parallel && !cmd.do_cmd.empty()) {
+        running.emplace_back(i, std::async(std::launch::async, prepare_prep_cmd(cmd, cmd.do_cmd, "Do Cmd"sv, _app, _env, _pipe.get())));
+      }
+    }
 
-      // Skip empty commands
+    bool failed = false;
+    for (std::size_t i = 0; i < _app.prep_cmds.size() && !failed; ++i) {
+      const auto &cmd = _app.prep_cmds[i];
       if (cmd.do_cmd.empty()) {
+        // Nothing to run, but its Undo command still runs
+        _app_prep_ran[i] = true;
         continue;
       }
-
-      boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(cmd.do_cmd, _env) :
-                                              boost::filesystem::path(_app.working_dir);
-      BOOST_LOG(info) << "Executing Do Cmd: ["sv << cmd.do_cmd << ']';
-      auto log = open_cmd_log(cmd, "Do Cmd"sv, _app.name);
-      const auto ret = run_cmd_and_wait(cmd.elevated, cmd.do_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec);
-
-      if (ec) {
-        // We don't want any prep commands failing launch of the desktop.
-        // This is to prevent the issue where users reboot their PC and need to log in with Sunshine.
-        // permission_denied is typically returned when the user impersonation fails, which can happen when user is not signed in yet.
-        if (_app.cmd.empty() && ec == std::errc::permission_denied) {
-          continue;
-        }
-        return -1;
+      if (!cmd.parallel) {
+        failed = !finish_do_cmd(i, prepare_prep_cmd(cmd, cmd.do_cmd, "Do Cmd"sv, _app, _env, _pipe.get())());
       }
-      if (ret != 0) {
-        BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << ret << ']';
-        if (!cmd.plugin.empty()) {
-          _failed_plugin_cmd = cmd;
-        }
-        return -1;
-      }
+    }
+    for (auto &[i, result] : running) {
+      failed = !finish_do_cmd(i, result.get()) || failed;
+    }
+    if (failed) {
+      return -1;
     }
 
     for (auto &cmd : _app.detached) {
@@ -398,6 +419,39 @@ namespace proc {
     fg.disable();
 
     return 0;
+  }
+
+  bool proc_t::finish_do_cmd(std::size_t index, const prep_result_t &result) {
+    const auto &cmd = _app.prep_cmds[index];
+    if (result.ec) {
+      // We don't want any prep commands failing launch of the desktop.
+      // This is to prevent the issue where users reboot their PC and need to log in with Sunshine.
+      // permission_denied is typically returned when the user impersonation fails, which can happen when user is not signed in yet.
+      if (_app.cmd.empty() && result.ec == std::errc::permission_denied) {
+        _app_prep_ran[index] = true;
+        return true;
+      }
+      return false;
+    }
+    if (result.exit_code != 0) {
+      BOOST_LOG(error) << '[' << cmd.do_cmd << "] exited with code ["sv << result.exit_code << ']';
+      if (!cmd.plugin.empty() && !_failed_plugin_cmd) {
+        _failed_plugin_cmd = cmd;
+      }
+      return false;
+    }
+    _app_prep_ran[index] = true;
+    return true;
+  }
+
+  void proc_t::finish_undo_cmd(std::size_t index, const prep_result_t &result) {
+    const auto &cmd = _app.prep_cmds[index];
+    if (!result.ec && result.exit_code != 0) {
+      BOOST_LOG(warning) << "Return code ["sv << result.exit_code << ']';
+      if (!cmd.plugin.empty() && !_failed_plugin_cmd) {
+        _failed_plugin_cmd = cmd;
+      }
+    }
   }
 
   void proc_t::set_client_env(const rtsp_stream::launch_session_t &launch_session) {
@@ -525,33 +579,29 @@ namespace proc {
 
   void proc_t::terminate() {
     input::terminate_gamepads();
-    std::error_code ec;
     placebo = false;
     terminate_process_group(_process, _process_group, _app.exit_timeout);
     _process = boost::process::v1::child();
     _process_group = boost::process::v1::group();
 
-    for (; _app_prep_it != _app_prep_begin; --_app_prep_it) {
-      auto &cmd = *(_app_prep_it - 1);
-
-      if (cmd.undo_cmd.empty()) {
-        continue;
-      }
-
-      boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(cmd.undo_cmd, _env) :
-                                              boost::filesystem::path(_app.working_dir);
-      BOOST_LOG(info) << "Executing Undo Cmd: ["sv << cmd.undo_cmd << ']';
-      auto log = open_cmd_log(cmd, "Undo Cmd"sv, _app.name);
-      const auto ret = run_cmd_and_wait(cmd.elevated, cmd.undo_cmd, working_dir, prep_cmd_env(_env, cmd), log ? log.get() : _pipe.get(), ec);
-
-      if (!ec && ret != 0) {
-        BOOST_LOG(warning) << "Return code ["sv << ret << ']';
-        if (!cmd.plugin.empty() && !_failed_plugin_cmd) {
-          _failed_plugin_cmd = cmd;
-        }
+    // Undo commands that may run in parallel start first and run alongside the others, which run in reverse order
+    std::vector<std::pair<std::size_t, std::future<prep_result_t>>> running;
+    for (std::size_t i = _app_prep_ran.size(); i-- > 0;) {
+      const auto &cmd = _app.prep_cmds[i];
+      if (_app_prep_ran[i] && cmd.parallel && !cmd.undo_cmd.empty()) {
+        running.emplace_back(i, std::async(std::launch::async, prepare_prep_cmd(cmd, cmd.undo_cmd, "Undo Cmd"sv, _app, _env, _pipe.get())));
       }
     }
+    for (std::size_t i = _app_prep_ran.size(); i-- > 0;) {
+      const auto &cmd = _app.prep_cmds[i];
+      if (_app_prep_ran[i] && !cmd.parallel && !cmd.undo_cmd.empty()) {
+        finish_undo_cmd(i, prepare_prep_cmd(cmd, cmd.undo_cmd, "Undo Cmd"sv, _app, _env, _pipe.get())());
+      }
+    }
+    for (auto &[i, result] : running) {
+      finish_undo_cmd(i, result.get());
+    }
+    _app_prep_ran.clear();
 
     _pipe.reset();
 

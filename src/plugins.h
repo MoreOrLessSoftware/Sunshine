@@ -202,6 +202,7 @@ namespace plugins {
     int order;  ///< Do scripts run in ascending order, undo scripts in descending order.
     bool elevated;  ///< Whether the do and undo scripts run elevated.
     bool manages_display;  ///< Whether the plugin sets up the display itself, replacing Sunshine's display device configuration.
+    bool parallel;  ///< Whether the do and undo scripts may run alongside the other plugins' instead of in order.
     bool idle_only;  ///< Whether the plugin can only be installed or uninstalled while no stream is running.
     bool restart_after_change;  ///< Whether Sunshine must restart after the plugin is installed or uninstalled for the change to take effect.
     bool default_active;  ///< Whether a bundled plugin is installed and activated the first time Sunshine starts with it.

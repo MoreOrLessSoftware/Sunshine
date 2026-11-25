@@ -14,6 +14,7 @@
 
 // standard includes
 #include <optional>
+#include <system_error>
 #include <unordered_map>
 
 // lib includes
@@ -43,6 +44,14 @@ namespace proc {
    * @brief Parsed command arguments used when launching a child process.
    */
   typedef config::prep_cmd_t cmd_t;
+
+  /**
+   * @brief How one side of a prep command ended.
+   */
+  struct prep_result_t {
+    int exit_code;  ///< The command's exit code, or -1 when it couldn't run.
+    std::error_code ec;  ///< Why the command couldn't run or be waited for.
+  };
 
   /**
    * @brief Resolve the options of plugin commands for the client streaming.
@@ -220,8 +229,8 @@ namespace proc {
     boost::process::v1::group _process_group;
 
     file_t _pipe;
-    std::vector<cmd_t>::const_iterator _app_prep_it;
-    std::vector<cmd_t>::const_iterator _app_prep_begin;
+    // Which of _app.prep_cmds have their Do in effect; terminate() runs their Undo
+    std::vector<bool> _app_prep_ran;
 
     // How many of _app.connect_cmds, from the front, have their Do in effect; their Undo runs on disconnect()
     std::size_t _connect_cmds_in_effect {};
@@ -248,6 +257,23 @@ namespace proc {
      * @return `true` when it ran and exited with code 0.
      */
     bool run_prep(const cmd_t &prep_cmd, const std::string &cmd, std::string_view label);
+
+    /**
+     * @brief Record how the Do command of one of the app's prep commands ended.
+     *
+     * @param index Position of the command in the app's prep commands.
+     * @param result How the Do command ended.
+     * @return `true` when the launch can go on; the command's Undo then runs when the app ends.
+     */
+    bool finish_do_cmd(std::size_t index, const prep_result_t &result);
+
+    /**
+     * @brief Record how the Undo command of one of the app's prep commands ended.
+     *
+     * @param index Position of the command in the app's prep commands.
+     * @param result How the Undo command ended.
+     */
+    void finish_undo_cmd(std::size_t index, const prep_result_t &result);
   };
 
   /**

@@ -1453,6 +1453,13 @@ namespace plugins {
       }
       manifest.manages_display = node["manages_display"].get<bool>();
     }
+    if (node.contains("parallel")) {
+      if (!node["parallel"].is_boolean()) {
+        error = "'parallel' must be a boolean";
+        return std::nullopt;
+      }
+      manifest.parallel = node["parallel"].get<bool>();
+    }
     if (node.contains("idle_only")) {
       if (!node["idle_only"].is_boolean()) {
         error = "'idle_only' must be a boolean";
@@ -2833,6 +2840,8 @@ namespace plugins {
         cmd.env = env;
         cmd.plugin = manifest.id;
         cmd.log_file = path_to_utf8(plugin_log_file(reg.paths, manifest.id));
+        // Connect and disconnect scripts always run in turn
+        cmd.parallel = manifest.parallel && type == config::prep_cmd_t::type_e::app;
       };
       add(manifest.scripts.do_script, manifest.scripts.undo_script, config::prep_cmd_t::type_e::app);
       add(manifest.scripts.connect_script, manifest.scripts.disconnect_script, config::prep_cmd_t::type_e::connect);
