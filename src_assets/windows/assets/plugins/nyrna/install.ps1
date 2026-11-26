@@ -41,3 +41,14 @@ if ($LASTEXITCODE -ge 8) {
 }
 Remove-Item $staging -Recurse -Force
 Write-Output "Installed Nyrna $version in $installDir"
+
+# Compile the scripts' Windows code now, while no game is running, rather than on the first suspend, where it can take
+# several seconds. The scripts compile it themselves when this fails.
+try {
+    $dataDir = $env:SUNSHINE_PLUGIN_DATA_DIR
+    . (Join-Path $PSScriptRoot 'common.ps1')
+    Write-Output 'Compiled the Windows code the scripts use'
+}
+catch {
+    Write-Output "Warning: could not compile the Windows code the scripts use, so they will compile it on first use: $_"
+}

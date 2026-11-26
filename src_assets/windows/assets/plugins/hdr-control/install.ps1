@@ -11,3 +11,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to grant users write access to $dataDir"
 }
 Write-Output "Granted users write access to $dataDir"
+
+# Compile the scripts' Windows code now, rather than when the first stream starts. The scripts compile it themselves
+# when this fails.
+try {
+    . (Join-Path $PSScriptRoot 'hdr.ps1')
+    Import-HdrControl
+    Write-Output 'Compiled the Windows code the scripts use'
+}
+catch {
+    Write-Output "Warning: could not compile the Windows code the scripts use, so they will compile it on first use: $_"
+}

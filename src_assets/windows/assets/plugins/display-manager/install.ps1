@@ -13,6 +13,16 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to grant users write access to $dataDir"
 }
 
+# Compile the scripts' Windows code now, rather than when the first stream starts. The scripts compile it themselves
+# when this fails.
+try {
+    . (Join-Path $PSScriptRoot 'display.ps1')
+    Write-Output 'Compiled the Windows code the scripts use'
+}
+catch {
+    Write-Output "Warning: could not compile the Windows code the scripts use, so they will compile it on first use: $_"
+}
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # The PowerShell Gallery can fail for a minute or so at a time, so keep trying for about two minutes.
