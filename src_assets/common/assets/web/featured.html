@@ -42,14 +42,13 @@
       </div>
     </div>
 
-    <!-- Error State -->
-    <div v-else-if="error" class="alert alert-danger" role="alert">
-      <h4 class="alert-heading">{{ $t('_common.error') }}</h4>
-      <p>{{ error }}</p>
+    <!-- Remote directory unavailable; this fork's own apps are still listed below -->
+    <div v-if="!loading && error" class="alert alert-warning" role="alert">
+      {{ $t('featured.remote_unavailable') }} ({{ error }})
     </div>
 
     <!-- Apps Grid -->
-    <div v-else class="row g-4">
+    <div v-if="!loading" class="row g-4">
       <div
         v-for="app in filteredApps"
         :key="app.id"
@@ -73,7 +72,8 @@
                 <h5 class="card-title mb-1">{{ app.name }}</h5>
                 <p class="text-muted small mb-0" v-if="app.tagline">{{ app.tagline }}</p>
               </div>
-              <span v-if="app.official" class="badge bg-primary flex-shrink-0 ms-2">{{ $t('featured.official') }}</span>
+              <span v-if="app.pinned" class="badge bg-success flex-shrink-0 ms-2">{{ $t('featured.recommended') }}</span>
+              <span v-else-if="app.official" class="badge bg-primary flex-shrink-0 ms-2">{{ $t('featured.official') }}</span>
             </div>
 
             <p class="card-text text-muted small mb-3">{{ app.description }}</p>
@@ -202,7 +202,7 @@
     </div>
 
     <!-- Empty State -->
-    <div v-if="!loading && !error && filteredApps.length === 0" class="text-center py-5">
+    <div v-if="!loading && filteredApps.length === 0" class="text-center py-5">
       <p class="text-muted">{{ $t('featured.no_apps') }}</p>
     </div>
 
@@ -258,6 +258,13 @@
   import SimpleIcon from './SimpleIcon.vue'
   import { formatDistanceToNow, format } from 'date-fns'
   import {
+    compareFeaturedApps,
+    fetchGithubStats,
+    forkFeaturedApps,
+    mergeFeaturedApps,
+    mergeFeaturedCategories,
+  } from './featured_fork_apps'
+  import {
     ArrowDownCircle,
     Box,
     ChevronLeft,
@@ -308,22 +315,18 @@
       };
     },
     computed: {
+      /**
+       * @returns {Object[]} The apps in the selected category: this fork's pinned apps first,
+       *   then official apps, then the rest by GitHub stars.
+       */
       filteredApps() {
         let filtered = this.selectedCategory
           ? this.apps.filter(app => app.category === this.selectedCategory)
           : this.apps;
 
-        // Sort by official status first, then by GitHub stars
-        return filtered.slice().sort((a, b) => {
-          // Official apps first
-          if (a.official && !b.official) return -1;
-          if (!a.official && b.official) return 1;
-
-          // Then sort by GitHub stars (descending)
-          const aStars = a.github?.stars || 0;
-          const bStars = b.github?.stars || 0;
-          return bStars - aStars;
-        });
+        return filtered
+          .map((app, index) => ({ ...app, _order: index }))
+          .sort(compareFeaturedApps);
       }
     },
     created() {
@@ -336,7 +339,13 @@
       window.removeEventListener('keydown', this.handleKeydown);
     },
     methods: {
+      /**
+       * Load the LizardByte app directory and list this fork's apps ahead of it.
+       * The fork's apps are listed even when the directory cannot be loaded.
+       */
       async loadFeaturedApps() {
+        let remoteApps = [];
+        let remoteCategories = [];
         try {
           this.loading = true;
           this.error = null;
@@ -350,14 +359,28 @@
           }
 
           const data = await response.json();
-          this.apps = data.apps || [];
-          this.categories = data.categories || [];
+          remoteApps = data.apps || [];
+          remoteCategories = data.categories || [];
         } catch (err) {
           console.error('Error loading featured apps:', err);
           this.error = err.message;
         } finally {
+          this.apps = mergeFeaturedApps(remoteApps, forkFeaturedApps.map(app => ({ ...app })));
+          this.categories = mergeFeaturedCategories(remoteCategories, forkFeaturedApps);
           this.loading = false;
         }
+        this.loadForkGithubStats();
+      },
+      /**
+       * Fill in live GitHub stats for this fork's apps. Apps whose stats fail to load show none.
+       */
+      async loadForkGithubStats() {
+        await Promise.all(this.apps.filter(app => app.githubRepo).map(async app => {
+          const stats = await fetchGithubStats(app.githubRepo);
+          if (stats) {
+            app.github = stats;
+          }
+        }));
       },
       platformName(platform) {
         const names = {

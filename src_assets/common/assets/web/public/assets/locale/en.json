@@ -926,6 +926,8 @@
     "last_updated": "Last Updated",
     "no_apps": "No apps found in this category.",
     "official": "Official",
+    "recommended": "Recommended",
+    "remote_unavailable": "The community app directory could not be loaded, so only this build's recommended clients are listed.",
     "title": "Featured Apps",
     "website": "Website"
   },
