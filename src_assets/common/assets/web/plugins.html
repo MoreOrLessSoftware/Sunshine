@@ -49,6 +49,13 @@
       <nav class="config-nav" :aria-label="$t('plugins.title')">
         <ul class="nav config-nav-list">
           <li class="nav-item">
+            <a class="nav-link" :class="{'active': showingOverview}" href="#overview"
+               :aria-current="showingOverview ? 'page' : null">
+              <blocks :size="18" class="icon"></blocks>
+              {{ $t('plugins.overview_nav') }}
+            </a>
+          </li>
+          <li class="nav-item">
             <a class="nav-link" :class="{'active': currentView === 'apps'}" href="#apps"
                :aria-current="currentView === 'apps' ? 'page' : null">
               <layout-grid :size="18" class="icon"></layout-grid>
@@ -62,15 +69,15 @@
             </a>
           </li>
         </ul>
-        <div class="config-nav-heading">{{ $t('plugins.title') }}</div>
+        <div class="config-nav-heading">{{ $t('plugins.nav_active') }}</div>
         <div v-if="loading && plugins.length === 0" class="px-3 py-1">
           <div class="spinner-border spinner-border-sm" role="status">
             <span class="visually-hidden">{{ $t('_common.loading') }}</span>
           </div>
         </div>
-        <p v-else-if="plugins.length === 0" class="small text-muted px-3 mb-0">{{ $t('plugins.no_plugins') }}</p>
+        <p v-else-if="navPlugins.length === 0" class="small text-muted px-3 mb-0">{{ $t('plugins.no_active_plugins') }}</p>
         <ul v-else class="nav config-nav-list">
-          <li class="nav-item" v-for="plugin in plugins" :key="plugin.id">
+          <li class="nav-item" v-for="plugin in navPlugins" :key="plugin.id">
             <a class="nav-link" :class="{'active': currentView === plugin.id, 'plugin-nav-uninstalled': !plugin.installed}"
                :href="'#plugin-' + encodeURIComponent(plugin.id)" :aria-current="currentView === plugin.id ? 'page' : null">
               <span class="plugin-nav-name">{{ plugin.name }}</span>
@@ -91,8 +98,50 @@
       <div class="config-content">
         <div v-if="loadError" class="alert alert-danger" role="alert">{{ loadError }}</div>
 
+        <!-- Every plugin, to turn on or off -->
+        <div v-if="showingOverview" class="config-page">
+          <h2 class="h4">{{ $t('plugins.overview_title') }}</h2>
+
+          <div v-if="loading && plugins.length === 0" class="text-center py-3">
+            <div class="spinner-border" role="status">
+              <span class="visually-hidden">{{ $t('_common.loading') }}</span>
+            </div>
+          </div>
+          <div v-else-if="plugins.length === 0" class="alert alert-secondary mb-0">{{ $t('plugins.no_plugins') }}</div>
+          <div v-else class="row g-3">
+            <div class="col-12 col-md-6 col-xxl-4" v-for="plugin in plugins" :key="plugin.id">
+              <div class="card h-100 plugin-card">
+                <div class="card-body d-flex flex-column">
+                  <div class="d-flex align-items-start justify-content-between gap-2 mb-2">
+                    <h3 class="h6 mb-0">
+                      <label :for="'turn-on-' + plugin.id" class="mb-0">{{ plugin.name }}</label>
+                    </h3>
+                    <div class="form-check form-switch mb-0">
+                      <input class="form-check-input" type="checkbox" role="switch" :id="'turn-on-' + plugin.id"
+                             :checked="isTurnedOn(plugin)" :disabled="switchDisabled(plugin)"
+                             @change="turnOn(plugin, $event.target)">
+                    </div>
+                  </div>
+                  <p class="small mb-2 plugin-description flex-grow-1">{{ plugin.description }}</p>
+                  <div v-if="isBusy(plugin)" class="small d-flex align-items-center gap-2 mb-2" role="status">
+                    <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
+                    {{ taskRunningText(plugin) }}
+                  </div>
+                  <div v-else-if="['failed', 'reinstall', 'update'].includes(pluginStatus(plugin))"
+                       class="small d-flex align-items-center gap-2 mb-2" role="status">
+                    <span class="plugin-status" :class="'plugin-status-' + pluginStatus(plugin)" aria-hidden="true"></span>
+                    {{ statusText(plugin) }}
+                  </div>
+                  <div v-if="errors[plugin.id]" class="small text-danger mb-2">{{ errors[plugin.id] }}</div>
+                  <a class="small" :href="hashFor(plugin.id)">{{ $t('plugins.plugin_details') }}</a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Which active plugins run for which applications -->
-        <div v-if="currentView === 'apps'" class="config-page" id="plugin-app-matrix">
+        <div v-else-if="currentView === 'apps'" class="config-page" id="plugin-app-matrix">
           <h2 class="h4">{{ $t('plugins.matrix_title') }}</h2>
           <p>{{ $t('plugins.matrix_desc') }}</p>
 
@@ -396,11 +445,13 @@
   import { confirmDialog } from './ConfirmDialog.vue'
   import { notify } from './Notification.vue'
   import { restartSunshine } from './server_status'
-  import { BookOpen, CloudDownload, Download, FileText, Layers, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
+  import { Blocks, BookOpen, CloudDownload, Download, FileText, Layers, LayoutGrid, Play, RefreshCw, Save, Shield, Trash2, Upload } from '@lucide/vue'
   import { Marked } from 'marked'
 
   // The view showing the guide. Plugin IDs can't contain a colon, so it can't be mistaken for a plugin.
   const GUIDE_VIEW = ':guide';
+  // The view showing every plugin, the default
+  const OVERVIEW_VIEW = ':overview';
 
   // Where the folder or URL imported last is remembered, in this browser
   const IMPORT_PATH_KEY = 'sunshine.plugins.importPath';
@@ -479,6 +530,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
     components: {
       Navbar,
       PluginChoiceSelect,
+      Blocks,
       BookOpen,
       CloudDownload,
       CopyBlock,
@@ -506,14 +558,17 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
         errors: {},
         saving: {},
         pollTimer: null,
-        // 'apps' for the application grid, GUIDE_VIEW for the guide, otherwise the ID of the selected plugin
-        currentView: 'apps',
+        // OVERVIEW_VIEW for every plugin, 'apps' for the application grid, GUIDE_VIEW for the guide, otherwise the ID
+        // of the selected plugin
+        currentView: OVERVIEW_VIEW,
         importForm: {open: false, path: '', busy: false, error: null},
         checkingUpdates: false,
         // Measured heights of panels that fit their content, by plugin ID
         panelHeights: {},
         // Plugin IDs being updated from their feed
         updating: {},
+        // IDs of plugins turned off or uninstalled on their own page, which stay in the sidebar until the page reloads
+        keptInNav: {},
         // Where the guide is on this host, from the server
         guidePath: '',
         guide: {loading: false, error: false, html: ''},
@@ -554,6 +609,15 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
       showingGuide() {
         return this.currentView === GUIDE_VIEW;
+      },
+      showingOverview() {
+        return this.currentView === OVERVIEW_VIEW;
+      },
+      /**
+       * Plugins the sidebar lists: those that are on, and those turned off on their own page since the page loaded.
+       */
+      navPlugins() {
+        return this.plugins.filter((plugin) => this.isTurnedOn(plugin) || this.keptInNav[plugin.id]);
       },
       agentPrompt() {
         return this.i18n.t('plugins.guide_agent_prompt', {guide: this.guidePath});
@@ -611,9 +675,9 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       applyPlugins(plugins) {
         const previous = Object.fromEntries(this.plugins.map((plugin) => [plugin.id, plugin]));
         this.plugins = plugins;
-        // The selected plugin is gone (rescan, or a bad link): fall back to the application grid.
-        if (this.currentView !== 'apps' && !this.showingGuide && !this.selectedPlugin) {
-          this.showView('apps', true);
+        // The selected plugin is gone (rescan, or a bad link): fall back to the overview.
+        if (this.currentView !== 'apps' && !this.showingGuide && !this.showingOverview && !this.selectedPlugin) {
+          this.showView(OVERVIEW_VIEW, true);
         }
         let exclusionsChanged = false;
         for (const plugin of plugins) {
@@ -687,8 +751,65 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
 
       async setActive(plugin, active) {
+        this.keepInNav(plugin);
         await this.post(plugin, './api/plugins/config', {active});
         await this.loadPlugins();
+      },
+
+      /**
+       * Keep a plugin that is on in the sidebar while its own page turns it off, so the page's entry doesn't vanish.
+       *
+       * @param {object} plugin Plugin from `/api/plugins`.
+       */
+      keepInNav(plugin) {
+        if (plugin.id === this.currentView && this.isTurnedOn(plugin)) {
+          this.keptInNav[plugin.id] = true;
+        }
+      },
+
+      /**
+       * Whether a plugin is on: installed, and active unless it only installs something, such as a driver.
+       *
+       * @param {object} plugin Plugin from `/api/plugins`.
+       * @returns {boolean} Whether the plugin is on.
+       */
+      isTurnedOn(plugin) {
+        return plugin.installed && (plugin.active || !this.canTurnOff(plugin));
+      },
+
+      /**
+       * Whether a plugin's overview switch can't be used now: it's busy, or the switch would run an install or
+       * uninstall script while another plugin's script runs.
+       *
+       * @param {object} plugin Plugin from `/api/plugins`.
+       * @returns {boolean} Whether to disable the switch.
+       */
+      switchDisabled(plugin) {
+        if (this.isBusy(plugin)) {
+          return true;
+        }
+        const runsScript = !plugin.installed || !this.canTurnOff(plugin);
+        return runsScript && this.anyRunning;
+      },
+
+      /**
+       * Turn a plugin on or off from its overview switch. Turning on installs a plugin that isn't installed, which
+       * also activates it. Turning off deactivates it, or uninstalls it when it only installs something.
+       *
+       * @param {object} plugin Plugin from `/api/plugins`.
+       * @param {HTMLInputElement} input The switch, set back to the plugin's state if it didn't change.
+       */
+      async turnOn(plugin, input) {
+        const on = input.checked;
+        if (on && !plugin.installed) {
+          await this.runTask(plugin, 'install');
+        } else if (on || this.canTurnOff(plugin)) {
+          await this.setActive(plugin, on);
+        } else {
+          await this.runTask(plugin, 'uninstall');
+        }
+        const current = this.plugins.find((p) => p.id === plugin.id) || plugin;
+        input.checked = this.isTurnedOn(current);
       },
 
       /**
@@ -811,6 +932,7 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
             return;
           }
         }
+        this.keepInNav(plugin);
         await this.post(plugin, `./api/plugins/${action}`, action === 'install' ? {activate: true} : {});
         await this.loadPlugins();
       },
@@ -911,26 +1033,32 @@ Add-Content -Path $file -Value "Stream started for $env:SUNSHINE_CLIENT_NAME at 
       },
 
       /**
-       * Read the view from the URL: #apps, #guide or #plugin-<id>. Anything else shows the application grid.
+       * Read the view from the URL: #overview, #apps, #guide or #plugin-<id>. Anything else shows the overview.
        */
       viewFromHash() {
         const hash = window.location.hash.substring(1);
         if (hash === 'guide') {
           return GUIDE_VIEW;
         }
+        if (hash === 'apps') {
+          return 'apps';
+        }
         if (hash.startsWith('plugin-')) {
           try {
-            return decodeURIComponent(hash.substring('plugin-'.length)) || 'apps';
+            return decodeURIComponent(hash.substring('plugin-'.length)) || OVERVIEW_VIEW;
           } catch {
-            return 'apps';
+            return OVERVIEW_VIEW;
           }
         }
-        return 'apps';
+        return OVERVIEW_VIEW;
       },
 
       hashFor(view) {
         if (view === GUIDE_VIEW) {
           return '#guide';
+        }
+        if (view === OVERVIEW_VIEW) {
+          return '#overview';
         }
         return view === 'apps' ? '#apps' : '#plugin-' + encodeURIComponent(view);
       },
