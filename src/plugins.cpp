@@ -1413,6 +1413,7 @@ namespace plugins {
     if (!read_string(node, "id", manifest.id, error) ||
         !read_string(node, "name", manifest.name, error) ||
         !read_string(node, "version", manifest.version, error) ||
+        !read_string(node, "summary", manifest.summary, error) ||
         !read_string(node, "description", manifest.description, error) ||
         !read_string(node, "author", manifest.author, error) ||
         !read_string(node, "homepage", manifest.homepage, error) ||
@@ -2782,6 +2783,7 @@ namespace plugins {
         {"id", manifest.id},
         {"name", manifest.name},
         {"version", manifest.version},
+        {"summary", manifest.summary},
         {"description", manifest.description},
         {"author", manifest.author},
         {"homepage", manifest.homepage},

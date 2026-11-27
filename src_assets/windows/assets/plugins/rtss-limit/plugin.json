@@ -2,6 +2,7 @@
   "id": "rtss-limit",
   "name": "RTSS Frame Limit",
   "version": "1.2.0",
+  "summary": "Limits the frame rate to the client's with RivaTuner Statistics Server while streaming.",
   "description": "Sets the RivaTuner Statistics Server frame rate limit to the client's frame rate for the length of the stream, then restores the previous limit. Requires RTSS 7.3.7 or newer.",
   "author": "Sunshine",
   "homepage": "https://www.guru3d.com/download/rtss-rivatuner-statistics-server-download/",

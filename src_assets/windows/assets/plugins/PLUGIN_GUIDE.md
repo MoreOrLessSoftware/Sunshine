@@ -64,6 +64,7 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
   "id": "my-plugin",
   "name": "My Plugin",
   "version": "1.0.0",
+  "summary": "One sentence about the plugin.",
   "description": "What the plugin does.",
   "author": "Me",
   "homepage": "https://example.com",
@@ -119,6 +120,7 @@ the **Plugins** page reads the feed of every plugin imported from a URL, and a p
 | `id`          | Yes      | 1 to 64 lowercase letters, digits, `.`, `_` or `-`, starting with a letter or digit.                                |
 | `name`        | No       | Display name. Defaults to `id`.                                                                                     |
 | `version`     | No       | Shown in the web UI. When it changes, an installed plugin needs its install script to run again; see [Notes for coding agents](#notes-for-coding-agents). |
+| `summary`     | No       | One sentence shown on the plugin's card in the overview. Defaults to `description`.                                 |
 | `description` | No       | Shown in the web UI. A blank line (`\n\n`) starts a new paragraph.                                                  |
 | `author`      | No       | Shown in the web UI.                                                                                                |
 | `homepage`    | No       | Linked from the web UI.                                                                                             |

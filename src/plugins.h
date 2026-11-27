@@ -194,6 +194,7 @@ namespace plugins {
     std::string id;  ///< Unique identifier.
     std::string name;  ///< Display name.
     std::string version;  ///< Plugin version.
+    std::string summary;  ///< One sentence for the plugins overview, or empty to show the description there.
     std::string description;  ///< Short description.
     std::string author;  ///< Author name.
     std::string homepage;  ///< Project URL.

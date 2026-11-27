@@ -2,6 +2,7 @@
   "id": "xgpad",
   "name": "Virtual Controllers",
   "version": "1.1.0",
+  "summary": "Installs the driver that shows the client's controllers to games as Xbox or DualSense controllers.",
   "description": "Installs the Sunshine Gamepad Driver (xgpad), which shows the client's controllers to games as Xbox Series X|S or DualSense controllers. Uninstalling the plugin removes the driver.\n\nPlayStation controllers, and controllers with motion sensors or a touchpad, become DualSense controllers; the rest become Xbox Series controllers. Change this with Controller type, or switch during a stream from the Virtual Controllers page of the in-stream menu. Switching reconnects the controllers, so some games need a restart to notice.\n\nGames that only support Xbox controllers see a DualSense only through Steam Input. Used when Windows Gamepad Drivers is All Available Drivers (the default; a licensed Virtual HID Driver takes precedence) or Sunshine Gamepad Driver (xgpad).",
   "author": "Sunshine",
   "notice": "Installing adds a self-signed certificate made for this release to the trusted certificates of this computer; its private key was destroyed after the driver was signed. Restart Sunshine after installing or uninstalling so controllers use the change.",

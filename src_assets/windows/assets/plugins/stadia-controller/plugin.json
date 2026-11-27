@@ -2,6 +2,7 @@
   "id": "stadia-controller",
   "name": "Stadia Controller",
   "version": "1.1.0",
+  "summary": "Turns a Stadia Controller in Wi-Fi mode into a virtual Xbox controller while streaming.",
   "description": "Runs the Stadiacast receiver while a stream is running, so a Stadia Controller in Wi-Fi mode becomes a virtual Xbox controller on this PC. Wake the controller once the stream has started. Uses Stadiacast and the xgpad driver (or ViGEmBus).",
   "author": "Sunshine",
   "homepage": "https://github.com/MoreOrLessSoftware/stadiacast",

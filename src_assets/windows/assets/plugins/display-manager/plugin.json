@@ -2,6 +2,7 @@
   "id": "display-manager",
   "name": "Display Manager",
   "version": "1.0.0",
+  "summary": "Sets a physical display to the client's resolution and refresh rate while streaming.",
   "description": "Sets a physical display to the client's resolution for the length of the stream, with the client's refresh rate or the closest one the display has, and makes it the primary display. Leaves the resolution as it is when the display doesn't support the client's. Puts back the previous display settings when the application quits.",
   "author": "Sunshine",
   "order": 100,

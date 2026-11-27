@@ -2,6 +2,7 @@
   "id": "virtual-display",
   "name": "Virtual Display",
   "version": "1.5.0",
+  "summary": "Creates a virtual display matching the client's resolution and frame rate while streaming.",
   "description": "Creates a virtual display that matches the client's resolution and frame rate for the length of the stream, then removes it. Uses sunshine-vdisplay and the SudoVDA driver.",
   "author": "Sunshine",
   "homepage": "https://github.com/Zayrick/sunshine-vdisplay",

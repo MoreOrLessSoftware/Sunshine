@@ -110,6 +110,7 @@ namespace {
       {"id", id},
       {"name", "Plugin " + id},
       {"version", "1.2.3"},
+      {"summary", "Tests things"},
       {"description", "A test plugin"},
       {"author", "Tester"},
       {"homepage", "https://example.invalid"},
@@ -281,6 +282,7 @@ TEST_F(PluginsTest, ParseManifestReadsEveryField) {
   ASSERT_TRUE(manifest) << error;
   EXPECT_EQ(manifest->name, "Plugin full");
   EXPECT_EQ(manifest->version, "1.2.3");
+  EXPECT_EQ(manifest->summary, "Tests things");
   EXPECT_EQ(manifest->description, "A test plugin");
   EXPECT_EQ(manifest->author, "Tester");
   EXPECT_EQ(manifest->homepage, "https://example.invalid");
@@ -371,6 +373,7 @@ INSTANTIATE_TEST_SUITE_P(
     invalid_manifest_t {"BadId", R"({"id":"Bad Id"})", "invalid plugin id"},
     invalid_manifest_t {"NameNotString", R"({"id":"p","name":1})", "'name' must be a string"},
     invalid_manifest_t {"NoticeNotString", R"({"id":"p","notice":1})", "'notice' must be a string"},
+    invalid_manifest_t {"SummaryNotString", R"({"id":"p","summary":1})", "'summary' must be a string"},
     invalid_manifest_t {"NoticeUrlNotHttps", R"({"id":"p","notice":"n","notice_url":"http://example.invalid"})", "'notice_url' must be an https:// address"},
     invalid_manifest_t {"NoticeUrlScript", R"json({"id":"p","notice_url":"javascript:alert(1)"})json", "'notice_url' must be an https:// address"},
     invalid_manifest_t {"OrderNotInteger", R"({"id":"p","order":1.5})", "'order' must be an integer"},
@@ -1943,6 +1946,7 @@ TEST_F(PluginsTest, ListDescribesActionsAndPanel) {
 
   const auto plain = find_plugin(list, "plain");
   EXPECT_TRUE(plain["actions"].empty());
+  EXPECT_EQ(plain["summary"], "Tests things");
   EXPECT_EQ(plain["notice"], "Set it up first");
   EXPECT_EQ(plain["notice_url"], "https://example.invalid/setup");
   EXPECT_TRUE(plain["panel"].is_null());

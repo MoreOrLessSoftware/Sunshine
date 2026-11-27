@@ -2,6 +2,7 @@
   "id": "nyrna",
   "name": "Nyrna",
   "version": "1.2.0",
+  "summary": "Suspends and resumes the game in front from Moonlight's in-stream menu.",
   "description": "Adds a Suspend command to Moonlight's in-stream menu, which suspends the game or application in the foreground using Nyrna. While it's suspended, a notification on this PC shows it with a Resume button, and the command becomes Resume. If Nyrna is already running on this PC, the command presses its hotkey. Games with anti-cheat usually can't be suspended.",
   "author": "Sunshine",
   "homepage": "https://nyrna.merritt.codes/",

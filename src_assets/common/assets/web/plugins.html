@@ -122,7 +122,7 @@
                              @change="turnOn(plugin, $event.target)">
                     </div>
                   </div>
-                  <p class="small mb-2 plugin-description flex-grow-1">{{ plugin.description }}</p>
+                  <p class="small mb-2 plugin-description flex-grow-1">{{ plugin.summary || plugin.description }}</p>
                   <div v-if="isBusy(plugin)" class="small d-flex align-items-center gap-2 mb-2" role="status">
                     <span class="spinner-border spinner-border-sm" aria-hidden="true"></span>
                     {{ taskRunningText(plugin) }}

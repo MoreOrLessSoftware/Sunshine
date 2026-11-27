@@ -2,6 +2,7 @@
   "id": "hdr-control",
   "name": "HDR Control",
   "version": "1.2.0",
+  "summary": "Turns HDR on or off and picks the display's HDR color profile while streaming.",
   "description": "Turns HDR on or off for the primary display and makes a chosen color profile its HDR profile while a client streams, then puts back the previous settings when the application quits. Clients can also toggle HDR from their in-stream menu. Pick a profile made with the Windows HDR Calibration app, or any other installed HDR profile.",
   "author": "Sunshine",
   "homepage": "https://apps.microsoft.com/detail/9N7F2SM5D1LR",

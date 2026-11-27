@@ -2,6 +2,7 @@
   "id": "virtual-hid",
   "name": "Virtual HID Driver",
   "version": "1.0.0",
+  "summary": "Checks the optional Virtual HID Driver for updates and warns when it needs one.",
   "description": "Shows which Virtual HID Driver version is installed, whether this version of Sunshine supports it, and the latest release, and warns on the home page when the driver needs an update. Virtual HID Driver is an optional paid driver for a Raw Input keyboard and mouse, more virtual gamepad types and modern controller features. Install it with its own installer, and manage its license in Virtual HID Control, which the driver installs.",
   "author": "Sunshine",
   "homepage": "https://github.com/LizardByte/libvirtualhid",
