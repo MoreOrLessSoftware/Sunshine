@@ -26,8 +26,9 @@ function Get-ReceiverStatus {
     if (-not (Test-ReceiverListening)) {
         return $null
     }
+    # Without keep-alive: a connection left open makes a stopping receiver wait 2 seconds for it to close
     try {
-        return Invoke-RestMethod -Uri "http://127.0.0.1:$StadiacastPort/_status" -TimeoutSec 2 -UseBasicParsing
+        return Invoke-RestMethod -Uri "http://127.0.0.1:$StadiacastPort/_status" -TimeoutSec 2 -UseBasicParsing -DisableKeepAlive
     }
     catch {
         return $null
@@ -153,7 +154,13 @@ function Resume-WindowsTime {
     if (Test-Path $TimeServiceFile) {
         Write-Output 'Starting the Windows Time service again'
         Remove-Item $TimeServiceFile -Force
-        Start-Service w32time -ErrorAction SilentlyContinue
+        # Without waiting for it to run, which can take 10 seconds, so the stream doesn't wait to end
+        try {
+            (Get-Service w32time).Start()
+        }
+        catch {
+            Write-Output "Couldn't start the Windows Time service: $($_.Exception.Message)"
+        }
     }
 }
 
@@ -241,7 +248,7 @@ function Stop-Receiver {
     if (Get-ReceiverStatus) {
         Write-Output 'Stopping the receiver'
         try {
-            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$StadiacastPort/_shutdown" -TimeoutSec 5 -UseBasicParsing | Out-Null
+            Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$StadiacastPort/_shutdown" -TimeoutSec 5 -UseBasicParsing -DisableKeepAlive | Out-Null
         }
         catch {
             Write-Output "The receiver did not take the stop request: $($_.Exception.Message)"
